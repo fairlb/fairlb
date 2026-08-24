@@ -1,0 +1,17 @@
+name: Feature request
+description: Something you want it to do that it does not
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >
+        The problem rather than the solution. Knowing what you are working
+        around usually turns up a better answer than the one being asked for.
+    validations: {required: true}
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do today
+      description: Even "nothing, I gave up" is useful — it says how much it costs.

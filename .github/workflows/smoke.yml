@@ -1,0 +1,43 @@
+# Starts the product the way the README tells people to, and uses it.
+#
+# The other workflow answers "does the code do what the code says". This one
+# answers "does someone who runs the documented command end up with something
+# they can use" — a question the first one has been green for while the answer
+# was no.
+name: Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build the image from this checkout rather than pulling the published
+      # one: the point is to test the code in front of us.
+      - run: docker build -f Dockerfile -t fairlb:ci .
+
+      - run: docker compose up -d --wait
+        env:
+          FAIRLB_IMAGE: fairlb:ci
+          PUBLIC_URL: http://localhost:8080
+
+      - run: bash scripts/smoke.sh http://localhost:8080
+
+      # A second run proves the parts that only fail the second time: the
+      # generated master key is reused rather than replaced, and setup refuses
+      # to hand the instance to a second owner.
+      - run: docker compose restart fairlb && bash scripts/smoke.sh http://localhost:8080
+        env:
+          FAIRLB_IMAGE: fairlb:ci
+
+      - if: failure()
+        run: docker compose logs --no-color --tail 200

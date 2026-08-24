@@ -1,0 +1,1318 @@
+openapi: 3.1.0
+info:
+  title: FairLB Data Plane API
+  version: 1.0.0
+  description: |
+    The inference data plane exposes OpenAI and Anthropic native APIs under
+    `/v1`, and Gemini native APIs under `/v1beta`. Version prefixes are not
+    aliases: an OpenAI-shaped model list is never returned from a Gemini path.
+
+    **Pass-through by design.** The gateway validates only the fields it needs
+    for routing and billing — `model`, `messages`, `stream`, `max_tokens` and
+    the like — and forwards everything else untouched. Every request and
+    response schema here is `additionalProperties: true`, so a new upstream
+    parameter works without a gateway release.
+
+    **Errors** are returned in each surface's own format: the OpenAI error shape
+    on the OpenAI surface, the Anthropic error shape on `/v1/messages`. The
+    gateway's own `code` is carried inside that shape rather than replacing it,
+    so an existing SDK's error handling keeps working.
+
+    **Streaming.** With `stream: true` the response is `text/event-stream`,
+    forwarded byte for byte from upstream. The stream contains upstream's bytes
+    and nothing else — no injected heartbeats, comments or synthesized frames.
+    If upstream produces no first event within 60 seconds the request fails with
+    502 `gateway.upstream_timeout`; at that point the 200 has not been sent yet,
+    so the client sees an ordinary HTTP error rather than a truncated stream.
+servers:
+  - url: https://api.{domain}/
+    variables:
+      domain:
+        default: fairlb.example
+        description: The host this deployment is reachable at
+# Two entries side by side mean OR: either credential form is accepted.
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+  - googApiKeyAuth: []
+tags:
+  - name: openai-surface
+    description: OpenAI-compatible surface, forwarded to OpenAI-protocol upstreams
+  - name: anthropic-surface
+    description: Anthropic-compatible surface, forwarded to Anthropic-protocol upstreams
+  - name: gemini-surface
+    description: Gemini-compatible surface, forwarded to Gemini-protocol upstreams
+  - name: catalog
+    description: Model catalog
+
+paths:
+  /v1/chat/completions:
+    post:
+      operationId: createChatCompletion
+      tags: [openai-surface]
+      summary: Chat completions
+      description: |
+        OpenAI-compatible. With `stream: true` the upstream event stream is passed through unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: |
+            JSON when not streaming. With `stream: true`, a
+            `text/event-stream` whose `data:` lines carry ChatCompletionChunk
+            objects; the gateway sets `stream_options.include_usage` so the
+            final chunk carries usage, and the stream ends with
+            `data: [DONE]`.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            X-RateLimit-Limit: { $ref: '#/components/headers/RateLimitLimit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/RateLimitRemaining' }
+            X-RateLimit-Reset: { $ref: '#/components/headers/RateLimitReset' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatCompletionResponse' }
+            text/event-stream:
+              schema:
+                type: string
+                description: The event stream; see ChatCompletionChunk for the chunk shape
+        '400': { $ref: '#/components/responses/OpenAIBadRequest' }
+        '401': { $ref: '#/components/responses/OpenAIUnauthorized' }
+        '402': { $ref: '#/components/responses/OpenAIPaymentRequired' }
+        '403': { $ref: '#/components/responses/OpenAIForbidden' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '413': { $ref: '#/components/responses/OpenAITooLarge' }
+        '429': { $ref: '#/components/responses/OpenAIRateLimited' }
+        '502': { $ref: '#/components/responses/OpenAIUpstreamError' }
+        '500': { $ref: '#/components/responses/OpenAIInternal' }
+
+  /v1/responses:
+    post:
+      operationId: createResponse
+      tags: [openai-surface]
+      summary: Responses
+      description: |
+        OpenAI-compatible. With `stream: true` the upstream event stream is passed through unchanged.
+
+        Another surface of the OpenAI protocol, not a new protocol: the
+        same authentication and the same credentials, with a different request,
+        response and usage shape from chat completions.
+
+        It exists because a growing number of relays expose only this endpoint —
+        one measured relay served all nine of its models through `/v1/responses`
+        and none through chat completions.
+
+        Three differences from chat completions that a caller has to know:
+        - the request uses `input` and `max_output_tokens`, not `messages` and
+          `max_tokens`
+        - when streaming, usage arrives in the terminal `response.completed`
+          event; `stream_options.include_usage` is neither needed nor accepted,
+          and the gateway does not set it on this surface
+        - usage is reported as `input_tokens` and `output_tokens` plus
+          `*_details` breakdowns, where a breakdown is a *subset* of its parent
+          field. They are normalized into four disjoint buckets before billing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              anyOf:
+                - required: [model]
+                - required: [previous_response_id]
+              description: |
+                Forwarded verbatim except for `model`, which is rewritten to
+                the name the chosen upstream expects. The fields are not
+                enumerated here on purpose: a new upstream parameter should
+                work without a gateway release.
+              properties:
+                model: { type: string }
+                previous_response_id: { type: string }
+                stream: { type: boolean }
+                max_output_tokens:
+                  type: integer
+                  description: |
+                    Upper bound on output tokens. Note that not every upstream
+                    honours it — one measured relay returned 94 output tokens
+                    for a request that asked for 16 — so the amount reserved up
+                    front does not treat this as a cost ceiling.
+              additionalProperties: true
+      responses:
+        '200':
+          description: The response object, or an event stream when `stream` is true
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+            text/event-stream:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/OpenAIBadRequest' }
+        '401': { $ref: '#/components/responses/OpenAIUnauthorized' }
+        '402': { $ref: '#/components/responses/OpenAIPaymentRequired' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '429': { $ref: '#/components/responses/OpenAIRateLimited' }
+        '502': { $ref: '#/components/responses/OpenAIUpstreamError' }
+
+  /v1/responses/compact:
+    post:
+      operationId: compactResponse
+      tags: [openai-surface]
+      summary: Compact a Responses conversation
+      description: Billable only on routes that explicitly advertise `responses_compact`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResponsesStatefulRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/OpenAIPassthrough' }
+        '400': { $ref: '#/components/responses/OpenAIBadRequest' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '502': { $ref: '#/components/responses/OpenAIUpstreamError' }
+
+  /v1/responses/input_tokens:
+    post:
+      operationId: countResponseInputTokens
+      tags: [openai-surface]
+      summary: Count Responses input tokens
+      description: Authenticated, rate-limited and audited; no consumption charge is created.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResponsesStatefulRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/OpenAIPassthrough' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+
+  /v1/responses/{response_id}:
+    parameters:
+      - $ref: '#/components/parameters/ResponseId'
+    get:
+      operationId: retrieveResponse
+      tags: [openai-surface]
+      summary: Retrieve a response
+      description: A stored response is served through the route and credential that created it.
+      responses:
+        '200': { $ref: '#/components/responses/OpenAIPassthrough' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '503': { $ref: '#/components/responses/StateRouteUnavailable' }
+    delete:
+      operationId: deleteResponse
+      tags: [openai-surface]
+      summary: Delete a response
+      description: Deletes the stored response upstream and drops the local route affinity that pinned it.
+      responses:
+        '200': { $ref: '#/components/responses/OpenAIPassthrough' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '503': { $ref: '#/components/responses/StateRouteUnavailable' }
+
+  /v1/responses/{response_id}/cancel:
+    post:
+      operationId: cancelResponse
+      tags: [openai-surface]
+      summary: Cancel a response
+      description: Cancels an in-progress response through the route that created it.
+      parameters:
+        - $ref: '#/components/parameters/ResponseId'
+      responses:
+        '200': { $ref: '#/components/responses/OpenAIPassthrough' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '503': { $ref: '#/components/responses/StateRouteUnavailable' }
+
+  /v1/responses/{response_id}/input_items:
+    get:
+      operationId: listResponseInputItems
+      tags: [openai-surface]
+      summary: List response input items
+      description: Lists the input items of a stored response through the route that created it.
+      parameters:
+        - $ref: '#/components/parameters/ResponseId'
+      responses:
+        '200': { $ref: '#/components/responses/OpenAIPassthrough' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '503': { $ref: '#/components/responses/StateRouteUnavailable' }
+
+  /v1/embeddings:
+    post:
+      operationId: createEmbeddings
+      tags: [openai-surface]
+      summary: Embeddings
+      description: OpenAI-compatible. Billed on input tokens only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmbeddingsRequest' }
+      responses:
+        '200':
+          description: The embedding vectors
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmbeddingsResponse' }
+        '400': { $ref: '#/components/responses/OpenAIBadRequest' }
+        '401': { $ref: '#/components/responses/OpenAIUnauthorized' }
+        '402': { $ref: '#/components/responses/OpenAIPaymentRequired' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '429': { $ref: '#/components/responses/OpenAIRateLimited' }
+        '502': { $ref: '#/components/responses/OpenAIUpstreamError' }
+
+  /v1/images/generations:
+    post:
+      operationId: createImage
+      tags: [openai-surface]
+      summary: Image generation
+      description: Allows a longer upstream timeout than text endpoints, around 300 seconds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImageGenerationRequest' }
+      responses:
+        '200':
+          description: The generated images, as `b64_json` or `url` depending on the upstream and the request
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImagesResponse' }
+        '400': { $ref: '#/components/responses/OpenAIBadRequest' }
+        '401': { $ref: '#/components/responses/OpenAIUnauthorized' }
+        '402': { $ref: '#/components/responses/OpenAIPaymentRequired' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '429': { $ref: '#/components/responses/OpenAIRateLimited' }
+        '502': { $ref: '#/components/responses/OpenAIUpstreamError' }
+
+  /v1/images/edits:
+    post:
+      operationId: editImage
+      tags: [openai-surface]
+      summary: Image editing
+      description: Multipart request; the image and mask are uploaded as files.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [model, image, prompt]
+              properties:
+                model: { type: string }
+                image:
+                  description: One or more source images
+                  oneOf:
+                    - { type: string, format: binary }
+                    - { type: array, items: { type: string, format: binary } }
+                prompt: { type: string }
+                mask: { type: string, format: binary }
+              additionalProperties: true
+      responses:
+        '200':
+          description: The edited images
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImagesResponse' }
+        '400': { $ref: '#/components/responses/OpenAIBadRequest' }
+        '401': { $ref: '#/components/responses/OpenAIUnauthorized' }
+        '402': { $ref: '#/components/responses/OpenAIPaymentRequired' }
+        '404': { $ref: '#/components/responses/OpenAINotFound' }
+        '429': { $ref: '#/components/responses/OpenAIRateLimited' }
+        '502': { $ref: '#/components/responses/OpenAIUpstreamError' }
+
+  /v1/messages:
+    post:
+      operationId: createMessage
+      tags: [anthropic-surface]
+      summary: Messages
+      description: |
+        Anthropic-compatible. With `stream: true` the upstream event stream is passed through unchanged.
+
+        Errors are returned in Anthropic's own error shape. The
+        `anthropic-version` header is accepted but not forwarded: outbound
+        headers are built from an allowlist rather than copied, and the version
+        the upstream receives is the one configured on the provider, or the
+        gateway's own default where none is. Sending a different value here does
+        not change what the upstream receives.
+      parameters:
+        - name: anthropic-version
+          in: header
+          required: false
+          description: >-
+            Accepted so that the official SDKs work unmodified. Not forwarded:
+            the version sent upstream is the provider's, configured by whoever
+            operates the gateway.
+          schema: { type: string, example: '2023-06-01' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnthropicMessageRequest' }
+      responses:
+        '200':
+          description: |
+            JSON when not streaming. With `stream: true`, Anthropic's event
+            stream: `message_start`, `content_block_delta`, `message_delta`
+            (which carries usage) and `message_stop`.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnthropicMessageResponse' }
+            text/event-stream:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/AnthropicError400' }
+        '401': { $ref: '#/components/responses/AnthropicError401' }
+        '402': { $ref: '#/components/responses/AnthropicError402' }
+        '404': { $ref: '#/components/responses/AnthropicError404' }
+        '429': { $ref: '#/components/responses/AnthropicError429' }
+        '502': { $ref: '#/components/responses/AnthropicError502' }
+
+  /v1/messages/count_tokens:
+    post:
+      operationId: countMessageTokens
+      tags: [anthropic-surface]
+      summary: Count Anthropic Messages tokens
+      description: Authenticated, rate-limited and audited; no consumption charge is created.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PassthroughRequest' }
+      responses:
+        '200':
+          description: Native token count response
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '400': { $ref: '#/components/responses/AnthropicError400' }
+        '404': { $ref: '#/components/responses/AnthropicError404' }
+
+  /v1beta/models:
+    get:
+      operationId: listGeminiModels
+      tags: [gemini-surface]
+      summary: List Gemini models
+      description: |
+        Only the models this key can call. Generated from FairLB's filtered local
+        catalog; never forwarded to an upstream catalog.
+      parameters:
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
+        - { name: pageToken, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Native Gemini model list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeminiModelList' }
+        default: { $ref: '#/components/responses/GeminiErrorResponse' }
+
+  /v1beta/models/{model}:
+    get:
+      operationId: getGeminiModel
+      tags: [gemini-surface]
+      summary: Get a Gemini model
+      description: Returns the catalog entry for one model in Gemini's own shape; never forwarded upstream.
+      parameters:
+        - $ref: '#/components/parameters/GeminiModel'
+      responses:
+        '200':
+          description: Native Gemini model metadata
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeminiModel' }
+        default: { $ref: '#/components/responses/GeminiErrorResponse' }
+
+  /v1beta/models/{model}:generateContent:
+    post:
+      operationId: generateContent
+      tags: [gemini-surface]
+      summary: Generate content
+      description: |
+        Gemini-compatible.
+
+        The model is a path segment rather than a body field, which is how this
+        API is defined; the name is the one in this gateway's catalogue, and the
+        route decides what the upstream is asked for.
+
+        Gemini endpoints are served only under `/v1beta`; `/v1` is reserved for
+        the OpenAI and Anthropic surfaces.
+
+        Errors come back in this API's own shape: `{"error":{"code","message",
+        "status","details"}}`, with the gateway's own code in the details.
+      parameters:
+        - name: model
+          in: path
+          required: true
+          description: A model in this gateway's catalogue, e.g. `google/gemini-2.5-flash`.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: >-
+                Passed through unchanged. Nothing in the body is rewritten on this
+                surface -- the model is in the address and there is no usage
+                option to inject.
+              additionalProperties: true
+      responses:
+        '200':
+          description: The upstream's response. Native `usageMetadata` is preserved unchanged.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        default:
+          description: An error in this API's own shape.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeminiError' }
+
+  /v1beta/models/{model}:streamGenerateContent:
+    post:
+      operationId: streamGenerateContent
+      tags: [gemini-surface]
+      summary: Generate content (streamed)
+      description: |
+        Gemini-compatible.
+
+        Streaming is a different method name on this API rather than a body flag.
+
+        `alt=sse` is **required**. Without it this API answers with a JSON array
+        delivered in pieces, which this gateway does not parse -- and it bills
+        from usage it can read, so it refuses the request rather than forwarding
+        something it could not meter. Serving it as SSE instead would hand back a
+        well-formed stream of the wrong framing.
+      parameters:
+        - name: model
+          in: path
+          required: true
+          schema: { type: string }
+        - name: alt
+          in: query
+          required: true
+          description: Must be `sse`.
+          schema: { type: string, enum: [sse] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: |
+            Server-sent events, passed through byte for byte. Every chunk carries
+            `usageMetadata` with the totals so far rather than a delta, and there
+            is no terminal sentinel: the stream ends when the body does.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            text/event-stream:
+              schema: { type: string }
+        default:
+          description: An error in this API's own shape.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GeminiError' }
+
+  /v1beta/models/{model}:countTokens:
+    post:
+      operationId: countGeminiTokens
+      tags: [gemini-surface]
+      summary: Count tokens
+      description: Authenticated, rate-limited and audited; no consumption charge is created.
+      parameters:
+        - $ref: '#/components/parameters/GeminiModel'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Native token count; audited and rate-limited without a consumption charge
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        default: { $ref: '#/components/responses/GeminiErrorResponse' }
+
+  /v1beta/models/{model}:embedContent:
+    post:
+      operationId: embedGeminiContent
+      tags: [gemini-surface]
+      summary: Embed content
+      description: Gemini-compatible embeddings for a single input.
+      parameters:
+        - $ref: '#/components/parameters/GeminiModel'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Native embedding response, billed from upstream usageMetadata
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        default: { $ref: '#/components/responses/GeminiErrorResponse' }
+
+  /v1beta/models/{model}:batchEmbedContents:
+    post:
+      operationId: batchEmbedGeminiContents
+      tags: [gemini-surface]
+      summary: Batch embed contents
+      description: Gemini-compatible embeddings for several inputs in one request.
+      parameters:
+        - $ref: '#/components/parameters/GeminiModel'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          description: Native synchronous batch embeddings response with aggregated usageMetadata
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        default: { $ref: '#/components/responses/GeminiErrorResponse' }
+
+  /v1beta/interactions:
+    post:
+      operationId: createGeminiInteraction
+      tags: [gemini-surface]
+      summary: Create a model Interaction
+      description: Managed `agent` and background interactions are rejected until their catalog and exact asynchronous settlement are available.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GeminiInteractionRequest' }
+      responses:
+        '200':
+          description: Native Interaction response or SSE when stream is true
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+            text/event-stream:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/GeminiErrorResponse' }
+
+  /v1beta/interactions/{interaction_id}:
+    parameters:
+      - $ref: '#/components/parameters/InteractionId'
+    get:
+      operationId: getGeminiInteraction
+      tags: [gemini-surface]
+      summary: Get an Interaction
+      description: Reads a stored Interaction through the route that created it.
+      responses:
+        '200': { description: Native Interaction, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        '404': { $ref: '#/components/responses/GeminiErrorResponse' }
+        '503': { $ref: '#/components/responses/StateRouteUnavailable' }
+    delete:
+      operationId: deleteGeminiInteraction
+      tags: [gemini-surface]
+      summary: Delete an Interaction
+      description: Deletes a stored Interaction upstream and drops its local route affinity.
+      responses:
+        '200': { description: Native deletion response }
+        '404': { $ref: '#/components/responses/GeminiErrorResponse' }
+        '503': { $ref: '#/components/responses/StateRouteUnavailable' }
+
+  /v1beta/interactions/{interaction_id}/cancel:
+    post:
+      operationId: cancelGeminiInteraction
+      tags: [gemini-surface]
+      summary: Cancel an Interaction
+      description: Cancels an in-progress Interaction through the route that created it.
+      parameters:
+        - $ref: '#/components/parameters/InteractionId'
+      responses:
+        '200': { description: Native cancellation response }
+        '404': { $ref: '#/components/responses/GeminiErrorResponse' }
+        '503': { $ref: '#/components/responses/StateRouteUnavailable' }
+
+  /v1/models:
+    get:
+      operationId: listModels
+      tags: [catalog]
+      summary: Models this key can call
+      description: |
+        Each entry carries the list price the caller would be charged.
+
+        Returns only the models this key can actually call: the intersection of
+        the catalog, the caller's access tier, and the key's own model
+        allowlist. It applies the same rule as an inference request, so a model
+        listed here will not be refused for access reasons when it is called.
+
+        The four prices are what this caller would be charged, always in USD per
+        million tokens: the catalog price with the caller's pricing plan
+        applied. Conversion to another currency happens at settlement, using the
+        rate locked when the request started. The prices do not depend on which
+        upstream serves the request and never reveal what the deployment pays
+        for it. The catalog and the actual charge read the same pricing chain,
+        so a caller is never shown one price and charged another.
+
+        For a catalog that needs no credentials — a documentation site, for
+        instance — use `GET /v1/public/models`. What is offered and what a given
+        key may call are two different questions, and one path answering both
+        stays ambiguous forever.
+
+        If the caller's access tier is disabled the answer is 403
+        `gateway.model_tier_disabled`, not an empty list: an empty list reads as
+        "there are no models", when in fact this account's access configuration
+        is not in effect.
+      responses:
+        '200':
+          description: The models this key may call
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelList' }
+        '401': { $ref: '#/components/responses/OpenAIUnauthorized' }
+        '403':
+          description: The caller's access tier is disabled (gateway.model_tier_disabled)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OpenAIError' }
+
+  /v1/public/models:
+    get:
+      operationId: listPublicModels
+      tags: [catalog]
+      summary: Public catalog
+      description: |
+        No credentials required.
+
+        What this deployment offers and at what list price: models that are
+        public, enabled, and backed by at least one usable upstream. The four
+        prices are catalog prices in USD per million tokens, with no pricing
+        plan, no currency conversion, and nothing about what the deployment pays
+        upstream. It exists for pages that have no API key and want to show the
+        list price rather than any one caller's price.
+
+        This is not any caller's set of available models. For "what can this key
+        call", use `GET /v1/models`.
+      security: []
+      responses:
+        '200':
+          description: The public catalog with list prices
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelList' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: 'A data-plane API key: `Authorization: Bearer <key>`'
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: |
+        Exactly equivalent to `bearerAuth`, carrying the same key. It exists so
+        that Anthropic's own SDK works unmodified: constructed with `api_key=`,
+        it sends this header. If both headers are present and disagree, the
+        `Authorization` header wins and the request is not rejected.
+    googApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-goog-api-key
+      description: |
+        The same key again, in the header Google's own SDK sends when it is
+        constructed with an API key. The `?key=` query form is **not** accepted:
+        a credential in a URL ends up in access logs, proxy logs and browser
+        history, and this gateway will not be the reason those copies exist.
+
+  headers:
+    XRequestId:
+      description: The request id, also recorded in the usage log for this request
+      schema: { type: string }
+    RateLimitLimit:
+      schema: { type: integer }
+    RateLimitRemaining:
+      schema: { type: integer }
+    RateLimitReset:
+      description: When the current window resets, as a Unix timestamp in seconds
+      schema: { type: integer }
+
+  parameters:
+    ResponseId:
+      name: response_id
+      in: path
+      required: true
+      schema: { type: string }
+    InteractionId:
+      name: interaction_id
+      in: path
+      required: true
+      schema: { type: string }
+    GeminiModel:
+      name: model
+      in: path
+      required: true
+      description: A Gemini model slug from the local FairLB catalog.
+      schema: { type: string }
+
+  schemas:
+    PassthroughRequest:
+      type: object
+      required: [model]
+      properties:
+        model: { type: string }
+      additionalProperties: true
+
+    ResponsesStatefulRequest:
+      type: object
+      description: A model is optional when previous_response_id identifies locally stored route affinity.
+      anyOf:
+        - required: [model]
+        - required: [previous_response_id]
+      properties:
+        model: { type: string }
+        previous_response_id: { type: string }
+      additionalProperties: true
+
+    GeminiInteractionRequest:
+      type: object
+      description: A model is optional when previous_interaction_id identifies locally stored route affinity.
+      anyOf:
+        - required: [model]
+        - required: [previous_interaction_id]
+      properties:
+        model: { type: string }
+        previous_interaction_id: { type: string }
+      additionalProperties: true
+
+    GeminiModel:
+      type: object
+      required: [name, baseModelId, displayName, inputTokenLimit, outputTokenLimit, supportedGenerationMethods]
+      properties:
+        name: { type: string, example: models/google/gemini-2.5-flash }
+        baseModelId: { type: string }
+        displayName: { type: string }
+        inputTokenLimit: { type: integer }
+        outputTokenLimit: { type: integer }
+        supportedGenerationMethods:
+          type: array
+          items: { type: string }
+          description: Derived from enabled routes and their explicitly verified operation capabilities.
+      additionalProperties: false
+
+    GeminiModelList:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items: { $ref: '#/components/schemas/GeminiModel' }
+        nextPageToken: { type: string }
+      additionalProperties: false
+
+    # ── OpenAI surface ───────────────────────────────────────────
+    ChatMessage:
+      type: object
+      required: [role]
+      properties:
+        role: { type: string, enum: [system, developer, user, assistant, tool] }
+        content:
+          description: Text, or multimodal parts such as text and image_url; forwarded as-is
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: object, additionalProperties: true } }
+            - { type: 'null' }
+        name: { type: string }
+        tool_calls: { type: array, items: { type: object, additionalProperties: true } }
+        tool_call_id: { type: string }
+      additionalProperties: true
+
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+          description: A catalog slug, e.g. `openai/gpt-5.4` or `anthropic/claude-sonnet-5`
+        messages:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ChatMessage' }
+        stream: { type: boolean, default: false }
+        stream_options:
+          type: object
+          description: The gateway sets include_usage=true on this surface, overriding a value sent by the caller
+          properties:
+            include_usage: { type: boolean }
+          additionalProperties: true
+        max_tokens:
+          type: integer
+          description: Used when estimating how much to reserve up front; without it, the model's default cap is assumed
+        max_completion_tokens: { type: integer }
+        temperature: { type: number }
+        top_p: { type: number }
+        tools: { type: array, items: { type: object, additionalProperties: true } }
+        tool_choice: {}
+        response_format: { type: object, additionalProperties: true }
+        user:
+          type: string
+          description: End-user attribution, recorded on the usage log for this request. The X-End-User-Id header does the same.
+      additionalProperties: true
+
+    Usage:
+      type: object
+      description: |
+        Usage is always returned, both for a plain response and in the final
+        chunk of a stream. When an upstream does not report it, the gateway
+        estimates it and marks the estimate in its extension object.
+      properties:
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+        prompt_tokens_details:
+          type: object
+          properties:
+            cached_tokens: { type: integer }
+          additionalProperties: true
+        completion_tokens_details:
+          type: object
+          properties:
+            reasoning_tokens: { type: integer }
+          additionalProperties: true
+        fairlb:
+          type: object
+          description: Gateway extensions
+          properties:
+            estimated: { type: boolean, description: True when usage was estimated by the gateway rather than reported upstream }
+            cost: { type: string, description: What this request was charged, as a decimal string in the account's currency }
+            currency: { type: string }
+          additionalProperties: true
+      additionalProperties: true
+
+    ChatCompletionResponse:
+      type: object
+      required: [id, object, model, choices]
+      properties:
+        id: { type: string }
+        object: { type: string, const: chat.completion }
+        created: { type: integer }
+        model: { type: string, description: The catalog slug that actually served the request }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              message: { $ref: '#/components/schemas/ChatMessage' }
+              finish_reason: { type: [string, 'null'] }
+            additionalProperties: true
+        usage: { $ref: '#/components/schemas/Usage' }
+      additionalProperties: true
+
+    ChatCompletionChunk:
+      type: object
+      description: |
+        The shape of each `data:` line. `choices[].delta` carries the increment;
+        the final chunk has an empty `choices` array and carries usage.
+      properties:
+        id: { type: string }
+        object: { type: string, const: chat.completion.chunk }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              delta: { type: object, additionalProperties: true }
+              finish_reason: { type: [string, 'null'] }
+            additionalProperties: true
+        usage:
+          oneOf:
+            - { $ref: '#/components/schemas/Usage' }
+            - { type: 'null' }
+      additionalProperties: true
+
+    EmbeddingsRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model: { type: string }
+        input:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: string } }
+            - { type: array, items: { type: array, items: { type: integer } } }
+        dimensions: { type: integer }
+        encoding_format: { type: string, enum: [float, base64] }
+        user: { type: string }
+      additionalProperties: true
+
+    EmbeddingsResponse:
+      type: object
+      properties:
+        object: { type: string, const: list }
+        model: { type: string }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object: { type: string, const: embedding }
+              index: { type: integer }
+              embedding:
+                oneOf:
+                  - { type: array, items: { type: number } }
+                  - { type: string, description: base64-encoded }
+            additionalProperties: true
+        usage: { $ref: '#/components/schemas/Usage' }
+      additionalProperties: true
+
+    ImageGenerationRequest:
+      type: object
+      required: [model, prompt]
+      properties:
+        model: { type: string, description: A catalog slug, e.g. `openai/gpt-image-2` }
+        prompt: { type: string }
+        n: { type: integer, default: 1 }
+        size: { type: string }
+        quality: { type: string }
+        output_format: { type: string }
+        user: { type: string }
+      additionalProperties: true
+
+    ImagesResponse:
+      type: object
+      properties:
+        created: { type: integer }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              b64_json: { type: string }
+              url: { type: string }
+              revised_prompt: { type: string }
+            additionalProperties: true
+        usage:
+          description: Image models are billed per token; usage covers input text, input images and output images
+          $ref: '#/components/schemas/Usage'
+      additionalProperties: true
+
+    # ── Anthropic surface ────────────────────────────────────────
+    AnthropicMessageRequest:
+      type: object
+      required: [model, max_tokens, messages]
+      properties:
+        model: { type: string, description: A catalog slug, e.g. `anthropic/claude-sonnet-5` }
+        max_tokens: { type: integer, description: Used when estimating how much to reserve up front }
+        messages:
+          type: array
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role: { type: string, enum: [user, assistant] }
+              content:
+                oneOf:
+                  - { type: string }
+                  - { type: array, items: { type: object, additionalProperties: true } }
+            additionalProperties: true
+        system:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: object, additionalProperties: true } }
+        stream: { type: boolean, default: false }
+        temperature: { type: number }
+        tools: { type: array, items: { type: object, additionalProperties: true } }
+        thinking: { type: object, additionalProperties: true }
+        metadata:
+          type: object
+          properties:
+            user_id: { type: string, description: End-user attribution, recorded on the usage log for this request }
+          additionalProperties: true
+      additionalProperties: true
+
+    AnthropicUsage:
+      type: object
+      properties:
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        cache_read_input_tokens: { type: integer }
+        cache_creation_input_tokens: { type: integer }
+      additionalProperties: true
+
+    AnthropicMessageResponse:
+      type: object
+      required: [id, type, role, content]
+      properties:
+        id: { type: string }
+        type: { type: string, const: message }
+        role: { type: string, const: assistant }
+        model: { type: string }
+        content: { type: array, items: { type: object, additionalProperties: true } }
+        stop_reason: { type: [string, 'null'] }
+        usage: { $ref: '#/components/schemas/AnthropicUsage' }
+      additionalProperties: true
+
+    # ── Catalog ──────────────────────────────────────────────────
+    Model:
+      type: object
+      # This schema is kept in step with the handler by hand: the data plane
+      # is not run through code generation, so the generated-artifact drift
+      # check cannot see a divergence here. Change both sides together.
+      required: [id, object, name, pricing, fairlb]
+      properties:
+        id: { type: string, description: The catalog slug (`vendor/model`), i.e. what to send as `model` }
+        object: { type: string, const: model }
+        name:
+          type: string
+          description: Display name; falls back to the slug when none is set, so this field is always present
+        owned_by: { type: string, description: "The model's creator: the first segment of a creator/name slug, e.g. openai or anthropic. Omitted for a slug without a slash — a model owns no protocol to fall back on." }
+        pricing:
+          type: object
+          description: |
+            The four effective prices, in USD per million tokens, transmitted as
+            decimal strings. `GET /v1/public/models` returns the list price —
+            the default pricing plan's, so it is what a caller who registers
+            now would be charged, not a rate nobody is on. Authenticated
+            `GET /v1/models` returns the price after that caller's own plan is
+            applied. Currency conversion happens only at settlement, and this
+            object never contains what the deployment pays upstream.
+          properties:
+            currency: { type: string }
+            input_per_mtok: { type: string, example: '3.00' }
+            output_per_mtok: { type: string, example: '15.00' }
+            cache_read_per_mtok: { type: string }
+            cache_write_per_mtok:
+              type: string
+              description: Price of a cache write. The four billing buckets are disjoint, and without this one a cache write has no price at all
+            official_price:
+              type: object
+              description: |
+                The model vendor's own list price, in USD per million tokens, so
+                a client can show it next to this deployment's price. Omitted
+                for free models. It is a reference point only: it takes no part
+                in billing, and it is not what the deployment pays upstream —
+                that number never appears in a caller-visible response.
+              properties:
+                input_per_mtok: { type: string, example: '3.00' }
+                output_per_mtok: { type: string, example: '15.00' }
+                cache_read_per_mtok: { type: string }
+                cache_write_per_mtok: { type: string }
+                source_name: { type: string, description: Where this rate came from, e.g. the reference dataset or the operator }
+                source_url: { type: string, description: The vendor price page or dataset entry this rate was taken from }
+                verified_at:
+                  type: string
+                  format: date-time
+                  description: >-
+                    When a person last confirmed this rate against the vendor's own list.
+                    Absent means nobody has — the rate carries only its source's authority.
+                    A client showing the rate without this distinction lets the reader assume the stronger one.
+          additionalProperties: true
+        fairlb:
+          type: object
+          description: Gateway extensions, nested in their own object so they cannot collide with an upstream's fields
+          required: [billing_mode, endpoints, protocols, supported_operations]
+          properties:
+            billing_mode:
+              type: string
+              enum: [paid, free]
+              description: Stated explicitly; do not infer "free" from all four prices being zero
+            pricing_plan_id:
+              type: string
+              format: uuid
+              description: The pricing plan applied to this catalog; omitted from the public catalog
+            price_updated_at:
+              type: string
+              format: date-time
+              description: When this price was last changed
+            context_window: { type: integer }
+            max_output_tokens: { type: integer }
+            endpoints:
+              type: array
+              items:
+                type: string
+                enum: [chat, messages, messages_count_tokens, responses, responses_compact, responses_resources, responses_input_tokens, embeddings, images, generate_content, gemini_count_tokens, gemini_embed_content, gemini_batch_embed_contents, gemini_interactions]
+              description: >-
+                The endpoints a probe has verified on this model's enabled routes. Nothing is declared:
+                an endpoint nobody has verified is callable but not listed, because a listing the caller
+                cannot act on is the failure this catalog exists to prevent.
+            protocols:
+              type: array
+              items:
+                type: string
+                enum: [openai, anthropic, gemini]
+              description: >-
+                The protocols of the verified endpoints. A model owns no protocol of its own: it is
+                reachable on whichever protocols its routes' providers speak, and the same slug may be
+                callable on both /v1/chat/completions and /v1/messages.
+            supported_operations:
+              type: array
+              items:
+                type: string
+                enum: [chat, messages, messages_count_tokens, responses, responses_compact, responses_resources, responses_input_tokens, embeddings, images, generate_content, gemini_count_tokens, gemini_embed_content, gemini_batch_embed_contents, gemini_interactions]
+              description: The same set as endpoints — verified by a probe, or by an operator's override
+            capabilities: { type: object, additionalProperties: true }
+          additionalProperties: true
+      additionalProperties: true
+
+    ModelList:
+      type: object
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Model' }
+        fairlb:
+          type: object
+          description: >-
+            What is true of the deployment rather than of any one model. Nested under the same
+            extension key the per-model block uses, so nothing here can collide with a field an
+            upstream's own list response might grow.
+          properties:
+            byok_fee_bps:
+              type: integer
+              description: >-
+                What this deployment charges on top of the vendor's rate when a request runs on the
+                caller's own provider key, in basis points of that rate — 500 is 5%. Quoted at the
+                same plan as the prices beside it: the list plan on `GET /v1/public/models`, the
+                caller's own on the authenticated `GET /v1/models`.
+              example: 500
+
+    # ── Errors ───────────────────────────────────────────────────
+    OpenAIError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type: { type: string, description: 'e.g. invalid_request_error, authentication_error, insufficient_quota, rate_limit_error, api_error' }
+            code:
+              type: [string, 'null']
+              description: 'The gateway''s stable machine-readable code, e.g. gateway.insufficient_credits, gateway.model_not_found, gateway.all_providers_failed'
+            param: { type: [string, 'null'] }
+
+    AnthropicError:
+      type: object
+      required: [type, error]
+      properties:
+        type: { type: string, const: error }
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type: { type: string, description: invalid_request_error / authentication_error / permission_error / not_found_error / rate_limit_error / api_error / overloaded_error }
+            message: { type: string }
+    GeminiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, status]
+          properties:
+            code: { type: integer, description: The HTTP status, repeated in the body as this API does }
+            message: { type: string }
+            status:
+              type: string
+              description: >-
+                The canonical status: UNAUTHENTICATED, PERMISSION_DENIED,
+                RESOURCE_EXHAUSTED, NOT_FOUND, INVALID_ARGUMENT,
+                FAILED_PRECONDITION, DEADLINE_EXCEEDED, UNAVAILABLE or INTERNAL.
+                Not derivable from the HTTP status, and clients switch on it.
+            details:
+              type: array
+              description: >-
+                Carries this gateway's own error code, under the domain `fairlb`
+                so a reader can tell whose vocabulary it is in.
+              items:
+                type: object
+                properties:
+                  '@type': { type: string }
+                  reason: { type: string }
+                  domain: { type: string }
+
+  responses:
+    OpenAIPassthrough:
+      description: Native upstream JSON response, preserved except for documented usage annotations on billable OpenAI operations
+      content:
+        application/json:
+          schema: { type: object, additionalProperties: true }
+    GeminiErrorResponse:
+      description: An error in Gemini's native shape
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/GeminiError' }
+    StateRouteUnavailable:
+      description: The stored resource's original route or credential is unavailable; the gateway does not fail over
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - { $ref: '#/components/schemas/OpenAIError' }
+              - { $ref: '#/components/schemas/GeminiError' }
+    OpenAIBadRequest:
+      description: Invalid request, including a semantic 4xx passed through from upstream
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    OpenAIUnauthorized:
+      description: 'Missing, invalid, revoked or expired key (code=invalid_api_key, key_revoked, key_expired)'
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    OpenAIPaymentRequired:
+      description: 'Insufficient balance, or the key''s budget is exhausted (code=insufficient_credits, key_budget_exceeded)'
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    OpenAIForbidden:
+      description: 'The organization is suspended, or the key lacks the required scope (code=org_suspended, insufficient_scope)'
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    OpenAINotFound:
+      description: 'The model does not exist, is not visible, or is excluded by the key''s allowlist (code=model_not_found)'
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    OpenAITooLarge:
+      description: 'The request body is too large (code=request_too_large)'
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    OpenAIRateLimited:
+      description: 'Rate limit exceeded or upstream capacity saturated; carries Retry-After (code=rate_limited, saturated)'
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    OpenAIUpstreamError:
+      description: 'Every candidate route failed (code=all_providers_failed, upstream_timeout)'
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    OpenAIInternal:
+      description: 'Gateway internal error (code=internal)'
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAIError' } } }
+    AnthropicError400:
+      description: invalid_request_error
+      content: { application/json: { schema: { $ref: '#/components/schemas/AnthropicError' } } }
+    AnthropicError401:
+      description: authentication_error
+      content: { application/json: { schema: { $ref: '#/components/schemas/AnthropicError' } } }
+    AnthropicError402:
+      description: 'Insufficient balance; error.type is invalid_request_error and the message explains it'
+      content: { application/json: { schema: { $ref: '#/components/schemas/AnthropicError' } } }
+    AnthropicError404:
+      description: 'not_found_error: the model does not exist'
+      content: { application/json: { schema: { $ref: '#/components/schemas/AnthropicError' } } }
+    AnthropicError429:
+      description: 'rate_limit_error; carries Retry-After'
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/AnthropicError' } } }
+    AnthropicError502:
+      description: 'api_error or overloaded_error: every upstream failed'
+      content: { application/json: { schema: { $ref: '#/components/schemas/AnthropicError' } } }

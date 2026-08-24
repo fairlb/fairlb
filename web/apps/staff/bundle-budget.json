@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "Measured baseline: 330.9 KiB gzip first paint; the budget is that plus ~2%.",
+    "Splitting the message dictionary by consumer took it to 319.6 (measured before",
+    "and after on the same machine): the copy only a hosted deployment renders is no",
+    "longer in this build at all. The budget stays where it is — a ceiling that has",
+    "just gained headroom is not a reason to move it in the same change.",
+    "The three JavaScript budgets share one number, so any chunk that grows past",
+    "the entry's ceiling is caught wherever it appears.",
+    "",
+    "2026-08-19: those numbers described the pre-split tree and were carried across",
+    "the Cloud/Community split unchanged, so they stopped describing this build. On",
+    "the split commit the first paint was already 357.4 KiB and this gate was red —",
+    "measured at 045c13ae and at its two parents: 319.5 before the frontend rewrite,",
+    "327.2 after it, 357.4 after the split. Nothing in the tree said so, because the",
+    "server-side evidence was not running.",
+    "Declaring `sideEffects` on the workspace packages brought it to 308.2 KiB: the",
+    "shell imports the @fairlb/ui barrel, and without that declaration the bundler",
+    "must assume every module the barrel re-exports has side effects, so zod and",
+    "Kumo's Combobox and Select could not be dropped from the initial graph.",
+    "The budget stays at 340 for the reason stated above.",
+    "",
+    "2026-08-19, after the two fixes met: 254.8 KiB. The figures above were taken",
+    "in a tree that had both pnpm workspaces installed, where the Community build",
+    "resolved its shared libraries through two stores at once and bundled two",
+    "copies of each; `make verify-public` now measures on a copy of public/ alone,",
+    "which is the resolution public/Dockerfile builds in. So 357.4 and 308.2 both",
+    "described a bundle nobody ships, and the sideEffects declarations are worth",
+    "more than the 49 KiB they appeared to be. The budget still stays at 340.",
+    "",
+    "2026-08-21：入口那一档已删（ADR-0158）。它此前是「入口 chunk 专属的、比 javascript 更紧的第四个上限」，而入口 chunk 已经被 javascript（按 chunk）与 initialJavascript（按首屏）各管一次；它独有度量的是 chunk 拓扑，那不是任何人付出的成本。它两次为拓扑位移报红（首屏同时持平或变好），两次的唯一可行答复都是抬闸——一条每次被碰到就得挪的线不是天花板。入口大小仍然打印，是读数不是闸。"
+  ],
+  "kib": {
+    "initialJavascript": 340,
+    "javascript": 340,
+    "css": 30
+  }
+}

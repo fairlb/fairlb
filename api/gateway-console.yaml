@@ -1,0 +1,986 @@
+openapi: 3.1.0
+info:
+  title: FairLB Console API
+  version: 0.1.0
+  description: |
+    The API an organization's own console reads: usage, request logs, the model
+    catalog it may call, and the upstream credentials it brings itself.
+
+    Conventions across every endpoint here: errors are RFC 9457 problem+json,
+    lists are cursor-paginated, unsafe writes accept an idempotency header, and
+    every response carries X-Request-Id.
+servers:
+- url: /api/v1
+tags:
+- name: usage
+  description: |
+    Usage, request logs and the model catalog. These operations speak in
+    tokens, models and providers, which is the gateway's own vocabulary, so
+    they are generated and implemented on their own rather than mixed into a
+    host application's handlers.
+security:
+- session: []
+paths:
+  /orgs/{org_id}/usage:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    get:
+      operationId: getUsage
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: Usage over time, optionally grouped
+      description: |
+        Every member can see operational facts: request counts, tokens, errors
+        and latency. A caller without `finance.details.read` gets
+        `charged_nano` as 0 and an empty `currency`.
+
+        For such a caller, groups are ordered by `requests DESC, key ASC` — not
+        by amount. Ordering by an amount that has been redacted would still
+        leak relative spend through the order itself.
+      parameters:
+      - name: from
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - name: granularity
+        in: query
+        schema:
+          type: string
+          enum:
+          - hour
+          - day
+          default: day
+      - name: group_by
+        in: query
+        description: |
+          The grouping dimension. Omitted, the response carries only the time
+          series. Grouping by `api_key` requires `keys.manage`; a caller who
+          can read the organization but lacks that capability gets a 403 rather
+          than a silently ungrouped answer.
+        schema:
+          type: string
+          enum:
+          - model
+          - api_key
+      - name: api_key_id
+        in: query
+        description: |
+          Restrict to one API key, given as its `key_…` public id. Requires
+          `keys.manage`; a caller who can read the organization but lacks that
+          capability gets a 403.
+        schema:
+          type: string
+      - name: tz
+        in: query
+        description: |
+          An IANA time zone name such as `Asia/Shanghai`, which decides where a
+          day boundary falls when `granularity=day`. Defaults to UTC.
+
+          It matters because buckets are stored on UTC hour boundaries while a
+          chart usually labels its axis in the reader's local zone. If the two
+          disagree, a daily bar spans two local days and its label can be off by
+          a full day.
+
+          Ignored when `granularity=hour`.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageReport'
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/usage.csv:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    get:
+      operationId: exportUsageCSV
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: Export usage as CSV, with the same filters as /usage
+      description: |
+        Requires `finance.details.read`, and `keys.manage` as well when
+        `api_key_id` is given. An impersonated session is always refused with
+        403, even where it retains the two read capabilities. A caller with no
+        relationship to the organization, or a credential reaching past the
+        organization it belongs to, gets 404.
+      parameters:
+      - name: from
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date-time
+      - name: granularity
+        in: query
+        schema:
+          type: string
+          enum:
+          - hour
+          - day
+          default: day
+      - name: api_key_id
+        in: query
+        description: |
+          As on `/usage`: restrict the export to one API key, given as its
+          `key_…` public id. The export honours the filter, so filtering to one
+          key exports only that key. Requires `keys.manage` in addition to the
+          financial read capability.
+        schema:
+          type: string
+      - name: tz
+        in: query
+        description: As on `/usage`. The export and the chart must agree, or a reader cross-checking them will see two different day boundaries.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: CSV
+          content:
+            text/csv:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/logs:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    get:
+      operationId: listRequestLogs
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: Request log, filterable and cursor-paginated
+      description: |
+        Every member can see operational facts, but for a caller without the
+        financial read capability `charged_nano` is 0 and `api_key_id` is
+        omitted entirely.
+      parameters:
+      - name: from
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: api_key_id
+        in: query
+        description: |
+          An API key's `key_…` public id. Requires `keys.manage`; a caller who
+          can read the organization but lacks that capability gets a 403.
+        schema:
+          type: string
+      - name: model
+        in: query
+        schema:
+          type: string
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - ok
+          - upstream_error
+          - client_error
+          - canceled
+      - name: end_user_id
+        in: query
+        schema:
+          type: string
+      - name: cursor
+        in: query
+        description: |
+          The `next_cursor` from the previous page, passed back verbatim. It is
+          opaque: internally it is a composite of timestamp and id, because a
+          timestamp alone would skip the other rows sharing that instant.
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RequestLog'
+                  next_cursor:
+                    type:
+                    - string
+                    - 'null'
+                    description: Null when there are no more pages
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/logs.csv:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    get:
+      operationId: exportLogsCSV
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: Export the request log as CSV, with the same filters
+      description: |
+        The CSV contains both amounts and key identity, so it requires
+        `finance.details.read` and `keys.manage` together. An impersonated
+        session is always refused with 403; a caller with no relationship to
+        the organization, or one reaching past the organization it belongs to,
+        gets 404.
+      parameters:
+      - name: from
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: api_key_id
+        in: query
+        description: An API key's `key_…` public id
+        schema:
+          type: string
+      - name: model
+        in: query
+        schema:
+          type: string
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - ok
+          - upstream_error
+          - client_error
+          - canceled
+      - name: end_user_id
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            text/csv:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/logs/{request_id}:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    - name: request_id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: getRequestLog
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: One request, including its error and the routes it tried
+      description: |
+        For a caller without the financial read capability, `charged_nano` is 0
+        and both `charged_currency` and `api_key_id` are omitted.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestLogDetail'
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/models:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    get:
+      operationId: listAvailableModels
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: The models this organization can call
+      description: |
+        Every member can see which endpoints and capabilities a model has. A
+        caller without the financial read capability gets no `price_*` field
+        and no `is_free` either — "this model is free" is itself a statement
+        about price.
+
+        Conditional requests are supported: the response carries an `ETag`, and
+        sending it back as `If-None-Match` answers 304 when nothing changed.
+        The catalog changes on the order of days while several pages each fetch
+        it, so this is where the caching belongs.
+      parameters:
+      - name: If-None-Match
+        in: header
+        required: false
+        description: The ETag from a previous response; unchanged, the answer is 304
+        schema:
+          type: string
+      responses:
+        '304':
+          description: The catalog has not changed; no body is returned
+        '200':
+          description: OK
+          headers:
+            ETag:
+              description: A strong validator over the catalog's contents
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AvailableModel'
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/provider-keys:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    get:
+      operationId: listOrgProviderKeys
+      tags:
+      - usage
+      summary: List the upstream credentials this organization brought itself
+      description: |
+        Paginated. The order is by platform then name — this is a configuration
+        screen, not a feed, and an organization holding several accounts at the
+        same platform reads them together. The cursor follows that same key, so
+        paging never rearranges the list to suit itself.
+
+        `vendors` describes the deployment, not the page, so it is repeated on
+        every page rather than only on the first: the add-credential form reads
+        it, and a form that only works on page one is worse than one that costs
+        a few bytes per page.
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - vendors
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrgProviderKey'
+                  vendors:
+                    type: array
+                    description: |
+                      The platforms a credential can usefully be supplied for here: the vendors this
+                      deployment has an enabled provider at. A key for anything else could never take
+                      effect, because no candidate would ever be served by it, and it would sit in the
+                      list looking configured.
+
+                      It travels with the list rather than at an address of its own so that the page
+                      showing the credentials and the form adding one read the same answer.
+                    items:
+                      $ref: '#/components/schemas/OrgProviderVendor'
+                  next_cursor:
+                    type: string
+                    description: Present when another page follows; pass it back as `cursor`
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createOrgProviderKey
+      tags:
+      - usage
+      summary: Add an upstream credential (it appears only in this request and is encrypted at rest)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - vendor
+              - name
+              - secret
+              properties:
+                vendor:
+                  type: string
+                  description: |
+                    Which platform this credential is with, from the vendors list on the GET above.
+                    A vendor this deployment does not route to is refused: the credential could never
+                    apply to anything.
+                name:
+                  type: string
+                  maxLength: 60
+                  description: A label, unique within the organization, for telling several credentials apart
+                secret:
+                  type: string
+                  description: The upstream credential itself. It is encrypted before it is stored and no endpoint can read it back.
+                base_url:
+                  type: string
+                  description: A custom upstream endpoint; empty means this deployment's default for that vendor
+                allow_fallback:
+                  type: boolean
+                  default: false
+                  description: Whether a request rejected with this credential may fall back to the deployment's own. False by default, deliberately - falling back silently means the request is billed at the full rate rather than the service fee, and a surprising bill is worse than a failed request. Turn it on only when availability matters more.
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgProviderKey'
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/provider-keys/{key_id}:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    - name: key_id
+      in: path
+      required: true
+      schema:
+        type: string
+    delete:
+      operationId: deleteOrgProviderKey
+      tags:
+      - usage
+      summary: Delete an upstream credential
+      responses:
+        '204':
+          description: Deleted
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/provider-keys/{key_id}/test:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    - name: key_id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: testOrgProviderKey
+      tags:
+      - usage
+      summary: Test a credential by making one minimal upstream request
+      description: |
+        Sends one real request upstream with this credential to check that it
+        works. It costs a small amount of real money, charged to your own
+        upstream account, which is why it runs only when asked and never
+        automatically.
+
+        A 401 or 403 from upstream marks the credential invalid.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - upstream_model
+              properties:
+                upstream_model:
+                  type: string
+                  description: The model name as the upstream knows it
+      responses:
+        '200':
+          description: The test ran; the `ok` field carries the verdict, not the HTTP status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgProviderKeyTestResult'
+        default:
+          $ref: '#/components/responses/Problem'
+components:
+  headers:
+    XRequestId:
+      description: The request id, present on every response
+      schema:
+        type: string
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      description: Where to resume from — the previous response's `next_cursor`
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      description: Rows per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    OrgID:
+      name: org_id
+      in: path
+      required: true
+      description: The organization's public id, prefixed `org_`
+      schema:
+        type: string
+  responses:
+    Problem:
+      description: Error (RFC 9457)
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    AvailableModel:
+      type: object
+      required:
+      - slug
+      - protocols
+      - endpoints
+      properties:
+        slug:
+          type: string
+        display_name:
+          type: string
+        protocols:
+          type: array
+          items:
+            type: string
+          description: |
+            The protocols the verified endpoints belong to. A model owns no
+            protocol of its own: it is reachable on whichever protocols its
+            routes' providers speak, and the same slug may be callable on both
+            `/v1/chat/completions` and `/v1/messages`.
+        endpoints:
+          type: array
+          items:
+            type: string
+          description: |
+            Which endpoints this model can be called on — chat, messages,
+            embeddings and so on — every endpoint a probe has verified on one
+            of its enabled routes.
+
+            This is not a capability list. It answers "which URL do I send
+            to", not "can this model read an image"; for that, see
+            `capabilities`.
+        capabilities:
+          type: object
+          additionalProperties: true
+          description: |
+            Display metadata such as vision or tool support.
+
+            What can actually be called is always what the model's routes have
+            been verified to serve: a capability advertised here with no
+            verified route behind it only gets the caller a 404.
+        context_window:
+          type: integer
+        max_output_tokens:
+          type: integer
+        price_in_nano_per_mtok:
+          type: integer
+          format: int64
+          description: Omitted for a caller without the financial read capability
+        price_out_nano_per_mtok:
+          type: integer
+          format: int64
+          description: Omitted for a caller without the financial read capability
+        price_cache_read_nano_per_mtok:
+          type: integer
+          format: int64
+          description: Omitted for a caller without the financial read capability
+        price_cache_write_nano_per_mtok:
+          type: integer
+          format: int64
+          description: Omitted for a caller without the financial read capability
+        is_free:
+          type: boolean
+          description: Omitted for a caller without the financial read capability
+    OrgProviderVendor:
+      type: object
+      required:
+      - vendor
+      - label
+      properties:
+        vendor:
+          type: string
+        label:
+          type: string
+          description: The platform's own name, for display. Not translated.
+        base_url_hint:
+          type: string
+          description: The endpoint this deployment would use for that vendor when the credential leaves base_url empty.
+        model_id_example:
+          type: string
+          description: One model id as this vendor spells it, for the connectivity test's input.
+        key_hint:
+          type: string
+          description: What shape the credential takes, so the field can say what to paste.
+    OrgProviderKey:
+      type: object
+      required:
+      - id
+      - vendor
+      - name
+      - status
+      - secret_hint
+      - allow_fallback
+      - created_at
+      properties:
+        id:
+          type: string
+        vendor:
+          type: string
+        vendor_label:
+          type: string
+          description: The platform's display name, resolved when this deployment's build knows the vendor.
+        name:
+          type: string
+        base_url:
+          type: string
+        status:
+          type: string
+          enum:
+          - active
+          - invalid
+          - disabled
+          description: '`invalid` means the upstream rejected this credential; it has to be replaced'
+        secret_hint:
+          type: string
+          description: A masked form of the credential. The stored value cannot be read back, so this is how you recognize which credential a row holds.
+        allow_fallback:
+          type: boolean
+          description: Whether a request rejected with this credential may fall back to the deployment's own, which is billed at the full rate
+        last_verified_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    OrgProviderKeyTestResult:
+      type: object
+      required:
+      - ok
+      - checked_at
+      properties:
+        ok:
+          type: boolean
+        checked_at:
+          type: string
+          format: date-time
+        status_code:
+          type: integer
+        latency_ms:
+          type: integer
+        message:
+          type: string
+          description: On failure, the upstream's own message (truncated) — the only thing that distinguishes a bad credential from a wrong model name from an exhausted quota
+    Problem:
+      type: object
+      description: RFC 9457 problem+json, plus a stable machine-readable `code`
+      required:
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri
+          default: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: The stable error code
+        request_id:
+          type: string
+    RequestLog:
+      type: object
+      required:
+      - request_id
+      - created_at
+      - model_slug
+      - surface
+      - status
+      - http_status
+      - charged_nano
+      properties:
+        request_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        model_slug:
+          type: string
+        surface:
+          type: string
+        status:
+          type: string
+        http_status:
+          type: integer
+        error_code:
+          type: string
+        stream:
+          type: boolean
+        tokens_in:
+          type: integer
+          format: int64
+        tokens_out:
+          type: integer
+          format: int64
+        charged_nano:
+          type: integer
+          format: int64
+          description: 0 for a caller without the financial read capability
+        duration_ms:
+          type: integer
+        api_key_id:
+          type: string
+          description: |
+            An API key's `key_…` public id; omitted without `keys.manage`.
+        end_user_id:
+          type: string
+    RequestLogDetail:
+      allOf:
+      - $ref: '#/components/schemas/RequestLog'
+      - type: object
+        properties:
+          route_attempts:
+            type: integer
+            description: How many routes this request actually tried; more than one means it failed over
+          ttft_ms:
+            type: integer
+          tokens_cached_read:
+            type: integer
+            format: int64
+          tokens_cache_write:
+            type: integer
+            format: int64
+          tokens_reasoning:
+            type: integer
+            format: int64
+          usage_estimated:
+            type: boolean
+            description: The upstream reported no usage, so this charge is based on an estimate
+          charged_currency:
+            type: string
+            description: Omitted for a caller without the financial read capability
+          provider_slug:
+            type: string
+    UsageGroup:
+      type: object
+      required:
+      - key
+      - requests
+      - tokens_in
+      - tokens_out
+      - charged_nano
+      properties:
+        key:
+          type: string
+          description: The value of the grouping dimension — a model slug, or an API key's `key_…` public id
+        label:
+          type: string
+          description: A display name; the key's name when grouping by key, otherwise the same as `key`
+        requests:
+          type: integer
+          format: int64
+        tokens_in:
+          type: integer
+          format: int64
+        tokens_out:
+          type: integer
+          format: int64
+        charged_nano:
+          type: integer
+          format: int64
+          description: 0 for a caller without the financial read capability
+    UsageLatency:
+      type: object
+      description: |
+        Latency percentiles, interpolated from cumulative histograms. They are
+        not an average of per-bucket percentiles: percentiles cannot be
+        averaged.
+      required:
+      - has_samples
+      properties:
+        has_samples:
+          type: boolean
+          description: False means this range contains no latency samples at all, which is not the same as a latency of 0
+        p50_ms:
+          type: integer
+        p95_ms:
+          type: integer
+        mean_ms:
+          type: integer
+        p95_unbounded:
+          type: boolean
+          description: True when p95 falls beyond the histogram's largest bucket bound, in which case p95_ms reads as "at least this much"
+    UsagePoint:
+      type: object
+      required:
+      - bucket_start
+      - requests
+      - tokens_in
+      - tokens_out
+      - charged_nano
+      properties:
+        bucket_start:
+          type: string
+          format: date-time
+        requests:
+          type: integer
+          format: int64
+        tokens_in:
+          type: integer
+          format: int64
+        tokens_out:
+          type: integer
+          format: int64
+        charged_nano:
+          type: integer
+          format: int64
+          description: 0 for a caller without the financial read capability
+        errors:
+          type: integer
+          format: int64
+    UsageReport:
+      type: object
+      required:
+      - series
+      - totals
+      properties:
+        series:
+          type: array
+          description: Totals per time bucket, oldest first
+          items:
+            $ref: '#/components/schemas/UsagePoint'
+        groups:
+          type: array
+          description: |
+            Totals per grouping dimension; empty when `group_by` is not given.
+            Ordered by amount for a caller with the financial read capability,
+            and by `requests DESC, key ASC` for one without it.
+          items:
+            $ref: '#/components/schemas/UsageGroup'
+        totals:
+          $ref: '#/components/schemas/UsageTotals'
+    UsageTotals:
+      type: object
+      required:
+      - requests
+      - tokens_in
+      - tokens_out
+      - charged_nano
+      - currency
+      properties:
+        requests:
+          type: integer
+          format: int64
+        tokens_in:
+          type: integer
+          format: int64
+        tokens_out:
+          type: integer
+          format: int64
+        charged_nano:
+          type: integer
+          format: int64
+          description: 0 for a caller without the financial read capability
+        errors:
+          type: integer
+          format: int64
+        currency:
+          type: string
+          description: The currency amounts are in; empty for a caller without the financial read capability
+        latency:
+          $ref: '#/components/schemas/UsageLatency'
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-flb_session
+      description: The console session cookie
+    managementKey:
+      type: http
+      scheme: bearer
+      description: |
+        A management key, sent as `Authorization: Bearer <key>`. Its scopes must
+        include `management:keys:rw` to manage keys, or
+        `management:usage:read` to read usage and logs.
+
+        Management keys reach only the key and usage endpoints, and that is an
+        allowlist: an endpoint that does not declare this scheme refuses them.
+        A newly added endpoint is therefore never silently reachable because
+        somebody forgot to annotate it.
+
+        A management key acts only on the organization it belongs to. A
+        different organization in the URL answers 404, following the same rule
+        that hides the existence of resources a caller has no relationship
+        with.

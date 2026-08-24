@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="7" fill="#2457E6" />
+  <g id="fairlb-glyph" fill="none" stroke="#ffffff" stroke-width="2.75" stroke-linecap="round">
+    <path d="M6 16 H13" />
+    <path d="M13 16 L25 8" />
+    <path d="M13 16 H25" />
+    <path d="M13 16 L25 24" />
+  </g>
+</svg>

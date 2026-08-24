@@ -1,0 +1,16 @@
+{
+  // oxlint config. The runner does not discover this file on its own — the lint
+  // script in package.json points at it explicitly with -c.
+  // `plugins` replaces the whole set rather than extending it, so the three
+  // defaults (typescript/unicorn/oxc) have to be listed again alongside react;
+  // naming only react would silently drop them.
+  // rules-of-hooks=error turns a hook called inside a condition or a closure
+  // into a failing build — neither typecheck nor the default lint set sees that
+  // class of bug. exhaustive-deps was raised to error once the tree measured
+  // zero violations.
+  "plugins": ["typescript", "unicorn", "oxc", "react"],
+  "rules": {
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "error"
+  }
+}

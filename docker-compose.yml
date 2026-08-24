@@ -1,0 +1,114 @@
+# Everything needed to run FairLB: the gateway and a database.
+#
+#   docker compose up -d
+#   open http://localhost:8080
+#
+# The first page is a setup form. Fill it in and you are signed in — there is no
+# second command to run, and nothing to configure before starting.
+#
+# To automate the first administrator instead, set FAIRLB_ADMIN_EMAIL and
+# FAIRLB_ADMIN_PASSWORD (see .env.example) and the account is created on start.
+name: fairlb
+
+services:
+  fairlb:
+    # Pin a version by setting FAIRLB_IMAGE, e.g.
+    #   FAIRLB_IMAGE=ghcr.io/fairlb/fairlb:0.1.2 docker compose up -d
+    image: ${FAIRLB_IMAGE:-ghcr.io/fairlb/fairlb:latest}
+    restart: unless-stopped
+    environment:
+      # Every setting a .env file can carry has to be named here. Compose reads
+      # .env to fill in ${...}, not to hand the container an environment — so a
+      # variable that appears only in .env is read by nobody, and setting it is
+      # indistinguishable from setting it and having no effect. Blank means
+      # "use the built-in default" for every one of these.
+      #
+      # Two of the entries below are wiring this file owns rather than settings,
+      # so they are fixed instead of passed through. PORT is the host side of
+      # the published port and has no business inside the container at all.
+      DATABASE_URL: postgres://fairlb:fairlb@db:5432/fairlb?sslmode=disable
+      FAIRLB_DATA_DIR: /data
+      HTTP_ADDR: :8080
+      INTERNAL_ADDR: :9091
+
+      # The address people reach this instance at. It decides whether session
+      # cookies carry Secure, so it has to match reality: behind TLS set the
+      # https URL and TRUST_PROXY=true, and a Secure cookie will be issued.
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-}
+
+      # Blank means the gateway generates a master key on first start and keeps
+      # it in the data volume, which is what a single instance wants. Set it
+      # when running more than one replica: they do not share a volume, so each
+      # would otherwise encrypt provider credentials with a key the others
+      # cannot read.
+      SECRET_KEY: ${SECRET_KEY:-}
+
+      FAIRLB_ADMIN_EMAIL: ${FAIRLB_ADMIN_EMAIL:-}
+      FAIRLB_ADMIN_PASSWORD: ${FAIRLB_ADMIN_PASSWORD:-}
+      FAIRLB_SETUP_TOKEN: ${FAIRLB_SETUP_TOKEN:-}
+
+      LOG_FORMAT: ${LOG_FORMAT:-}
+      FAIRLB_PROBE_TRACE: ${FAIRLB_PROBE_TRACE:-}
+
+      # How stopping is paced; see .env.example and the deployment guide.
+      DRAIN_GRACE_SECONDS: ${DRAIN_GRACE_SECONDS:-}
+      SHUTDOWN_TIMEOUT_SECONDS: ${SHUTDOWN_TIMEOUT_SECONDS:-}
+
+      # Shared state across replicas. Blank keeps all of it in-process, which
+      # is correct for one instance and wrong for several.
+      REDIS_URL: ${REDIS_URL:-}
+      DRIVER_CACHE: ${DRIVER_CACHE:-}
+      DRIVER_RATELIMIT: ${DRIVER_RATELIMIT:-}
+      DRIVER_BREAKER: ${DRIVER_BREAKER:-}
+      DRIVER_LOCK: ${DRIVER_LOCK:-}
+      DB_POOL_MAX_CONNS: ${DB_POOL_MAX_CONNS:-}
+      RATE_LIMIT_PER_IP_RPM: ${RATE_LIMIT_PER_IP_RPM:-}
+      AUTH_RATE_LIMIT_PER_IP_RPM: ${AUTH_RATE_LIMIT_PER_IP_RPM:-}
+      RATE_LIMIT_DISABLED: ${RATE_LIMIT_DISABLED:-}
+    ports:
+      - "${PORT:-8080}:8080"
+    # Long enough for the drain window plus the shutdown window (0s + 320s by
+    # default). Compose kills the container 10 seconds after asking it to stop
+    # unless told otherwise, which would cut requests off well before the
+    # gateway had finished with them. Raising SHUTDOWN_TIMEOUT_SECONDS for long
+    # requests means raising this to match — the shorter of the two is the one
+    # that decides.
+    stop_grace_period: 330s
+    volumes:
+      - fairlb-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # The image is distroless: no shell, no curl. The binary probes itself.
+      test: ["CMD", "/fairlb", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fairlb
+      POSTGRES_PASSWORD: fairlb
+      POSTGRES_DB: fairlb
+    volumes:
+      # PostgreSQL 18 stores clusters below a major-version directory. Mount
+      # the parent so a fresh container uses the image's native layout.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fairlb -d fairlb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Not published by default. Nothing outside this file needs to reach
+    # Postgres, and a database on 5432 of a public host is found by scanners
+    # within hours. Add a ports mapping yourself if you want to connect to it.
+
+volumes:
+  pgdata:
+  fairlb-data:

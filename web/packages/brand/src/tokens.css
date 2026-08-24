@@ -1,0 +1,89 @@
+:root,
+[data-mode="light"] {
+  color-scheme: light;
+  --flb-canvas: var(--flb-profile-light-canvas);
+  --flb-surface: var(--flb-profile-light-surface);
+  --flb-ink: var(--flb-profile-light-ink);
+  --flb-route: var(--flb-profile-light-route);
+  --flb-route-hover: var(--flb-profile-light-route-hover);
+  --flb-on-route: var(--flb-profile-light-on-route);
+  --flb-healthy: var(--flb-profile-light-healthy);
+  --flb-degraded: var(--flb-profile-light-degraded);
+  --flb-line: color-mix(in srgb, var(--flb-ink) 12%, transparent);
+
+  --color-kumo-canvas: var(--flb-canvas);
+  --color-kumo-base: var(--flb-surface);
+  --color-kumo-elevated: var(--flb-canvas);
+  --color-kumo-contrast: var(--flb-ink);
+  --color-kumo-brand: var(--flb-route);
+  --color-kumo-brand-hover: var(--flb-route-hover);
+}
+
+[data-mode="dark"] {
+  color-scheme: dark;
+  --flb-canvas: var(--flb-profile-dark-canvas);
+  --flb-surface: var(--flb-profile-dark-surface);
+  --flb-ink: var(--flb-profile-dark-ink);
+  --flb-route: var(--flb-profile-dark-route);
+  --flb-route-hover: var(--flb-profile-dark-route-hover);
+  --flb-on-route: var(--flb-profile-dark-on-route);
+  --flb-healthy: var(--flb-profile-dark-healthy);
+  --flb-degraded: var(--flb-profile-dark-degraded);
+  --flb-line: color-mix(in srgb, var(--flb-ink) 14%, transparent);
+
+  --color-kumo-canvas: var(--flb-canvas);
+  --color-kumo-base: var(--flb-surface);
+  --color-kumo-elevated: var(--flb-surface);
+  --color-kumo-contrast: var(--flb-ink);
+  --color-kumo-brand: var(--flb-route);
+  --color-kumo-brand-hover: var(--flb-route-hover);
+}
+
+/* Public, server-rendered surfaces do not install the SPA theme controller. Respect the
+   operating-system preference whenever the document has not chosen an explicit mode. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mode]) {
+    color-scheme: dark;
+    --flb-canvas: var(--flb-profile-dark-canvas);
+    --flb-surface: var(--flb-profile-dark-surface);
+    --flb-ink: var(--flb-profile-dark-ink);
+    --flb-route: var(--flb-profile-dark-route);
+    --flb-route-hover: var(--flb-profile-dark-route-hover);
+    --flb-on-route: var(--flb-profile-dark-on-route);
+    --flb-healthy: var(--flb-profile-dark-healthy);
+    --flb-degraded: var(--flb-profile-dark-degraded);
+    --flb-line: color-mix(in srgb, var(--flb-ink) 14%, transparent);
+
+    --color-kumo-canvas: var(--flb-canvas);
+    --color-kumo-base: var(--flb-surface);
+    --color-kumo-elevated: var(--flb-surface);
+    --color-kumo-contrast: var(--flb-ink);
+    --color-kumo-brand: var(--flb-route);
+    --color-kumo-brand-hover: var(--flb-route-hover);
+  }
+}
+
+html,
+body {
+  background: var(--flb-canvas);
+  color: var(--flb-ink);
+  font-family: var(--flb-font-ui);
+}
+
+:root {
+  --flb-font-display: var(--flb-profile-font-display);
+  --flb-font-ui: var(--flb-profile-font-ui);
+  --flb-font-mono: var(--flb-profile-font-mono);
+}
+
+code,
+kbd,
+pre,
+samp,
+.font-mono {
+  font-family: var(--flb-font-mono);
+}
+
+.flb-display {
+  font-family: var(--flb-font-display);
+}

@@ -1,0 +1,206 @@
+# Error code registry: the stable machine-readable `code` of every problem+json
+# response.
+#
+# Two namespaces appear here. `common.*` are the HTTP-level answers any build
+# gives — validation, authentication, authorization, rate limiting, idempotency
+# — emitted by the middleware stack. `gateway.*` are the gateway's own.
+#
+# Which file a code is defined in is bookkeeping; the code string itself is the
+# baseline contract clients match on. Before launch, retired codes are removed
+# from this registry outright; an existing code is never reassigned a new
+# meaning.
+
+# Where this segment compiles to. This is the base segment: it declares the Def
+# type and owns the registry that every lookup goes through, so any other
+# segment present in a tree registers into this package rather than standing up
+# a second registry beside it.
+output:
+  go_dir: foundation/errcode
+  go_package: errcode
+
+codes:
+  - code: common.internal
+    status: 500
+    title: Internal error
+    zh: 服务内部错误
+  - code: common.validation
+    status: 400
+    title: Request validation failed
+    zh: 请求参数校验失败
+  - code: common.unprocessable
+    status: 422
+    title: Request value is outside the accepted range
+    zh: 请求值超出允许范围
+  - code: common.unauthenticated
+    status: 401
+    title: Authentication required
+    zh: 需要登录
+  - code: common.forbidden
+    status: 403
+    title: Insufficient permissions
+    zh: 权限不足
+  # Authorization answers in two levels: a caller with no relationship to the
+  # resource gets 404 rather than 403, so the response does not reveal that the
+  # resource exists.
+  - code: common.not_found
+    status: 404
+    title: Resource not found
+    zh: 资源不存在
+  - code: common.rate_limited
+    status: 429
+    title: Too many requests
+    zh: 请求过于频繁
+  - code: common.method_not_allowed
+    status: 405
+    title: Method not allowed
+    zh: 方法不允许
+  # A request carrying an Idempotency-Key whose body exceeds what can be cached
+  # for replay (1 MiB).
+  - code: common.payload_too_large
+    status: 413
+    title: Payload too large
+    zh: 请求体过大
+  # Same Idempotency-Key, different request body.
+  - code: common.idempotency_mismatch
+    status: 422
+    title: Idempotency key reused with different request
+    zh: 幂等键与请求内容不匹配
+  # The first request with this key is still running; retry later to collect
+  # its result.
+  - code: common.idempotency_in_flight
+    status: 409
+    title: Original request still in flight
+    zh: 首次请求处理中
+  - code: common.org_suspended
+    status: 403
+    title: Organization suspended
+    zh: 组织已被封禁
+  # The resource is not in a state that allows this operation, for example
+  # events arriving out of order. The caller may retry later.
+  - code: common.conflict
+    status: 409
+    title: Conflict
+    zh: 资源状态冲突，请稍后重试
+  # The resource exists and is configured, but the thing that serves it cannot
+  # be built right now (a credential that no longer opens, for example). Unlike
+  # common.not_found the fix is on our side, so the caller should retry later.
+  - code: common.unavailable
+    status: 503
+    title: Temporarily unavailable
+    zh: 暂时不可用，请稍后重试
+  # An If-Match precondition no longer describes the current resource. The
+  # caller must reload before retrying; unlike common.conflict, waiting alone
+  # cannot make the submitted revision current again.
+  - code: common.precondition_failed
+    status: 412
+    title: Precondition failed
+    zh: 资源已变更，请刷新后重试
+  # The available balance does not cover the amount reserved for this request.
+  # Also returned while a balance is negative.
+  # Operator settings (ADR-0198): a section rule violation names the section; a
+  # high-impact key written without a "why" is no audit at all.
+  - code: common.settings_section_invalid
+    status: 422
+    title: Settings section is inconsistent
+    zh: 设置分组不一致
+  - code: common.settings_reason_required
+    status: 422
+    title: A reason is required for this change
+    zh: 这项变更必须填写原因
+  - code: common.insufficient_credits
+    status: 402
+    title: Insufficient credits
+    zh: 余额不足，请充值
+  - code: gateway.invalid_api_key
+    status: 401
+    title: Invalid API key
+    zh: API Key 无效
+  - code: gateway.key_revoked
+    status: 401
+    title: API key revoked
+    zh: API Key 已吊销
+  - code: gateway.key_expired
+    status: 401
+    title: API key expired
+    zh: API Key 已过期
+  - code: gateway.org_suspended
+    status: 403
+    title: Organization suspended
+    zh: 组织已被封禁
+  - code: gateway.insufficient_scope
+    status: 403
+    title: API key lacks required scope
+    zh: API Key 缺少所需权限范围
+  - code: gateway.insufficient_credits
+    status: 402
+    title: Insufficient credits
+    zh: 余额不足
+  - code: gateway.key_budget_exceeded
+    status: 402
+    title: API key budget exceeded
+    zh: API Key 预算已用尽
+  - code: gateway.rate_limited
+    status: 429
+    title: Rate limit exceeded
+    zh: 请求频率超限
+  - code: gateway.saturated
+    status: 429
+    title: Upstream capacity saturated
+    zh: 上游容量已饱和
+  # The model has no price configured. A separate code from model_disabled:
+  # that one means somebody turned the model off deliberately, this one means
+  # the configuration is incomplete. Whoever runs the gateway has to fill in a
+  # price for this one and has nothing to do about that one.
+  - code: gateway.model_unpriced
+    status: 503
+    title: Model is not priced
+    zh: 模型未配置定价，暂不可用
+  - code: gateway.model_not_found
+    status: 404
+    title: Model not found
+    zh: 模型不存在或不可用
+  - code: gateway.resource_not_found
+    status: 404
+    title: Resource not found
+    zh: 资源不存在或已过期
+  # The caller's model access tier is disabled or could not be resolved, so
+  # access fails closed.
+  #
+  # Distinct from model_not_found on purpose. That code means "this model does
+  # not exist for you"; this one means the caller's access configuration is not
+  # in effect at all, so every model is refused. Reusing 404 would show the
+  # caller every model vanishing at once with nothing to act on. A 403 with
+  # this code says the account needs attention, which is something they can do
+  # something about — the same reason org_suspended is a 403.
+  - code: gateway.model_tier_disabled
+    status: 403
+    title: Model access tier disabled
+    zh: 账号的模型准入档已停用，请联系客服
+  - code: gateway.model_disabled
+    status: 503
+    title: Model temporarily disabled
+    zh: 模型已临时停用
+  - code: gateway.request_too_large
+    status: 413
+    title: Request too large
+    zh: 请求体超出限制
+  - code: gateway.invalid_request
+    status: 400
+    title: Invalid request
+    zh: 请求无效
+  - code: gateway.upstream_timeout
+    status: 502
+    title: Upstream timeout
+    zh: 上游超时
+  - code: gateway.all_providers_failed
+    status: 502
+    title: All upstream providers failed
+    zh: 所有上游渠道均失败
+  - code: gateway.state_route_unavailable
+    status: 503
+    title: Stateful resource route unavailable
+    zh: 有状态资源的原始渠道或凭证暂不可用
+  - code: gateway.internal
+    status: 500
+    title: Internal error
+    zh: 服务内部错误

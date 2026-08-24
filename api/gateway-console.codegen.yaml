@@ -1,0 +1,15 @@
+# oapi-codegen configuration: the console API document becomes a strict server
+# interface for the gateway to implement.
+#
+# Wiring up a new configuration takes two edits, and doing only one of them
+# produces a silent drift where the spec changes, the generated code does not,
+# and every check still passes:
+#   1. add it to the Makefile's generate target
+#   2. add its output to the Makefile's list of generated files, which the
+#      drift check compares against a fresh run
+package: gwconsoleapi
+output: internal/gateway/consoleapi/api.gen.go
+generate:
+  chi-server: true
+  strict-server: true
+  models: true

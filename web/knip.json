@@ -1,0 +1,15 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "rules": { "duplicates": "off" },
+  "workspaces": {
+    ".": { "entry": ["scripts/*.mjs"] },
+    "apps/*": { "entry": ["src/**/*.test.{ts,tsx}", "src/**/*.browser.tsx", "src/**/*.e2e.ts"] },
+    "packages/*": { "entry": ["src/**/*.test.{ts,tsx}", "src/**/*.browser.tsx"] }
+  },
+  "ignore": ["apps/*/public/**"],
+  "ignoreDependencies": [
+    "@fontsource-variable/archivo",
+    "@fontsource-variable/source-sans-3",
+    "@fontsource/ibm-plex-mono"
+  ]
+}

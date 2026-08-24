@@ -1,0 +1,63 @@
+@import "@fairlb/brand/tokens.css";
+
+/*
+ * FairLB product-layout tokens.
+ *
+ * Kumo remains the component and color foundation. These values describe the
+ * product shell around it: content geometry, density, overlays, and safe-area
+ * behavior. Apps may override only the density/content subset; modal layering
+ * and safety values stay shared so Console and Operations cannot drift.
+ */
+/*
+ * Navigation strips opt out of Kumo's link decoration.
+ *
+ * Kumo's `Link` bakes a variant class onto the element and merges our className
+ * after it as plain string concatenation. Both end up in `@layer utilities`, so
+ * which one wins is decided by Tailwind's own emit order rather than by ours —
+ * and it decided against us: every item in both navigation components rendered
+ * as underlined link-blue while the source said `no-underline text-kumo-default`.
+ * The classes were dead and nothing said so, because no test looked at a
+ * computed style.
+ *
+ * A plain unlayered rule wins over any layered utility, which is why the opt-out
+ * lives here rather than in a className. It is scoped to the two navigation
+ * slots so it cannot reach a link inside page content. The colour is handled
+ * separately: the components pass `variant="current"` and set the colour on the
+ * list, so there is no same-element colour conflict left to lose.
+ *
+ * `nav-link-style.browser.tsx` measures the result.
+ */
+[data-slot="record-nav"] a,
+[data-slot="local-nav"] a {
+  text-decoration-line: none;
+}
+
+:root {
+  --flb-content-max: 87.5rem;
+  --flb-content-pad-inline: 1rem;
+  --flb-content-pad-inline-sm: 1.5rem;
+  --flb-content-pad-inline-lg: 2.5rem;
+  --flb-content-pad-block: 1.25rem;
+  --flb-card-pad-inline: 1.5rem;
+  --flb-card-pad-block: 1.25rem;
+  --flb-page-header-gap: 0.75rem;
+  --flb-rail-width: 23.75rem;
+  --flb-rail-gap: 2rem;
+  /* The vertical section rail. One value: the grid track that reserves the
+     space and the nav that fills it used to state 12rem and w-48 separately,
+     in different files, which is the same number written twice. */
+  --flb-section-nav-width: 12rem;
+  --flb-section-nav-gap: 1.5rem;
+
+  --flb-modal-width-sm: 18rem;
+  --flb-modal-width-base: 24rem;
+  --flb-modal-width-lg: 32rem;
+  --flb-modal-width-xl: 48rem;
+  --flb-drawer-width-base: 32rem;
+  --flb-drawer-width-wide: 48rem;
+  --flb-modal-max-block: 88dvh;
+
+  --flb-safe-bottom-modal: max(1rem, env(safe-area-inset-bottom));
+  --flb-z-overlay: 80;
+  --flb-z-skip: 100;
+}

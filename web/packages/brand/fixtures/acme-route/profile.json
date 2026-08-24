@@ -1,0 +1,102 @@
+{
+  "profileVersion": 1,
+  "identity": {
+    "name": "Acme Route",
+    "shortName": "Acme",
+    "surfaceNames": {
+      "marketing": { "en": "Acme Route", "zh": "Acme 路由" },
+      "console": { "en": "Acme Console", "zh": "Acme 控制台" },
+      "operations": { "en": "Acme Operations", "zh": "Acme 运营后台" },
+      "communityAdmin": { "en": "Acme Admin", "zh": "Acme 管理台" }
+    },
+    "assets": {
+      "wordmarkSvg": "./mark.svg",
+      "markSvg": "./mark.svg",
+      "faviconSvg": "./mark.svg",
+      "socialMarkSvg": "./mark.svg"
+    }
+  },
+  "theme": {
+    "light": {
+      "canvas": "#F8F7FC",
+      "surface": "#FFFFFF",
+      "ink": "#191326",
+      "accent": "#5B21B6",
+      "healthy": "#087A66",
+      "degraded": "#934A00"
+    },
+    "dark": {
+      "canvas": "#100B18",
+      "surface": "#1B1428",
+      "ink": "#F7F3FF",
+      "accent": "#C4B5FD",
+      "healthy": "#5EEAD4",
+      "degraded": "#FDBA74"
+    },
+    "fonts": {
+      "display": {
+        "family": "Archivo Variable",
+        "sources": [
+          {
+            "path": "../../node_modules/@fontsource-variable/archivo/files/archivo-latin-wght-normal.woff2",
+            "weight": "100 900",
+            "style": "normal"
+          }
+        ]
+      },
+      "body": {
+        "family": "Source Sans 3 Variable",
+        "sources": [
+          {
+            "path": "../../node_modules/@fontsource-variable/source-sans-3/files/source-sans-3-latin-wght-normal.woff2",
+            "weight": "200 900",
+            "style": "normal"
+          }
+        ]
+      },
+      "mono": {
+        "family": "IBM Plex Mono",
+        "sources": [
+          {
+            "path": "../../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2",
+            "weight": "400",
+            "style": "normal"
+          }
+        ]
+      },
+      "chineseFallback": ["PingFang SC", "Noto Sans SC", "system-ui", "sans-serif"]
+    }
+  },
+  "operator": {
+    "legalName": "Acme Infrastructure Limited",
+    "supportEmail": "support@acme.example",
+    "salesEmail": "sales@acme.example"
+  },
+  "links": {
+    "repository": "https://example.com/acme/source",
+    "deploymentDocs": "https://example.com/acme/deploy"
+  },
+  "marketing": {
+    "tagline": {
+      "en": "One gateway. Native APIs. Automatic failover.",
+      "zh": "一个网关，原生协议，自动故障转移。"
+    },
+    "primaryCta": {
+      "label": { "en": "Start building", "zh": "开始接入" },
+      "href": "/register"
+    },
+    "secondaryCta": {
+      "label": { "en": "Send your first request", "zh": "发送第一个请求" },
+      "href": "/docs/#quickstart"
+    },
+    "offerings": { "cloud": true, "community": true, "privateDeployment": false },
+    "editorial": { "blog": true, "changelog": true, "guides": false },
+    "seo": {
+      "siteName": { "en": "Acme Route", "zh": "Acme 路由" },
+      "defaultDescription": {
+        "en": "Route production model traffic through native APIs.",
+        "zh": "通过原生 API 路由生产模型流量。"
+      }
+    }
+  }
+}

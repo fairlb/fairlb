@@ -1,0 +1,4083 @@
+openapi: 3.1.0
+info:
+  title: FairLB Staff API — Gateway section
+  version: 0.1.0
+  description: 'Administrative API, served at `staff.<domain>/api/staff/v1` on its
+    own subdomain with its own session domain.
+
+    TOTP is mandatory. The gateway routes are mounted under `/api/staff/v1/gateway/*`.
+
+    '
+servers:
+- url: /api/staff/v1
+tags:
+- name: gateway
+  description: 'Gateway administration: providers and their keys, the model catalog
+    and its pricing, and the health dashboard.
+
+    Code generation is split by this tag: the other section excludes it, and this
+    one includes it.
+
+    '
+security:
+- staffSession: []
+paths:
+  /gateway/providers:
+    get:
+      operationId: listGatewayProviders
+      tags:
+      - gateway
+      summary: List providers, with health state and auto-disable markers
+      description: |
+        Paginated, ordered by slug. This description used to say the list was a
+        bounded registry capped at 200 rows, and that reaching that many was the
+        signal to introduce pagination rather than raise the cap — ADR-0187 acts
+        on exactly that, one release before anyone hit it.
+
+        `q` matches slug, display name or base URL, server side — the same three
+        fields the list page's own search box has always covered. The pickers
+        built on this list have to find a provider in the whole registry, and a
+        client can only filter the page it already holds.
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 200
+        description: Match slug, display name or base URL (case-insensitive substring)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayProvider'
+                  next_cursor:
+                    type: string
+                    description: Present when another page follows; pass it back as `cursor`
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createGatewayProvider
+      tags:
+      - gateway
+      summary: Create a provider
+      description: '`name`, `headers` and `cost_multiplier_bps` may be submitted along
+        with the provider at creation time;
+
+        omitted, they default to an empty string, an empty object and 10000 respectively.
+        A slug already in use returns 409.
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayProviderInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayProvider'
+        '422':
+          $ref: '#/components/responses/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/providers/{provider_id}:
+    get:
+      operationId: getGatewayProvider
+      tags:
+      - gateway
+      summary: A single provider, read by the detail page instead of the capped list
+      description: 'A detail page must read the single record. Having it fetch the
+        whole list and
+
+        pick a row out of it on the client runs into that endpoint''s 200-row cap:
+        a provider
+
+        beyond the cap would open as "provider not found" — a failure that does not
+        exist.
+
+        The cap itself is correct for a registry; what is wrong is a detail page consuming
+        a capped list.
+
+
+        The fields are identical to those of a list item, including the key and route
+        counts, so
+
+        moving a detail page over requires no rendering changes.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/GatewayProviderId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayProvider'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      operationId: updateGatewayProvider
+      tags:
+      - gateway
+      summary: Update a provider, including enabling or disabling it by hand
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayProviderInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayProvider'
+        '422':
+          $ref: '#/components/responses/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/providers/{provider_id}/keys:
+    get:
+      operationId: listGatewayProviderKeys
+      tags:
+      - gateway
+      summary: List a provider's keys, masked; the secret never leaves the server
+      description: |
+        Paginated, oldest first — which is also the order the connectivity test
+        picks from, so the first row of the first page stays the key it has
+        always used.
+
+        `verified_count` is over the **whole set**, not over the page. The
+        readiness checklist asks "has any credential verified", and it used to
+        answer by scanning the rows it happened to hold; once this list
+        paginates, a verified key on a later page would read as "none verified"
+        — a checklist step shown incomplete while the thing it checks is done.
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - verified_count
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayProviderKey'
+                  verified_count:
+                    type: integer
+                    format: int64
+                    description: How many of this provider's keys have verified, across the whole set
+                  next_cursor:
+                    type: string
+                    description: Present when another page follows; pass it back as `cursor`
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createGatewayProviderKey
+      tags:
+      - gateway
+      summary: Add a provider key; the secret is encrypted at rest with AES-256-GCM
+        and can never be read back
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - secret
+              properties:
+                name:
+                  type: string
+                secret:
+                  type: string
+                  description: The upstream API key in the clear. It appears only
+                    in this request and is encrypted on its way to storage.
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayProviderKey'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/providers/{provider_id}/keys/{key_id}:
+    patch:
+      operationId: updateGatewayProviderKey
+      tags:
+      - gateway
+      summary: Change a provider key's status or name — disable, enable, or rename
+      description: 'The correct order for rotating a key is add the new one, verify
+        the new one, then
+
+        disable the old one. Without a way to disable a specific key there is only
+        create and
+
+        delete, so the only available sequence is to delete the old key first — the
+        most dangerous one.
+
+
+        A key with `status=''disabled''` is no longer selected for routing, since routing
+        filters on
+
+        `status=''active''`, but the row remains and can be enabled again.
+
+        The secret cannot be changed: to replace a key, add a new one and disable or
+        delete the old.
+
+        '
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                status:
+                  type: string
+                  enum:
+                  - active
+                  - disabled
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayProviderKey'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteGatewayProviderKey
+      tags:
+      - gateway
+      summary: Delete a provider key
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Deleted
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/providers/{provider_id}/routes:
+    get:
+      operationId: listGatewayProviderRoutes
+      tags:
+      - gateway
+      summary: Every route this provider serves, looked up from the provider side
+      description: 'Routes hang beneath a model, so `GET /gateway/models/{model_id}/routes`
+        can only answer
+
+        the question in the model direction. A provider''s detail page asks the opposite
+        one —
+
+        which models does this provider serve — and assembling that on the client is
+        an N+1.
+
+
+        It deliberately omits `model_slug`: the caller joins against the model catalog
+        itself,
+
+        which a provider detail page is already fetching, so the query cache serves
+        it with no
+
+        extra request. Adding a redundant field to the route schema for one consumer
+        is not worth it.
+
+
+        Disabled routes are included, matching the model-side lookup: a disabled configuration
+        still
+
+        has to be visible and reversible. Note this deliberately differs from the route
+        count,
+
+        which counts only enabled routes because it answers "is any traffic being served",
+
+        while this answers "what has been configured".
+
+        '
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayRoute'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/providers/{provider_id}/routes/batch:
+    post:
+      operationId: batchWireProviderRoutes
+      tags:
+      - gateway
+      summary: Submit this provider's whole served-model set at once, creating and
+        deleting in one call
+      description: "The \"models served\" section of a provider's detail page is whole-set
+        editing: ticking\nsomething not yet configured creates it, unticking deletes
+        it. This endpoint is where\nthat save lands.\n\nThe response is an array of
+        per-row results, not all-or-nothing. Granularity is decided\nby the shape of
+        the response, not by whether the request carries one item or many.\n\nThis
+        is deliberately not a whole-set PUT. Each row carries several editable attributes\nplus
+        cascade probe records, so it is not a pure association table and replacement
+        semantics\ndo not hold; what is sent instead is an explicit list of creations
+        and deletions.\n\nCreations happen before deletions, inside a single transaction.
+        The two orders fail\nasymmetrically: deleting first and then failing to create
+        can leave a model with no route\nat all, a hard outage; creating first and
+        then failing to delete leaves an old alias alive\na while longer, with the
+        router splitting some traffic to it by priority and weight.\nPartly wrong beats
+        wholly wrong. Left to the order of a loop on the client, closing a tab\nis enough
+        to break it.\n\nA failing row does not take successful ones down with it: each
+        row runs on its own\nsavepoint, and a failure rolls back only that row. The
+        successful rows commit together.\n\nA creation that hits a unique constraint
+        and a deletion that finds nothing are both\nreported as `already` rather than
+        `failed`: the database is already in the desired state,\nand counting that
+        as failure invites repeated retries against a goal already met.\nCallers should
+        still surface them separately, because they mean the list in hand is\nstale
+        — possibly because someone else is editing at the same time.\n\nThe request
+        as a whole returns 200 with the per-row verdicts in the body, for the same\nreason
+        as the discovery and connectivity endpoints: a caller should not have to work
+        out\nthe HTTP-level outcome before it can read the result.\n"
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayRouteBatchInput'
+      responses:
+        '200':
+          description: The batch was processed. Per-row verdicts are in the body, including
+            the case where every row failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayRouteBatchResult'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/providers/{provider_id}/test:
+    post:
+      operationId: testGatewayProvider
+      tags:
+      - gateway
+      summary: Connectivity test — send one minimal request upstream using this provider's
+        key
+      description: 'Verifies, once a provider is configured, that the credentials and
+        the base URL work.
+
+        It really does call upstream and costs a little money, so it never runs automatically
+        and
+
+        only runs when someone explicitly asks for it.
+
+
+        Which endpoint is probed is decided by `endpoint`, rather than always probing
+        chat completions:
+
+        a provider that serves only embeddings or images would necessarily fail a chat
+        probe, and
+
+        that says nothing about whether it works. The default is still the canonical
+        endpoint for the
+
+        protocol, so omitting it leaves behaviour unchanged.
+
+        '
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - upstream_model
+              properties:
+                upstream_model:
+                  type: string
+                  description: The real upstream model name to probe with
+                key_id:
+                  type: string
+                  format: uuid
+                  description: 'Which key to probe with. Omitting it keeps the earlier
+                    behaviour of taking the
+
+                    first usable key in id order, which is the oldest one, so existing
+                    callers are unaffected.
+
+
+                    Without this parameter a standby key can never be verified: during
+                    a rotation one adds a
+
+                    new key, runs the test, and still tests the old one, leaving the
+                    new key''s verification
+
+                    timestamp permanently unset — and that is precisely the key expected
+                    to take over when
+
+                    the primary trips.
+
+
+                    It must belong to this provider, or the request is rejected with
+                    400; otherwise another
+
+                    provider''s key id could be used to send that key to this provider''s
+                    base URL.
+
+                    '
+                endpoint:
+                  type: string
+                  enum:
+                  - chat
+                  - messages
+                  - responses
+                  - embeddings
+                  - images
+                  - generate_content
+                  - responses_compact
+                  - messages_count_tokens
+                  - gemini_count_tokens
+                  - gemini_embed_content
+                  - gemini_batch_embed_contents
+                  - gemini_interactions
+                  - responses_input_tokens
+                  description: 'Which endpoint to probe. The default is the canonical
+                    endpoint for the
+
+                    provider''s protocol. It must match that protocol, or the request is
+                    rejected with 400.
+
+                    Note that one image probe costs considerably more than a text one.
+
+                    '
+                include_trace:
+                  type: boolean
+                  description: 'Return the full exchange: the address, and the request
+                    and response headers and
+
+                    bodies. Available only outside production; a production deployment
+                    always ignores this
+
+                    parameter and never emits the trace.
+
+
+                    The exchange is not redacted. The `Authorization` and `x-api-key`
+                    request headers, along
+
+                    with any custom header the mapping substituted the API key into,
+                    contain the decrypted
+
+                    key in the clear. That is exactly what makes it useful — "is the
+                    key I stored the same
+
+                    one that actually goes out" can only be answered by seeing it —
+                    and exactly why
+
+                    non-production is its boundary.
+
+                    '
+      responses:
+        '200':
+          description: The test completed. Both success and failure return 200, with
+            the outcome in the body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayProviderTestResult'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/models/{model_id}/pricing:
+    get:
+      operationId: getGatewayModelPricing
+      tags:
+      - gateway
+      summary: Read a model's current price
+      parameters:
+      - $ref: '#/components/parameters/GatewayModelId'
+      responses:
+        '200':
+          description: OK. The ETag identifies the current revision of this model's
+            pricing resource.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelPricingResource'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      operationId: saveGatewayModelPricing
+      tags:
+      - gateway
+      summary: Save a model's price; saving takes effect immediately
+      description: "Saving takes effect immediately. There is no multi-step machine
+        of draft, preview,\npublication and activation — it is one step, and versions,
+        publications and scheduled\nactivation were removed along with it.\n\nWhat still
+        holds:\n- NULL is not 0. All four paid fields must be present; 0 is a valid
+        value meaning that\n  billing component is free, and a missing field is rejected.
+        A model being free as a\n  whole is expressed only by its billing mode, never
+        by setting all four to zero.\n- A reason is required and is written to the audit
+        log. The publication record used to\n  carry who changed it, when and why; without
+        it those belong to the audit log — which is\n  also the only source of the previous
+        value when rolling back.\n- Risks are still computed. A blocker is rejected
+        outright with 422; a warning — going\n  below cost, a steep drop in the customer
+        price, affecting several organizations, switching to\n  free — requires the corresponding
+        code in `acknowledged_risks`, and is otherwise\n  rejected too. Selling at a
+        loss is a legitimate decision, but it has to be an informed\n  one. The criteria
+        are unchanged; they simply moved from a separate preview dialog into\n  the
+        save itself.\n- The ETag prevents concurrent overwrites. It guards against two
+        people editing at once\n  and has nothing to do with versioning.\n"
+      parameters:
+      - $ref: '#/components/parameters/GatewayModelId'
+      - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelPricingInput'
+      responses:
+        '200':
+          description: Saved and in effect
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelPricingResource'
+        '422':
+          description: 'There are unhandled risks and nothing at all was saved. A blocker
+            requires
+
+            correcting the data first; a warning requires resubmitting with the corresponding
+            code
+
+            in `acknowledged_risks`.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingRiskReport'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/pricing/import:
+    post:
+      operationId: importGatewayReferencePrices
+      tags:
+      - gateway
+      summary: Fill empty model prices in from the reference dataset bundled with this
+        build
+      description: 'Prefills prices from a snapshot of a public price dataset compiled
+        into the binary.
+
+
+        This is not price synchronisation and does not become it by being an endpoint:
+        nothing
+
+        runs on a timer, nothing reaches the network, and the request path never consults
+        the
+
+        dataset. What it removes is transcription — four rates per model, copied from
+        a vendor''s
+
+        price page into a form — and transcription is where digits get dropped.
+
+
+        Every row it writes is left unverified: `checked_at` stays empty, which is
+        the field a
+
+        person fills in when they confirm a rate against the vendor''s own list. A
+        price somebody
+
+        has checked is never overwritten, `force` included; those are reported as skipped.
+
+        Without `force`, a model that already has any price is left alone as well.
+
+
+        `model_ids` narrows the run to those models, so "price the models I just wired
+        up" cannot
+
+        also reprice the rest of the catalogue. An id matching no model is reported
+        rather than
+
+        dropped. Omit it to consider every model.
+
+
+        `dry_run` reports what would happen and keeps none of it. The work is really
+        done — each
+
+        price is validated, risk-assessed and written inside a transaction that is
+        then rolled
+
+        back — so the outcomes are the ones a real run would reach rather than a second
+        opinion.
+
+
+        Writing prices takes the highest privilege, so this needs the same role saving
+        one does.
+
+        '
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReferencePriceImportInput'
+      responses:
+        '200':
+          description: The run completed. Every model considered is in the report, including
+            the ones no price was written for.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferencePriceImportReport'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/pricing-plans:
+    get:
+      operationId: listGatewayPricingPlans
+      tags:
+      - gateway
+      summary: List customer pricing plans — price adjustment rules, not subscriptions
+      description: |
+        Paginated, the default plan first and the rest ordered by slug. This list had
+        no bound at all: it returned every plan in the deployment, and the page's search
+        box filtered whatever came back client side (ADR-0191).
+
+        `q` matches slug or display name, server side — the same two fields that search
+        box always covered.
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 200
+        description: Match slug or display name (case-insensitive substring)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PricingPlan'
+                  next_cursor:
+                    type: string
+                    description: Present when another page follows; pass it back as `cursor`
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createGatewayPricingPlan
+      tags:
+      - gateway
+      summary: Create a pricing plan; saving takes effect immediately
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PricingPlanCreateInput'
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingPlan'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/pricing-plans/{pricing_plan_id}:
+    get:
+      operationId: getGatewayPricingPlan
+      tags:
+      - gateway
+      summary: Read a pricing plan's current values
+      parameters:
+      - $ref: '#/components/parameters/PricingPlanId'
+      responses:
+        '200':
+          description: OK
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingPlan'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      operationId: updateGatewayPricingPlan
+      tags:
+      - gateway
+      summary: Update a pricing plan's current values; saving takes effect immediately
+      parameters:
+      - $ref: '#/components/parameters/PricingPlanId'
+      - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PricingPlanPatchInput'
+      responses:
+        '200':
+          description: Updated
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingPlan'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteGatewayPricingPlan
+      tags:
+      - gateway
+      summary: Delete a non-default plan that no organization references (superadmin only)
+      parameters:
+      - $ref: '#/components/parameters/PricingPlanId'
+      - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/pricing-plans/{pricing_plan_id}/copy:
+    post:
+      operationId: copyGatewayPricingPlan
+      tags:
+      - gateway
+      summary: Copy this plan into a new pricing plan
+      parameters:
+      - $ref: '#/components/parameters/PricingPlanId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PricingPlanCopyInput'
+      responses:
+        '201':
+          description: Copied
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PricingPlan'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/pricing-plans/{pricing_plan_id}/model-overrides:
+    get:
+      operationId: listGatewayPricingPlanModelOverrides
+      tags:
+      - gateway
+      summary: Read a pricing plan's current per-model multiplier overrides
+      parameters:
+      - $ref: '#/components/parameters/PricingPlanId'
+      responses:
+        '200':
+          description: OK
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PricingPlanModelOverride'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      operationId: replaceGatewayPricingPlanModelOverrides
+      tags:
+      - gateway
+      summary: Replace the whole set of model multiplier overrides; saving takes effect
+        immediately
+      parameters:
+      - $ref: '#/components/parameters/PricingPlanId'
+      - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - overrides
+              properties:
+                overrides:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/PricingPlanModelOverrideInput'
+      responses:
+        '200':
+          description: Replaced
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PricingPlanModelOverride'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/orgs/{org_id}/pricing-plan:
+    get:
+      operationId: getGatewayOrgPricingPlan
+      tags:
+      - gateway
+      summary: Read the pricing plan in effect for a organization, and where it is inherited from
+      parameters:
+      - $ref: '#/components/parameters/OrgId'
+      responses:
+        '200':
+          description: OK
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgPricingPlanAssignment'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      operationId: assignGatewayOrgPricingPlan
+      tags:
+      - gateway
+      summary: Assign a organization's pricing plan (superadmin only; a reason is required)
+      parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrgPricingPlanAssignmentInput'
+      responses:
+        '200':
+          description: Assigned. A null pricing_plan_id restores inheritance of the
+            default plan.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgPricingPlanAssignment'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/models:
+    get:
+      operationId: listGatewayModels
+      tags:
+      - gateway
+      summary: The model catalog, including pricing and the union of route capabilities
+      description: |
+        **Searchable, not paginated.** Capped at 500 rows ordered by slug.
+
+        Two obstacles stood in front of the cursor. ADR-0187 named the first and
+        ADR-0189 removed it: four whole-set editors read this list, and they need
+        "everything already configured stays visible and stays ticked"
+        (ADR-0086). They no longer depend on it — each now takes its configured
+        set from its own endpoint and its candidates from `q`.
+
+        The second obstacle is still here, and it is why the cap remains. The
+        catalogue screen filters on **five orthogonal axes** — search, protocol,
+        status, pricing state and routing state — and only search runs in the
+        database. Paginate now and the other four would filter *the page*: asking
+        for unpriced models would answer "the unpriced ones among the first 50",
+        which is wrong with no outward sign.
+
+        Moving them server-side is not symmetrical work: pricing state is
+        assembled per row by the handler, from a different aggregate. That is the
+        next piece, and the cursor comes after it.
+      parameters:
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 200
+        description: Match slug or display name (case-insensitive substring)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayModel'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createGatewayModel
+      tags:
+      - gateway
+      summary: Create a model
+      description: 'Catalog attributes beyond identity — display name, visibility,
+        context window and
+
+        maximum output tokens — may be submitted at creation time. `enabled` is always
+        stored as
+
+        false: the gate for enabling lives on the server and requires complete pricing
+        plus at least
+
+        one usable provider. A slug already in use returns 409.
+
+        '
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayModelInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayModel'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/models/{model_id}:
+    get:
+      operationId: getGatewayModel
+      tags:
+      - gateway
+      summary: A single model, read by the detail page instead of the capped list
+      description: 'A detail page must read the single record. Having it fetch the
+        whole list and pick a
+
+        row out of it on the client runs into that endpoint''s 500-row cap: a model
+        beyond the cap
+
+        would spin forever, since the client has no not-found branch at all. Of the
+        capped endpoints,
+
+        models is the only one that genuinely grows with upstream releases, so this
+        is where the
+
+        problem appears first.
+
+
+        The fields are identical to those of a list item, including summary markers
+        such as pricing
+
+        status and negative-margin flags, so moving a detail page over requires no rendering
+
+        changes — and a single record runs one pricing query rather than the list''s
+        N.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/GatewayModelId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayModel'
+        default:
+          $ref: '#/components/responses/Problem'
+    patch:
+      operationId: updateGatewayModel
+      tags:
+      - gateway
+      summary: Update a model's catalog attributes, visibility and enabled state
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayModelInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayModel'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/models/{model_id}/routes:
+    get:
+      operationId: listGatewayRoutes
+      tags:
+      - gateway
+      summary: List a model's upstream routes
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayRoute'
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createGatewayRoute
+      tags:
+      - gateway
+      summary: Add an upstream route, binding a model to a provider and declaring which
+        interfaces it supports
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayRouteInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayRoute'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/models/{model_id}/routes/{route_id}:
+    patch:
+      operationId: updateGatewayRoute
+      tags:
+      - gateway
+      summary: Update an upstream route — upstream name, priority, weight, header
+        mapping, enabled state
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayRouteInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayRoute'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteGatewayRoute
+      tags:
+      - gateway
+      summary: Delete an upstream route
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Deleted
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/models/{model_id}/routes/{route_id}/probe:
+    post:
+      operationId: probeGatewayRoute
+      tags:
+      - gateway
+      summary: Probe a route now, on the endpoints named or on every automatically probeable
+        one
+      description: |
+        Enqueues the same probe the worker runs after a route is created; the
+        verdicts land in `probes` on the route as they come back. Naming
+        `images` is the only way an image endpoint gets probed — it costs a
+        real generation and is never probed automatically.
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayRouteProbeRequest'
+      responses:
+        '202':
+          description: Enqueued
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/models/{model_id}/routes/{route_id}/probes/{endpoint}:
+    put:
+      operationId: setGatewayRouteProbe
+      tags:
+      - gateway
+      summary: Override what is known about one endpoint of a route, or hand it back to
+        the worker
+      description: |
+        `ok` and `unsupported` record the operator's verdict, marked as theirs so
+        the worker leaves it alone: the one way an endpoint that is never probed
+        automatically gets published, and the one way to say "do not send this
+        here" for an endpoint the upstream accepts but should not serve.
+        `unverified` clears the override and asks for a probe.
+
+        The endpoint must belong to a protocol the route's provider speaks.
+      parameters:
+      - name: model_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: route_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: endpoint
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayRouteProbeOverride'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayRouteProbe'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/meta:
+    get:
+      operationId: getGatewayMeta
+      tags:
+      - gateway
+      summary: Environment facts for the admin interface, used to show or hide environment-limited
+        controls
+      description: |
+        It returns conclusions only, never the environment's name.
+
+        Returning the full exchange from a connectivity test used to be one rule written
+        twice — the server deciding by environment, and the client showing or hiding by
+        environment — and the second copy got it wrong: one assembly allowed it only in
+        development while the client showed it in two environments. The rule now exists
+        only on the server, and the client asks for its answer.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayMeta'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/vendors:
+    get:
+      operationId: listGatewayVendors
+      tags:
+      - gateway
+      summary: The API platforms this build knows how to reach, with what a provider
+        for each of them starts as
+      description: |
+        A prefill source, not a constraint on what exists. Creating a provider copies
+        the base URL, the protocols and the transport profile out of one of these entries;
+        from then on the stored provider record is the only thing the data plane reads,
+        and editing it never puts these values back.
+
+        The list ships with the binary rather than living in the database, so it is the
+        same for every deployment of this version and needs no migration to grow.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayVendor'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/kill-switch:
+    get:
+      operationId: getGatewayKillSwitch
+      tags:
+      - gateway
+      summary: The kill switch's current state
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayKillSwitch'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      operationId: putGatewayKillSwitch
+      tags:
+      - gateway
+      summary: Trip or restore the kill switch; a reason is required
+      description: |
+        A dedicated endpoint rather than a write through the general settings surface,
+        because this key belongs to the gateway itself. The kill switch is the gateway's
+        emergency stop and has to exist in every deployment, so it cannot depend on a
+        settings surface that is not always present.
+
+        A reason is required: an audit entry without a "why" is not an audit entry.
+        Restoring needs one too — "tripped it by mistake" and "upstream is fixed" are
+        entirely different incident records.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayKillSwitchInput'
+      responses:
+        '204':
+          description: In effect
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/health:
+    get:
+      operationId: getGatewayHealth
+      tags:
+      - gateway
+      summary: Health dashboard — breaker state, error rates and latency
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayHealth'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/providers/{provider_id}/discover-models:
+    post:
+      operationId: discoverProviderModels
+      tags:
+      - gateway
+      summary: Fetch the upstream model list and compare it with the local catalog
+        — read-only, nothing is stored
+      description: 'Calls the upstream model listing with this provider''s key and
+        sorts every model id it
+
+        reports into four states:
+
+
+        | State | Meaning | What can be done |
+
+        |---|---|---|
+
+        | `routed` | An enabled route already serves it | Nothing needed |
+
+        | `mappable` | A matching, already priced model exists locally | Create a route
+        in one step |
+
+        | `unpriced` | The model exists locally but has no price | Set a price first
+        |
+
+        | `unknown` | The model does not exist locally | Create the model and price
+        it first |
+
+
+        Read-only, storing nothing: it exists to help check upstream model identity
+        and capabilities,
+
+        and it neither reads nor writes prices. In particular it never creates model
+        rows on its own —
+
+        an unpriced model cannot be routed, so creating them automatically would produce
+        a batch of
+
+        models guaranteed to fail.
+
+
+        Matching is a heuristic suggestion, not an authoritative judgement: the criterion
+        is a slug
+
+        that is equal to, or ends with a path segment equal to, the upstream name.
+
+        Upstream reports its own model names while identity here is a slug, and there
+        is no reliable
+
+        mechanical correspondence between them, so a match is only a candidate for a
+        person to confirm.
+
+
+        It really does call upstream and costs a little money, so it runs only when
+        someone explicitly
+
+        asks for it.
+
+        '
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: The fetch completed. An upstream failure is also 200, with the
+            outcome in the body, for the same reason as the connectivity test.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoverModelsResult'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/orgs/{org_id}/settings:
+    get:
+      operationId: getOrgGatewaySettings
+      tags:
+      - gateway
+      summary: What a organization may reach, and how fast
+      description: 'Returns the values actually in effect, falling back to the default
+        tier when none was set explicitly.
+
+        The explicit and row-exists flags let the interface distinguish "set deliberately"
+        from "following the default" —
+
+        given only a value with no indication of where it came from, nobody can judge
+        what a change would affect.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/OrgId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgGatewaySettings'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      operationId: putOrgGatewaySettings
+      tags:
+      - gateway
+      summary: Set a organization's model access tier and rate ceilings; a reason is required
+      description: 'Whole-row replacement: an omitted rate ceiling is removed, not
+        kept.
+
+        A null `tier_id` means the default tier. There is no per-organization bare discount:
+
+        negotiated pricing goes through named pricing plans, while an access tier governs
+        only
+
+        which models may be used.
+
+        A disabled tier cannot be assigned — that would put the organization in a state the
+        data plane
+
+        refuses to serve.
+
+
+        The two rate ceilings apply to the organization as a whole. They belong here
+        rather than
+
+        on the tier because a tier is shared by every organization assigned to it, and one
+        organization''s
+
+        traffic must not spend another''s allowance. Per-key ceilings are set by the
+        organization and
+
+        are checked in addition to these, never instead of them.
+
+
+        On write, the data plane cache for every one of that organization''s API keys is invalidated
+
+        immediately, so the next request is priced by the new value rather than waiting
+        for the
+
+        cache to expire.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/OrgId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - reason
+              properties:
+                tier_id:
+                  type:
+                  - string
+                  - 'null'
+                  format: uuid
+                  description: null means the default tier
+                rate_limit_rpm:
+                  type: integer
+                  minimum: 1
+                  description: Requests per minute for the whole organization; omit
+                    for no ceiling
+                rate_limit_tpm:
+                  type: integer
+                  minimum: 1
+                  description: Tokens per minute for the whole organization; omit for
+                    no ceiling
+                reason:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+      responses:
+        '200':
+          description: Assigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgGatewaySettings'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/tiers:
+    get:
+      operationId: listGatewayTiers
+      tags:
+      - gateway
+      summary: List access tiers, with the model count and member organization count of each
+      description: 'An access tier governs only which models may be used; it has nothing
+        to do with
+
+        pricing or routing, which are separate axes.
+
+        A model count of zero means unrestricted — every model — the same meaning it
+        has in an
+
+        API key''s model allowlist.
+
+
+        Paginated, the default tier first and the rest ordered by slug. This used to
+        be an
+
+        unpaginated list silently capped at 200 rows — a tier past that one simply was
+        not
+
+        there, and nothing said so (ADR-0191).
+
+
+        `q` matches slug or display name, server side. The tier picker on an
+        organization''s
+
+        access page has to reach any tier, and a client can only filter the page it
+        already holds.
+
+        '
+      parameters:
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 200
+        description: Match slug or display name (case-insensitive substring)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayTier'
+                  next_cursor:
+                    type: string
+                    description: Present when another page follows; pass it back as `cursor`
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createGatewayTier
+      tags:
+      - gateway
+      summary: Create an access tier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayTierInput'
+      responses:
+        '201':
+          description: 'Created. With `allow_all_models` it admits everything;
+            otherwise it admits exactly what its model set lists — and until that
+            set is filled in, nothing.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayTier'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/tiers/{tier_id}:
+    patch:
+      operationId: updateGatewayTier
+      tags:
+      - gateway
+      summary: Update an access tier — name, description, enabled state
+      description: 'It excludes the default flag. Changing which tier is the default
+        is a two-row
+
+        transaction with its own endpoint; folding it into a partial update would let
+        an incidental
+
+        rename move the default somewhere else.
+
+        '
+      parameters:
+      - name: tier_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayTierInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayTier'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteGatewayTier
+      tags:
+      - gateway
+      summary: Delete an access tier
+      description: 'The default tier cannot be deleted, and neither can a tier that
+        still has member organizations — those have to be moved first, or deleting the tier
+
+        would silently change what those organizations may access. Both cases return 409 with
+        the reason.
+
+        '
+      parameters:
+      - name: tier_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Deleted
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/tiers/{tier_id}/default:
+    post:
+      operationId: setDefaultGatewayTier
+      tags:
+      - gateway
+      summary: Make this the default tier, where newly registered organizations land
+      description: 'Clears the flag on the previous default and sets it here within
+        one transaction:
+
+        exactly one default is allowed, and doing it as two requests opens a window
+        with no default
+
+        at all, during which a organization with no explicit tier has nothing to fall back
+        to.
+
+        A disabled tier cannot be made the default.
+
+        '
+      parameters:
+      - name: tier_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayTier'
+        default:
+          $ref: '#/components/responses/Problem'
+  /gateway/tiers/{tier_id}/models:
+    get:
+      operationId: listGatewayTierModels
+      tags:
+      - gateway
+      summary: List the models in a tier
+      parameters:
+      - name: tier_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: OK. An empty array means unrestricted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayTierModel'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      operationId: setGatewayTierModels
+      tags:
+      - gateway
+      summary: Replace the whole set of models in a tier
+      description: 'Send the complete selected set, not a delta. An empty array means
+        unrestricted, that is every model.
+
+        '
+      parameters:
+      - name: tier_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - model_ids
+              properties:
+                model_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GatewayTierModel'
+        default:
+          $ref: '#/components/responses/Problem'
+components:
+  headers:
+    ETag:
+      description: A strong entity tag. A write request must echo it in If-Match to
+        prevent concurrent overwrites.
+      schema:
+        type: string
+    XRequestId:
+      description: Request trace id, present on every response
+      schema:
+        type: string
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      description: Where to resume from — the previous response's `next_cursor`
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      description: Rows per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    GatewayModelId:
+      name: model_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    GatewayProviderId:
+      name: provider_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: The ETag from the most recent read or write response. A mismatch
+        returns 409; nothing is ever overwritten silently.
+      schema:
+        type: string
+        minLength: 1
+    OrgId:
+      name: org_id
+      in: path
+      required: true
+      description: Public id, prefixed with `org_`
+      schema:
+        type: string
+    PricingPlanId:
+      name: pricing_plan_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Problem:
+      description: Error response (RFC 9457)
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/XRequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    DecimalUSDPerCall:
+      type: string
+      pattern: ^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$
+      description: USD per call. At most 9 decimal places; exponents, negatives and
+        floating-point transport are not allowed.
+    DecimalUSDPerM:
+      type: string
+      pattern: ^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$
+      example: '3.00'
+      description: USD per million tokens. At most 9 decimal places; exponents, negatives
+        and floating-point transport are not allowed. Configuration input is capped at
+        92233720.368547758 so that the largest model price combined with a plan multiplier
+        remains exactly representable.
+    DiscoverModelsResult:
+      type: object
+      required:
+      - ok
+      - complete
+      - checked_at
+      - models
+      properties:
+        ok:
+          type: boolean
+          description: 'Whether a conclusion was reached at all — the call connected
+            and the response had the expected shape. When false, models is empty and
+            message explains why.
+
+            Note that an empty upstream catalog is a success: ok and complete are both
+            true with an empty models array.
+
+            That is a completely different situation from being unable to fetch, and
+            it is the one most worth alerting on,
+
+            because every route configured locally now points at nothing.
+
+            '
+        complete:
+          type: boolean
+          description: 'Whether this enumeration covered the entire upstream catalog.
+            True when pagination was followed to the end; false when it was truncated
+            at the row limit or the page limit,
+
+            or when upstream said there was more but offered no usable cursor. Always
+            false when ok is false.
+
+
+            Only when this is true does "configured locally, no longer reported upstream"
+            become a valid conclusion — in an incomplete
+
+            reading, absence only means it was not read. Whether there is a conclusion
+            and whether that conclusion covers everything
+
+            are two different questions, and one boolean cannot carry both.
+
+            '
+        message:
+          type: string
+          description: 'What this fetch has to say. On failure it is the reason, with
+            the upstream text truncated; on success it may still have something to say,
+
+            such as an incomplete catalog or an empty one. Do not use its emptiness
+            to judge success — that is what ok and complete are for.
+
+            '
+        checked_at:
+          type: string
+          format: date-time
+        status_code:
+          type:
+          - integer
+          - 'null'
+          description: Upstream HTTP status
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiscoveredModel'
+    DiscoveredModel:
+      type: object
+      required:
+      - upstream_model
+      - state
+      properties:
+        upstream_model:
+          type: string
+          description: The model id as reported upstream
+        state:
+          type: string
+          enum:
+          - routed
+          - mappable
+          - unpriced
+          - unknown
+          description: routed — already served; mappable — a route can be created in
+            one step; unpriced — present locally but with no price; unknown — not present
+            locally
+        model_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: The matched local model; empty when the state is unknown
+        model_slug:
+          type: string
+          description: The matched local slug; empty when the state is unknown
+    DraftTokenRatesUSDPerM:
+      type: object
+      required:
+      - input
+      - output
+      - cache_read
+      - cache_write
+      description: The four editable prices. null means missing, which blocks a paid
+        model from being enabled; the string "0" means explicitly free.
+      properties:
+        input:
+          oneOf:
+          - $ref: '#/components/schemas/DecimalUSDPerM'
+          - type: 'null'
+        output:
+          oneOf:
+          - $ref: '#/components/schemas/DecimalUSDPerM'
+          - type: 'null'
+        cache_read:
+          oneOf:
+          - $ref: '#/components/schemas/DecimalUSDPerM'
+          - type: 'null'
+        cache_write:
+          oneOf:
+          - $ref: '#/components/schemas/DecimalUSDPerM'
+          - type: 'null'
+      additionalProperties: false
+    GatewayMeta:
+      type: object
+      required: [probe_trace_allowed]
+      properties:
+        probe_trace_allowed:
+          type: boolean
+          description: Whether a connectivity test returns the full exchange. It contains
+            the key in the clear, so it is enabled outside production only.
+      additionalProperties: false
+    GatewayKillSwitch:
+      type: object
+      required: [active]
+      properties:
+        active:
+          type: boolean
+        updated_at:
+          type: string
+          format: date-time
+        updated_by:
+          type: string
+      additionalProperties: false
+    GatewayKillSwitchInput:
+      type: object
+      required: [active, reason]
+      properties:
+        active:
+          type: boolean
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+      additionalProperties: false
+    GatewayHealth:
+      type: object
+      required:
+      - providers
+      - retry_budget
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/GatewayProviderHealth'
+        retry_budget:
+          $ref: '#/components/schemas/GatewayRetryBudget'
+        switch_counts:
+          $ref: '#/components/schemas/GatewayKillSwitchCounts'
+    GatewayKillSwitchCounts:
+      type: object
+      required:
+      - providers_total
+      - providers_disabled
+      - models_total
+      - models_disabled
+      description: 'Current counts for the second and third levels of the kill switch,
+        counted by the server across the whole table.
+
+        The interface must not count them from the catalog lists instead: those lists
+        are capped, at 200 providers and 500 models,
+
+        so counting them yields "how many are stopped on the first page", which becomes
+        silently wrong the moment a cap takes effect.
+
+        '
+      properties:
+        providers_total:
+          type: integer
+          format: int64
+        providers_disabled:
+          type: integer
+          format: int64
+        models_total:
+          type: integer
+          format: int64
+        models_disabled:
+          type: integer
+          format: int64
+    GatewayModel:
+      type: object
+      required:
+      - id
+      - slug
+      - protocols
+      - enabled
+      - visibility
+      - endpoints
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        display_name:
+          type: string
+        protocols:
+          type: array
+          items:
+            type: string
+          description: |
+            The protocols this model is configured on: every protocol spoken by
+            a provider that has an enabled route for it. A model owns no
+            protocol of its own, and the same slug may be reachable on both
+            `/v1/chat/completions` and `/v1/messages`.
+
+            This is the configuration view, for the catalogue filter. The
+            public catalogue's `protocols` is narrower: it lists only the
+            protocols of verified endpoints.
+        enabled:
+          type: boolean
+        visibility:
+          type: string
+          enum:
+          - public
+          - beta
+          - hidden
+        endpoints:
+          type: array
+          items:
+            type: string
+          description: |
+            The endpoints a probe has verified on the model's enabled routes —
+            the same set the public catalogue publishes. Nothing is declared
+            here: routes are probed on every endpoint of the protocols their
+            provider speaks, and this is what was found working.
+        context_window:
+          type: integer
+          description: Context window. It travels with the list so the attribute editor
+            can pre-fill the current value.
+        max_output_tokens:
+          type: integer
+          description: Maximum output tokens. When undeclared it is treated as 4096,
+            and it is one of the terms in the pre-authorisation estimate.
+        is_free:
+          type: boolean
+          description: 'Whether this model is free. It is derived from the pricing
+            row''s billing mode and
+
+            is not a writable field. With no pricing row it is omitted entirely — "unknown"
+            rather than "not free".
+
+            '
+        route_count:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional metadata. `price_sources` is not an accepted key
+            and its presence is rejected, because prices are never written through metadata.
+        pricing_status:
+          type: string
+          enum:
+          - unpriced
+          - active
+          - free
+          description: 'A pricing summary, for list filtering only; the pricing endpoint
+            is authoritative for the details.
+
+            '
+        public_rates:
+          $ref: '#/components/schemas/TokenRatesUSDPerM'
+          description: The four publicly listed prices, each being the official price
+            multiplied by the model's sales multiplier
+        price_updated_at:
+          type: string
+          format: date-time
+        price_verified:
+          type: boolean
+          description: 'Whether a person has confirmed this price against the vendor''s
+            own list, which is what the pricing editor''s checked-on date records.
+
+
+            False means the rate is a reference nobody has agreed to charge against
+            — an import writes rows that way on purpose. With no pricing row it is omitted
+            entirely, "unknown" rather than "not verified": absence must not be readable
+            as either answer.
+
+            '
+    GatewayModelInput:
+      type: object
+      properties:
+        slug:
+          type: string
+          description: The public model name, required at creation, for example "openai/gpt-5.4"
+        display_name:
+          type: string
+        enabled:
+          type: boolean
+          description: Always stored as false at creation; it can be enabled explicitly
+            only once pricing and the provider list are complete.
+        visibility:
+          type: string
+          enum:
+          - public
+          - beta
+          - hidden
+        context_window:
+          type: integer
+        max_output_tokens:
+          type: integer
+          description: The model's default output cap, used for the pre-authorisation
+            estimate when a request carries no max_tokens
+    GatewayProbeTrace:
+      type: object
+      description: 'The full exchange of one probe. Returned outside production only,
+        and only when the request explicitly asks for it.
+
+
+        It is captured as the request is actually written to the wire rather than assembled
+        by hand: assembling it yields the headers as constructed,
+
+        while the transport still adds others such as User-Agent.
+
+        The whole point of this feature is knowing what really went out, so the two
+        must not be confused.
+
+
+        It is not redacted: the request headers contain the decrypted key in the clear.
+
+        '
+      required:
+      - url
+      - request
+      - response_status
+      properties:
+        url:
+          type: string
+          description: The resolved upstream address, base URL plus path
+        request:
+          type: string
+          description: The request verbatim — start line, all headers and body — including
+            the key in the clear
+        response_status:
+          type: string
+          description: The response status line, for example "200 OK"
+        response:
+          type: string
+          description: The response verbatim, all headers and body; empty when the
+            connection itself failed
+        truncated:
+          type: boolean
+          description: The response body exceeded the size limit and was truncated
+    GatewayVendor:
+      type: object
+      additionalProperties: false
+      required:
+      - slug
+      - label
+      - kind
+      - protocols
+      - default_protocols
+      - base_urls
+      - key_hint
+      - model_listing
+      properties:
+        slug:
+          type: string
+        label:
+          type: string
+          description: The platform's own name. Not translated, and not derived from
+            the slug.
+        kind:
+          type: string
+          enum:
+          - first_party
+          - platform
+          - aggregator
+          - custom
+          description: 'What kind of platform it is: one that serves its own models,
+            one hosting other companies'' models under its own addressing, a relay
+            reselling many vendors, or the manual entry for anything unlisted.'
+        protocols:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: Every protocol this vendor publishes. A provider for it may declare
+            any subset; anything outside is refused on save.
+        default_protocols:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: |
+            The subset the preset below is wired for: its base URL and transport
+            profile serve these. A provider created without naming its protocols
+            gets this set, and the create form starts with it ticked. A vendor
+            protocol outside it is real but needs its own base URL or transport
+            profile (Google's OpenAI-compatible surface lives at a different
+            path from its native one).
+        base_urls:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - url
+            - template
+            properties:
+              label:
+                type: string
+                description: Distinguishes several endpoints, e.g. a mainland-China
+                  host from an international one. Empty when the vendor has exactly
+                  one.
+              url:
+                type: string
+              template:
+                type: boolean
+                description: The URL still carries a placeholder — a resource name,
+                  a region — that has no default and must be replaced before the provider
+                  works.
+          description: Empty for the custom vendor, which has nothing to prefill.
+        transport:
+          type: object
+          description: The transport profile a provider for this vendor starts with.
+            Absent when there is nothing to configure, which is the case for most upstreams.
+          additionalProperties: true
+        key_hint:
+          type: string
+          enum:
+          - bearer
+          - aws_keypair_json
+          - gcp_service_account_json
+          description: What shape the credential takes, so the key field can say what
+            to paste rather than leaving a 401 to explain it.
+        model_listing:
+          type: boolean
+          description: 'Whether this vendor publishes a catalogue endpoint the discovery
+            button can call. False matters, because an upstream that has none answers
+            in a way that renders as "this provider serves no models" — a conclusion
+            rather than an error, so nothing sends anyone looking.'
+        fidelity:
+          type: object
+          additionalProperties:
+            type: string
+            enum:
+            - full
+            - partial
+            - totals_only
+            - unknown
+          description: 'Metering fidelity per protocol, as a declaration about the endpoint
+            rather than a measurement: what an upstream reports can change in a release
+            nobody announces, so the way to be sure remains sending one request and reading
+            the usage row.'
+        refdata_provider:
+          type: string
+          description: This vendor's id in the bundled reference-price dataset, absent
+            when it has none.
+        docs_url:
+          type: string
+        model_id_example:
+          type: string
+          description: One model id as this vendor spells it, shown where an upstream
+            model name is entered.
+    GatewayProvider:
+      type: object
+      required:
+      - id
+      - slug
+      - vendor
+      - protocols
+      - base_url
+      - enabled
+      - auto_disabled
+      - max_concurrency
+      - cost_multiplier_bps
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        vendor:
+          type: string
+          description: 'Which API platform this upstream belongs to, as a slug from
+            GET /gateway/vendors.
+
+            It is an identity rather than behaviour: it decides which organization-supplied
+            credential may serve this provider, which reference-price scope its routes
+            resolve against, and whether model discovery has anything to call. Nothing
+            on the data plane branches on it.
+
+            '
+        protocols:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum:
+            - openai
+            - anthropic
+            - gemini
+          description: 'Which protocols this provider speaks. An aggregating
+            relay often exposes chat completions, messages and responses behind one
+            base URL and one key,
+
+            and declaring several protocols lets a single record serve all of them without
+            duplicating the key, the cost multiplier or the breaker state.
+
+            Note this is not "which surfaces are supported" — nothing declares that.
+            Every route on this provider is probed on every endpoint of these
+            protocols, and the probe verdicts are the record of what it serves.
+
+            '
+        name:
+          type: string
+        base_url:
+          type: string
+        enabled:
+          type: boolean
+        auto_disabled:
+          type: boolean
+          description: True means the health probe disabled it automatically, and it
+            can recover on its own; false together with enabled=false means a person
+            disabled it by hand.
+        key_count:
+          type: integer
+          description: Number of active keys on this provider
+        route_count:
+          type: integer
+          description: 'The number of *enabled* routes served by this provider, used
+            by the readiness checklist on its detail page to answer
+
+            "is any model actually served by this" — routes hang beneath a model, so
+            the reverse lookup on the client would be an N+1.
+
+            Only enabled routes count: a disabled route serves no traffic, and counting
+            it would show the checklist as green while nothing is in use.
+
+            '
+        rate_limit_rpm:
+          type: integer
+          description: 'Requests per minute this upstream account will take; absent
+            means undeclared and nothing is measured.
+
+            It is a filter, not a weight: a provider with nothing left this minute is
+            skipped and the next candidate is tried, exactly as a cooling-down one is,
+            and its configured share of the traffic never quietly erodes.
+
+            '
+        rate_limit_tpm:
+          type: integer
+          description: Tokens per minute this upstream account will take; absent means
+            undeclared. Measured against the request's estimated input tokens.
+        max_concurrency:
+          type: integer
+          description: 'How many calls may be in flight against this provider at once.
+            At the cap it refuses immediately rather than queueing, and the request
+            moves to the next candidate.
+
+            Unlike the two rate ceilings it always has a value: past some number every
+            upstream stops answering, and a gateway with no opinion queues until
+            something times out.
+
+            '
+        cost_multiplier_bps:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: 'The purchase cost multiplier: cost equals the official price
+            times this value in basis points. 10000 records the official price;
+
+            6000 means buying at 60% of it. It is not versioned; each request snapshots
+            the result into its usage row, and changes go to the audit log.
+
+            It is a core commercial parameter and must never appear in any customer-visible
+            response.
+
+            '
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Provider-level header mapping. An empty string value deletes
+            that header, and values support an ${api_key} placeholder.
+        transport:
+          type: object
+          description: 'How to reach this upstream when the base URL and the protocol''s
+            defaults are not enough. Absent means nothing is configured, which is the
+            usual case.
+
+            Keys: `auth` (`bearer`, `x-api-key`, `x-goog-api-key`, `header:<name>`, `aws_sigv4`, or
+            `gcp_service_account`), `anthropic_version`, `query`, `path_overrides`,
+            `stream_path_overrides`, `envelope` (`bedrock` or `vertex`), `sigv4`
+            (`region`, `service`), `connect_timeout_ms`.
+
+            It carries no credential: `sigv4` holds only the region and service a
+            request is signed for. The secret half stays with the provider''s keys,
+            encrypted, and is never returned by any endpoint.
+
+            It decides the address, how the credential is presented, and — only where
+            `envelope` says so — where a required value sits in the request. An envelope
+            moves the model into the address and the API version into the body, because
+            that is where those hosted platforms read them. Nothing here inspects or
+            rewrites what the caller asked for.
+
+            '
+    GatewayProviderHealth:
+      type: object
+      required:
+      - provider_id
+      - slug
+      - breaker_status
+      - requests_1h
+      - errors_1h
+      properties:
+        provider_id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        breaker_status:
+          type: string
+          enum:
+          - closed
+          - open
+          - half_open
+          description: Breaker state lives in memory; this is a snapshot at query time,
+            and it may differ between instances.
+        cooldown_until:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        requests_1h:
+          type: integer
+          format: int64
+        errors_1h:
+          type: integer
+          format: int64
+        latency_1h:
+          $ref: '#/components/schemas/GatewayProviderLatency'
+    GatewayProviderInput:
+      type: object
+      properties:
+        slug:
+          type: string
+        vendor:
+          type: string
+          description: 'The vendor slug, from GET /gateway/vendors. Required at creation;
+            omitting it on update keeps the current value.
+
+            The declared protocols have to be ones that vendor publishes, so changing
+            the vendor and the protocols together is one request.
+
+            '
+        protocols:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum:
+            - openai
+            - anthropic
+            - gemini
+          description: |
+            Which protocols it speaks. Omitted at creation, it is the vendor's
+            `default_protocols` — for a known vendor the protocol is already
+            settled by picking it; only the `custom` vendor has to say. Omitting
+            it on update keeps the current value. Stored sorted and
+            de-duplicated.
+
+            Changing the set realigns every route's probe rows: a protocol
+            dropped takes its verdicts with it, one added gets its endpoints
+            seeded and probed.
+        name:
+          type: string
+        base_url:
+          type: string
+        enabled:
+          type: boolean
+        rate_limit_rpm:
+          type: integer
+          minimum: 1
+          description: 'Requests per minute this upstream account will take. Omitting
+            it keeps the current value; to remove the ceiling, name it in `clear`.
+
+            An account with a different quota is a different account, and therefore a
+            second provider record — which is also what gives it its own credentials,
+            its own circuit and its own share of the traffic.
+
+            '
+        rate_limit_tpm:
+          type: integer
+          minimum: 1
+          description: Tokens per minute this upstream account will take. Omitting it
+            keeps the current value; to remove the ceiling, name it in `clear`.
+        max_concurrency:
+          type: integer
+          minimum: 1
+          description: How many calls may be in flight at once. Omitting it keeps the
+            current value; at creation it defaults to 64. It has no cleared state —
+            there is always some number past which an upstream stops answering.
+        clear:
+          type: array
+          description: 'Ceilings to remove, i.e. set back to "undeclared".
+
+            A separate list because null cannot express it: after JSON decoding, "sent
+            as null" and "not sent at all" are the same absent field, so "remove this
+            ceiling" and "I am not touching it" would be the same request.
+
+            '
+          items:
+            type: string
+            enum:
+            - rate_limit_rpm
+            - rate_limit_tpm
+        cost_multiplier_bps:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: The purchase cost multiplier. Omitting it keeps the current value;
+            at creation it defaults to 10000, meaning the official price.
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        transport:
+          type: object
+          description: 'The transport profile, submitted whole: it is one composite
+            field, so sending it replaces it. Omitting it keeps the current value.
+
+            Every key and every value is validated on save. An unrecognised key is
+            refused rather than stored and ignored — a setting that saves and then does
+            nothing sends the reader looking anywhere but at the setting.
+
+            The auth values `aws_sigv4` and `gcp_service_account` derive the credential
+            per request rather than copying a stored one, so both expect the provider''s
+            key to be a JSON credential document rather than a bare token: an access key
+            pair for the first, the service-account key file for the second.
+
+            `aws_sigv4` additionally requires `sigv4.region`, because a signature has to
+            be computed for somewhere and no default could be right.
+
+            '
+    GatewayProviderKey:
+      type: object
+      required:
+      - id
+      - provider_id
+      - status
+      - secret_hint
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum:
+          - active
+          - disabled
+        secret_hint:
+          type: string
+          description: A masked form of the key, computed once at creation and stored.
+            The secret itself only ever goes in. It is encrypted on the way to storage
+            and no endpoint can read it back.
+        last_verified_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        last_error:
+          type: string
+          description: Why the last connectivity test failed; empty on success or
+            when it has never been tested
+        cooldown_until:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: 'When the key-level breaker cooldown ends. It comes from the
+            same source the router reads, so when this says a key is cooling down, key
+            selection really is skipping it. Absent when it is not cooling down.
+
+
+            Without this dimension exposed — a page showing only status and the last
+            verification time —
+
+            the router could take a key out of service while the page still showed it
+            as active.
+
+            '
+    GatewayProviderLatency:
+      type: object
+      required:
+      - has_samples
+      description: "Latency percentiles for the last hour. They come from the same rollup rows\nand the same window as the request and error counts, so both describe the same set\nof requests.\n\nThe percentiles are interpolated from a cumulative histogram, so two honesty bits\ntravel with them, and the interface must express both rather than drawing the\nnumbers alone:\n\n- has_samples = false: this window holds no latency samples at all — a row with\n  requests but no observed duration is exactly that. It is not the same as zero\n  latency, and conflating the two draws a false 0ms line; the percentiles are\n  omitted in this case.\n- p95_unbounded = true: p95 fell beyond the histogram's highest trustworthy\n  boundary, so the reported value is that boundary and supports only the claim\n  'at least this much'. When the window mixes rows with different top bounds they\n  are merged at the lowest one, because reporting an invented precise figure is\n  worse than reporting a lower bound.\n"
+      properties:
+        has_samples:
+          type: boolean
+        p50_ms:
+          type: integer
+          format: int64
+        p95_ms:
+          type: integer
+          format: int64
+        mean_ms:
+          type: integer
+          format: int64
+        p95_unbounded:
+          type: boolean
+    GatewayProviderTestResult:
+      type: object
+      required:
+      - ok
+      - checked_at
+      - message
+      properties:
+        ok:
+          type: boolean
+        checked_at:
+          type: string
+          format: date-time
+        status_code:
+          type:
+          - integer
+          - 'null'
+          description: Upstream HTTP status; empty when the connection itself failed
+        latency_ms:
+          type:
+          - integer
+          - 'null'
+        key_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: The key actually used for the probe; with several keys, the
+            first usable one
+        message:
+          type: string
+          description: Why it failed; empty on success. The upstream text is truncated.
+        trace:
+          $ref: '#/components/schemas/GatewayProbeTrace'
+    GatewayRetryBudget:
+      type: object
+      required:
+      - requests
+      - retries
+      description: Usage of the global retry budget, which is capped at 10%
+      properties:
+        requests:
+          type: integer
+          format: int64
+        retries:
+          type: integer
+          format: int64
+    GatewayRoute:
+      type: object
+      required:
+      - id
+      - model_id
+      # Same reason as provider_slug below: the row is read through an inner join
+      # on models, so the name is always there. A whole-set editor that looked it
+      # up in the paginated catalogue instead would show a live model as if its
+      # entry were gone.
+      - model_slug
+      - provider_id
+      # A route is read through an inner join on providers, so the address is
+      # always there. It was optional here while the interface looked it up in
+      # the provider list anyway; once that list paginated, the row had to carry
+      # it, and the contract had to stop understating what it returns.
+      - provider_slug
+      - provider_protocols
+      - provider_model_id
+      - priority
+      - weight
+      - enabled
+      properties:
+        id:
+          type: string
+          format: uuid
+        model_id:
+          type: string
+          format: uuid
+        model_slug:
+          type: string
+        provider_id:
+          type: string
+          format: uuid
+        provider_slug:
+          type: string
+        provider_protocols:
+          type: array
+          items:
+            type: string
+          description: |
+            The protocols the route's provider speaks, carried with the row
+            because they say which endpoints this route can be asked about:
+            `probes` has one entry per endpoint of each of these.
+        provider_model_id:
+          type: string
+          description: The real upstream model name; the request body's model field
+            is rewritten to this
+        priority:
+          type: integer
+        weight:
+          type: integer
+        enabled:
+          type: boolean
+        headers:
+          type:
+          - object
+          - 'null'
+          additionalProperties:
+            type: string
+          description: Route-level header mapping, overriding the provider-level one
+            for the same name. An empty string value deletes that header, and values
+            support an ${api_key} placeholder.
+        probes:
+          type: array
+          description: |
+            What is known per endpoint — the route's only capability record.
+            One entry per probeable endpoint of each protocol the provider
+            speaks. A route declares nothing about what it serves: the data
+            plane tries any endpoint not found `unsupported`, and the
+            catalogue publishes any endpoint found `ok`.
+          items:
+            $ref: '#/components/schemas/GatewayRouteProbe'
+        context_window:
+          type:
+          - integer
+          - 'null'
+          description: This upstream's context window override for the model; empty
+            means use the model's own value. A relay often narrows it by its own policy.
+        max_output_tokens:
+          type:
+          - integer
+          - 'null'
+          description: This upstream's output limit override; empty means use the
+            model's own value
+        quirks:
+          type: object
+          additionalProperties: true
+          description: 'Upstream behaviour flags. Only `ignores_max_output_tokens`
+            (a boolean) is recognised.
+
+            Setting it true means this upstream does not honour the output limit in
+            the request — one relay was measured returning 94 tokens for a request capped
+            at 16.
+
+            The pre-authorisation estimate then stops treating the request cap as an
+            upper bound on cost; otherwise the credit guard stops working.
+
+            '
+    GatewayRouteBatchCreate:
+      type: object
+      required:
+      - provider_model_id
+      description: 'Create one route. `provider_id` is not here because it is a path
+        parameter:
+
+        a batch acts on exactly one provider, which is the scope of whole-set editing.
+
+
+        Give exactly one of `model_id` and `new_model`. Use the former to attach an
+        existing catalog entry;
+
+        use the latter when upstream reported a name the local catalog does not have
+        — the unknown state from discovery —
+
+        which creates the catalog entry on the spot and attaches to it. Giving both,
+        or neither, is rejected.
+
+
+        Attributes take their defaults, and are changed by editing the row afterwards:
+
+        whole-set editing governs membership, not attributes.
+
+        '
+      properties:
+        model_id:
+          type: string
+          format: uuid
+        new_model:
+          $ref: '#/components/schemas/GatewayRouteBatchNewModel'
+        provider_model_id:
+          type: string
+          description: The model name this upstream recognises, written verbatim
+    GatewayRouteBatchDelete:
+      type: object
+      required:
+      - model_id
+      - route_id
+      description: 'Delete one route. `model_id` is included because deletion matches
+        on the route and model together,
+
+        the same way the model-scoped delete endpoint does.
+
+        A mismatched pair matches zero rows and is reported as `already`, so a caller
+        cannot tell "exists but is not yours" apart from "does not exist".
+
+        '
+      properties:
+        model_id:
+          type: string
+          format: uuid
+        route_id:
+          type: string
+          format: uuid
+    GatewayRouteBatchInput:
+      type: object
+      required:
+      - creates
+      - deletes
+      description: 'What one whole-set save has to do. Both arrays are required, though
+        either may be empty.
+
+        "Nothing to delete this time" and "deletion is not being handled this time"
+        are different statements,
+
+        and an omitted field reads as the second. A caller can always compute both.
+
+        '
+      properties:
+        creates:
+          type: array
+          items:
+            $ref: '#/components/schemas/GatewayRouteBatchCreate'
+        deletes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GatewayRouteBatchDelete'
+    GatewayRouteBatchItemResult:
+      type: object
+      required:
+      - kind
+      - outcome
+      - model_id
+      - provider_model_id
+      description: 'The outcome of one row.
+
+
+        The model and upstream-model pair is there to be read by people: with the provider
+        fixed,
+
+        those two dimensions are exactly what the database''s unique key reduces to,
+        so that pair is the row''s identity
+
+        in logs and while troubleshooting.
+
+        To match results back to the request, however, use the index — see the note
+        on `results`.
+
+        '
+      properties:
+        kind:
+          type: string
+          enum:
+          - create
+          - delete
+        outcome:
+          type: string
+          enum:
+          - done
+          - already
+          - failed
+          description: '`done` means it was carried out; `already` means the database
+            was in the target state to begin with, from a creation hitting a unique
+            constraint or a deletion finding nothing;
+
+            `failed` means it was not carried out, with the reason in the code and detail
+            fields.
+
+            `already` counts as success, but a caller should report those separately,
+            because they mean the list in hand is stale.
+
+            '
+        model_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: 'Which model this row landed on. When `new_model` succeeded it
+            is the id of the model just created;
+
+            when the model creation itself failed it is empty, because there is no model
+            yet.
+
+            '
+        provider_model_id:
+          type: string
+          description: On deletion the server fills this in from the row it deleted,
+            so a caller need not know it beforehand
+        route_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: On a successful creation, the id of the new route; on deletion,
+            the id of the one removed. Empty when the row failed.
+        code:
+          type: string
+          description: The error code when the row failed, for example common.validation.
+            Empty for any other outcome.
+        detail:
+          type: string
+          description: The reason the row failed, in the same form as a problem response's
+            detail. Empty for any other outcome.
+    GatewayRouteBatchNewModel:
+      type: object
+      required:
+      - slug
+      description: 'A catalog entry created along the way.
+
+
+        It is always disabled and carries no prices at all. The readiness gate remains
+        the only way a model becomes enabled;
+
+        this exists solely so that a row upstream reports but the catalog lacks has
+        something to attach to. The provider page marks
+
+        such rows as missing pricing straight away and links through to it — being attached
+        is true, being sellable is not.
+
+
+        A slug colliding with an existing one is reported as `failed` rather than reusing
+        the model of that name: the same name is not
+
+        necessarily the same model — two relays can call different things `gpt-4o` — and
+        silently reusing it attaches the route to the
+
+        wrong catalog entry. A caller renames and retries, or
+
+        switches to `model_id` to say explicitly which model to attach to.
+
+        '
+      properties:
+        slug:
+          type: string
+          description: The model's identity here. It cannot be changed once created,
+            so the interface has to let someone check it first.
+        display_name:
+          type: string
+    GatewayRouteBatchResult:
+      type: object
+      required:
+      - results
+      properties:
+        results:
+          type: array
+          description: 'One entry per request row, in the same order and of the same
+            length as the creations followed by the deletions. A caller matches results
+            back to its own
+
+            table by index — the only correspondence that holds in every case, because
+            a row using `new_model` has no
+
+            model id beforehand and may still have none afterwards if the model creation
+            failed.
+
+            '
+          items:
+            $ref: '#/components/schemas/GatewayRouteBatchItemResult'
+    GatewayRouteInput:
+      type: object
+      properties:
+        provider_id:
+          type: string
+          format: uuid
+        provider_model_id:
+          type: string
+        priority:
+          type: integer
+        weight:
+          type: integer
+        enabled:
+          type: boolean
+        headers:
+          type:
+          - object
+          - 'null'
+          additionalProperties:
+            type: string
+        context_window:
+          type:
+          - integer
+          - 'null'
+          description: This upstream's context window override for the model; empty
+            means use the model's own value. A relay often narrows it by its own policy.
+        max_output_tokens:
+          type:
+          - integer
+          - 'null'
+          description: This upstream's output limit override; empty means use the
+            model's own value
+        quirks:
+          type: object
+          additionalProperties: true
+          description: 'Upstream behaviour flags. Only `ignores_max_output_tokens`
+            (a boolean) is recognised.
+
+            Setting it true means this upstream does not honour the output limit in
+            the request — one relay was measured returning 94 tokens for a request capped
+            at 16.
+
+            The pre-authorisation estimate then stops treating the request cap as an
+            upper bound on cost; otherwise the credit guard stops working.
+
+            '
+    GatewayRouteProbeRequest:
+      type: object
+      properties:
+        endpoints:
+          type: array
+          items:
+            type: string
+          description: The endpoints to probe. Empty or absent means every endpoint
+            the route is probed on automatically.
+    GatewayRouteProbeOverride:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - unsupported
+          - unverified
+    GatewayRouteProbe:
+      type: object
+      required:
+      - endpoint
+      - probe_mode
+      - status
+      - source
+      description: |
+        What is known about one endpoint of one route. This is the route's only
+        capability record — nothing is declared — and two readers use it with
+        two different thresholds:
+
+        - the data plane tries the route for an endpoint unless the status is
+          `unsupported`;
+        - the catalogue publishes an endpoint only when the status is `ok`.
+
+        `unverified` — not probed yet, or not probed automatically, as with
+        images. `ok` — a call got through. `unsupported` — the upstream answered
+        404 or 405: a definitive "nothing here for this model". `failed` — an
+        inconclusive answer (400/422 to the probe's minimal body, 5xx, timeout,
+        credential or quota): shown with the upstream's words, never used to take
+        the route out of rotation, and never downgrading an earlier `ok`.
+
+        `source` says who wrote it: `probe` for the worker, `operator` for an
+        override, which the worker then leaves alone. `probe_mode` says whether
+        the worker probes the endpoint on its own (`auto`) or only when asked
+        (`manual`, images — it costs a real generation); a manual endpoint is
+        also not a candidate until a verdict says `ok`.
+
+        Every field of the latest probe is recorded even when the verdict
+        stands: an `ok` row whose `status_code` is 4xx/5xx says "verified, but
+        the last look failed" — the page shows that, the verdict does not move
+        on one inconclusive sample.
+      properties:
+        endpoint:
+          type: string
+          enum:
+          - chat
+          - messages
+          - responses
+          - embeddings
+          - images
+          - generate_content
+          - responses_compact
+          - messages_count_tokens
+          - gemini_count_tokens
+          - gemini_embed_content
+          - gemini_batch_embed_contents
+          - gemini_interactions
+          - responses_input_tokens
+        probe_mode:
+          type: string
+          enum:
+          - auto
+          - manual
+        status:
+          type: string
+          enum:
+          - unverified
+          - ok
+          - unsupported
+          - failed
+        source:
+          type: string
+          enum:
+          - probe
+          - operator
+        checked_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        latency_ms:
+          type:
+          - integer
+          - 'null'
+        status_code:
+          type:
+          - integer
+          - 'null'
+          description: Upstream HTTP status; empty when the connection itself failed
+        error:
+          type: string
+          description: The upstream text, truncated and otherwise unaltered. It is
+            the only clue separating a bad credential from a bad model name or an unsupported
+            endpoint.
+    GatewayTier:
+      type: object
+      required:
+      - id
+      - slug
+      - allow_all_models
+      - is_default
+      - status
+      - model_count
+      - org_count
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        allow_all_models:
+          type: boolean
+          description: 'True means the tier admits every model in the catalogue and
+            `model_count` is zero. False means it admits exactly the models it lists —
+            and a tier that lists none admits none, which is a real configuration and
+            not a synonym for "unrestricted".'
+        is_default:
+          type: boolean
+          description: Where newly registered organizations land. Exactly one exists, and
+            it can be neither deleted nor disabled.
+        status:
+          type: string
+          enum:
+          - active
+          - disabled
+        model_count:
+          type: integer
+          format: int64
+          description: How many models the tier lists. It is meaningful only when
+            `allow_all_models` is false; with it true the tier lists nothing by
+            construction.
+        org_count:
+          type: integer
+          format: int64
+          description: How many organizations are members. Above zero the tier cannot be
+            deleted; the members must be moved first, or deleting it would silently change
+            what they may access.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    GatewayTierInput:
+      type: object
+      properties:
+        slug:
+          type: string
+          description: Required at creation and immutable thereafter, since it is the
+            stable identifier organizations refer to
+        name:
+          type: string
+        description:
+          type: string
+        allow_all_models:
+          type: boolean
+          description: 'Turning it on clears the tier''s model list in the same
+            transaction: a listed model would then be carried but never consulted,
+            and a stored value nothing reads is one somebody eventually trusts.'
+        status:
+          type: string
+          enum:
+          - active
+          - disabled
+    GatewayTierModel:
+      type: object
+      required:
+      - id
+      - slug
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        display_name:
+          type: string
+        protocol:
+          type: string
+        enabled:
+          type: boolean
+        visibility:
+          type: string
+          enum:
+          - public
+          - beta
+          - hidden
+    ModelPriceDimensionRate:
+      type: object
+      required:
+      - bucket
+      - rate_usd_per_m
+      properties:
+        bucket:
+          type: string
+          enum:
+          - input
+          - output
+          - cache_read
+          - cache_write
+          - audio_input
+          - audio_output
+        service_tier:
+          type: string
+          enum:
+          - standard
+          - priority
+          - batch
+          default: standard
+        variant:
+          type: string
+          description: An optional subdivision within the bucket, such as the 5-minute
+            and 1-hour variants of a cache write
+        min_input_tokens:
+          type: integer
+          format: int32
+          minimum: 0
+          default: 0
+          description: >-
+            The context-length band this rate belongs to. The rate applies when
+            the whole prompt -- non-cached input plus both cache buckets -- is
+            at least this many tokens, and the dearest qualifying band wins. The
+            bound is inclusive, so an upstream rule phrased as "above 200K" is
+            configured as 200001, not 200000. Leaving it at 0 gives a rate that
+            applies to every prompt length, which is how a model with no
+            long-context pricing is configured.
+        rate_usd_per_m:
+          $ref: '#/components/schemas/DecimalUSDPerM'
+      additionalProperties: false
+    ModelPriceToolRate:
+      type: object
+      required:
+      - tool
+      - rate_usd_per_call
+      properties:
+        tool:
+          type: string
+          minLength: 1
+          maxLength: 200
+        rate_usd_per_call:
+          $ref: '#/components/schemas/DecimalUSDPerCall'
+      additionalProperties: false
+    ModelPricingInput:
+      type: object
+      required:
+      - billing_mode
+      - official_rates
+      - adjustment
+      - source_name
+      - checked_at
+      - reason
+      description: 'Saving takes effect immediately. The reason went from optional
+        to required: the publication record used to carry
+
+        who changed it, when and why, and without it only the audit log can hold those
+        — which is also the only place
+
+        the previous value can be read when rolling back.
+
+        '
+      properties:
+        billing_mode:
+          type: string
+          enum:
+          - paid
+          - free
+        official_rates:
+          $ref: '#/components/schemas/DraftTokenRatesUSDPerM'
+        adjustment:
+          $ref: '#/components/schemas/PricingAdjustment'
+        source_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        source_url:
+          type: string
+          format: uri
+          maxLength: 2000
+        checked_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        acknowledged_risks:
+          type: array
+          description: 'Warning codes that have been seen and accepted. Blockers cannot
+            be acknowledged: they mean incomplete data or
+
+            a broken configuration, and acknowledging one would be accepting a bill that
+            cannot be computed.
+
+            '
+          items:
+            $ref: '#/components/schemas/PricingRiskCode'
+        dimension_rates:
+          type: array
+          description: Supplied, it replaces the whole group; omitted, the existing
+            values are kept
+          items:
+            $ref: '#/components/schemas/ModelPriceDimensionRate'
+        tool_rates:
+          type: array
+          description: Supplied, it replaces the whole group; omitted, the existing
+            values are kept
+          items:
+            $ref: '#/components/schemas/ModelPriceToolRate'
+      additionalProperties: false
+    ModelPricingResource:
+      type: object
+      required:
+      - model_id
+      - priced
+      description: 'A model''s current price. There are no active, draft or scheduled
+        version slots;
+
+        they went with the versioning mechanism, leaving only "is there a price" and
+        "what is it".
+
+        '
+      properties:
+        model_id:
+          type: string
+          format: uuid
+        priced:
+          type: boolean
+          description: Whether a price has been set. When false the price fields below
+            are absent entirely, rather than being four zeros.
+        billing_mode:
+          type: string
+          enum:
+          - paid
+          - free
+        official_rates:
+          $ref: '#/components/schemas/DraftTokenRatesUSDPerM'
+        adjustment:
+          $ref: '#/components/schemas/PricingAdjustment'
+        public_rates:
+          $ref: '#/components/schemas/TokenRatesUSDPerM'
+        source_name:
+          type: string
+        source_url:
+          type: string
+          format: uri
+        checked_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+        dimension_rates:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelPriceDimensionRate'
+        tool_rates:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelPriceToolRate'
+      additionalProperties: false
+    OrgGatewaySettings:
+      type: object
+      required:
+      - tier_id
+      - tier_slug
+      - tier_status
+      - tier_allow_all_models
+      - tier_explicit
+      - row_exists
+      properties:
+        tier_id:
+          type: string
+          format: uuid
+          description: The id of the tier in effect. With nothing set explicitly,
+            this is the default tier's id.
+        tier_slug:
+          type: string
+        tier_name:
+          type: string
+        tier_status:
+          type: string
+          enum:
+          - active
+          - disabled
+          description: The state of the tier in effect. Disabled means the data plane
+            refuses to serve this organization — it fails closed rather than falling back to
+            the default tier.
+        tier_allow_all_models:
+          type: boolean
+          description: Whether the tier in effect admits every model.
+        tier_explicit:
+          type: boolean
+          description: Whether the tier was assigned explicitly. False means the organization
+            follows the default, and will move with it if the default changes.
+        rate_limit_rpm:
+          type: integer
+          description: 'Requests per minute for the whole organization; absent means
+            no ceiling. Every request is measured against this and against its own
+            key''s ceiling, so a key is always the narrower of the two.'
+        rate_limit_tpm:
+          type: integer
+          description: Tokens per minute for the whole organization; absent means no
+            ceiling.
+        row_exists:
+          type: boolean
+          description: Whether any explicit configuration has ever been made
+    OrgPricingPlanAssignment:
+      type: object
+      required:
+      - org_id
+      - pricing_plan_id
+      - pricing_plan_slug
+      - pricing_plan_name
+      - inherited_default
+      description: 'One row per organization. A true `inherited_default` means the organization
+        follows the platform default plan —
+
+        equivalent to having no row at all, but with room to keep the reason and the
+        audit subject.
+
+        '
+      properties:
+        org_id:
+          type: string
+          description: Public id, prefixed with org_
+        pricing_plan_id:
+          type: string
+          format: uuid
+        pricing_plan_slug:
+          type: string
+        pricing_plan_name:
+          type: string
+        inherited_default:
+          type: boolean
+        reason:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    OrgPricingPlanAssignmentInput:
+      type: object
+      required:
+      - reason
+      description: Saving takes effect immediately; scheduled switching went with
+        the publication records.
+      properties:
+        pricing_plan_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: null restores inheritance of the platform default pricing plan
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+      additionalProperties: false
+    PricingAdjustment:
+      type: object
+      required:
+      - multiplier_bps
+      properties:
+        multiplier_bps:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: In basis points — 10000 is the list price, 8000 a 20% discount,
+            12000 a 20% surcharge. Capped at ten times.
+      additionalProperties: false
+    PricingPlan:
+      type: object
+      required:
+      - id
+      - slug
+      - name
+      - is_default
+      - status
+      - org_count
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        is_default:
+          type: boolean
+        status:
+          type: string
+          description: Whether the plan is available for use. This is not a draft or
+            publication state.
+          enum:
+          - active
+          - disabled
+        org_count:
+          type: integer
+          format: int64
+          minimum: 0
+        default_adjustment:
+          $ref: '#/components/schemas/PricingAdjustment'
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    PricingPlanCopyInput:
+      type: object
+      required:
+      - slug
+      - name
+      properties:
+        slug:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9_-]{1,63}$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+    PricingPlanCreateInput:
+      type: object
+      required:
+      - slug
+      - name
+      - default_adjustment
+      properties:
+        slug:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9_-]{1,63}$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 1000
+        default_adjustment:
+          $ref: '#/components/schemas/PricingAdjustment'
+      additionalProperties: false
+    PricingPlanModelOverride:
+      type: object
+      required:
+      - model_id
+      - model_slug
+      - adjustment
+      properties:
+        model_id:
+          type: string
+          format: uuid
+        model_slug:
+          type: string
+        model_display_name:
+          type: string
+        adjustment:
+          $ref: '#/components/schemas/PricingAdjustment'
+        public_rates:
+          $ref: '#/components/schemas/TokenRatesUSDPerM'
+        effective_customer_rates:
+          $ref: '#/components/schemas/TokenRatesUSDPerM'
+      additionalProperties: false
+    PricingPlanModelOverrideInput:
+      type: object
+      required:
+      - model_id
+      - adjustment
+      properties:
+        model_id:
+          type: string
+          format: uuid
+        adjustment:
+          $ref: '#/components/schemas/PricingAdjustment'
+      additionalProperties: false
+    PricingPlanPatchInput:
+      type: object
+      minProperties: 1
+      description: Saving takes effect immediately; changing the default discount collapsed
+        from a save-then-publish pair into this single request.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 1000
+        status:
+          type: string
+          description: Whether the plan is available for use. This is not a draft or
+            publication state.
+          enum:
+          - active
+          - disabled
+        default_adjustment:
+          $ref: '#/components/schemas/PricingAdjustment'
+        reason:
+          type: string
+          maxLength: 1000
+      additionalProperties: false
+    PricingRisk:
+      type: object
+      required:
+      - severity
+      - code
+      - message
+      properties:
+        severity:
+          type: string
+          enum:
+          - blocker
+          - warning
+        code:
+          $ref: '#/components/schemas/PricingRiskCode'
+        message:
+          type: string
+        resource_id:
+          type: string
+          format: uuid
+      additionalProperties: false
+    PricingRiskCode:
+      type: string
+      description: 'Risk codes. Blockers and warnings are two distinct classes and must
+        not be conflated. A blocker means incomplete data or a broken
+
+        configuration — a missing price, no default plan, a multiplier out of range
+        — and acknowledging one would be accepting a bill that cannot be
+
+        computed. A warning is a commercial decision — going below cost, a steep drop
+        in the customer price, affecting several organizations, switching to
+
+        free — and may proceed once acknowledged.
+
+        '
+      enum:
+      - missing_paid_rate
+      - paid_all_zero
+      - unverified_price_source
+      - missing_default_plan
+      - multiplier_out_of_range
+      - negative_margin
+      - customer_price_drop
+      - multi_tenant_impact
+      - switch_to_free
+      - unknown_procurement_cost
+    PricingRiskReport:
+      type: object
+      required:
+      - risks
+      description: The list of risks that blocked a save, from which a caller decides
+        whether to correct the data or acknowledge and retry.
+      properties:
+        risks:
+          type: array
+          items:
+            $ref: '#/components/schemas/PricingRisk'
+      additionalProperties: false
+    Problem:
+      type: object
+      description: RFC 9457 problem+json, plus a stable machine-readable code
+      required:
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri
+          default: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: A stable error code
+        request_id:
+          type: string
+    ReferencePriceImportInput:
+      type: object
+      description: 'One import run. Every field is optional, and the defaults are the
+        cautious reading of
+
+        "fill in the reference prices": only models with no price at all, across the
+        whole catalogue,
+
+        and keep the result.
+
+        '
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: 'Also replace stored prices nobody has verified. A price a person
+            has checked is
+
+            never replaced, with or without this. Without it, a model that already has
+            any price
+
+            is left alone: refilling rates an operator may have adjusted is not what
+            "import the
+
+            reference prices" should mean by default.
+
+            '
+        dry_run:
+          type: boolean
+          default: false
+          description: Report what would happen and keep none of it. The report says
+            so as well, because otherwise the counts read identically either way.
+        model_ids:
+          type: array
+          description: 'Consider only these models. Omitted or empty means the whole
+            catalogue.
+
+
+            An id matching no model comes back as a skipped result naming it, rather
+            than being
+
+            dropped: a caller''s list goes stale in the ordinary course of things, and
+            a run that
+
+            silently considers less than it was asked to leaves the caller believing
+            otherwise.
+
+            '
+          items:
+            type: string
+            format: uuid
+      additionalProperties: false
+    ReferencePriceImportReport:
+      type: object
+      required:
+      - dataset
+      - dry_run
+      - results
+      description: 'What the run did, model by model.
+
+
+        Every model considered appears exactly once, including the ones no price was
+        written for.
+
+        A model quietly missing from this list would recreate the failure the import
+        exists to
+
+        remove: a model that refuses traffic with no clue why.
+
+        '
+      properties:
+        dataset:
+          type: string
+          description: The dataset the rates were read from, as recorded on every row
+            it wrote
+        snapshot_date:
+          type: string
+          description: The day the dataset was taken, as recorded on every row it wrote
+        entries:
+          type: integer
+          description: How many priced models the dataset holds, which is not how many
+            of them matched anything here
+        dry_run:
+          type: boolean
+          description: Whether the run kept what it decided. It travels with the report
+            because every other field reads identically either way.
+        acknowledged:
+          type: array
+          description: 'The warning codes the run confirmed on the operator''s behalf,
+            being the ones the
+
+            interactive editor would have stopped on. Reported rather than left implicit:
+            a bulk
+
+            write that silently accepts every warning is worth being able to see. Blockers
+            are
+
+            never among them — a blocker means the row would not add up, which is not
+            a decision
+
+            anybody gets to sign off.
+
+            '
+          items:
+            type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReferencePriceImportResult'
+      additionalProperties: false
+    ReferencePriceImportResult:
+      type: object
+      required:
+      - model
+      - outcome
+      - detail
+      properties:
+        model:
+          type: string
+          description: The model's slug, or the id that was asked for when no model
+            of that id exists
+        outcome:
+          type: string
+          enum:
+          - priced
+          - updated
+          - unchanged
+          - kept
+          - verified
+          - skipped
+          description: '`priced` — had no price and now has the reference rates; `updated`
+            — an unverified price differed and was replaced, which only `force` reaches;
+
+            `unchanged` — the stored price already equals the reference; `kept` — already
+            priced, and `force` was not asked for; `verified` — a person has checked
+            this price, so nothing may replace it;
+
+            `skipped` — no reference rate could be resolved, with the reason in `detail`.
+
+
+            Under `dry_run` these are what a real run would reach, not what was stored.
+
+            '
+        detail:
+          type: string
+          description: Written to be read by a person — for a skip the reason, for a
+            write the dataset entry that supplied the rates and how it matched
+      additionalProperties: false
+    TokenRatesUSDPerM:
+      type: object
+      required:
+      - input
+      - output
+      - cache_read
+      - cache_write
+      properties:
+        input:
+          $ref: '#/components/schemas/DecimalUSDPerM'
+        output:
+          $ref: '#/components/schemas/DecimalUSDPerM'
+        cache_read:
+          $ref: '#/components/schemas/DecimalUSDPerM'
+        cache_write:
+          $ref: '#/components/schemas/DecimalUSDPerM'
+      additionalProperties: false
+  securitySchemes:
+    staffSession:
+      type: apiKey
+      in: cookie
+      name: __Host-flb_staff
+      description: The administrative session cookie, in its own identity domain

@@ -1,0 +1,31 @@
+/* Import order matters: the component library's styles must come before
+   tailwindcss so that its @theme tokens are registered first. */
+@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+@import "@cloudflare/kumo/styles/tailwind";
+@import "@fairlb/ui/tokens.css";
+@import "tailwindcss";
+
+/* Workspace package sources have to be scanned explicitly: Tailwind's automatic
+   content detection does not follow symlinked packages in node_modules. Every
+   package this app renders from is listed, not just the shared components —
+   almost all of these pages come from the feature package, and a missed source
+   shows up as class names that were never generated: the page still renders,
+   just unstyled, with nothing reported anywhere. */
+@source "../../../packages/ui/src";
+@source "../../../packages/gateway-staff-features/src";
+
+/* Light and dark follow the component library's `data-mode` attribute. */
+@custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
+
+/* An admin surface is read by scanning: use more of a wide screen and tighten
+   the vertical rhythm. These values are shared by every app that mounts these
+   pages — the geometry inside a page should not change with the shell around
+   it. */
+:root {
+  --flb-content-max: 100rem;
+  --flb-content-pad-inline-lg: 2rem;
+  --flb-content-pad-block: 1rem;
+  --flb-card-pad-inline: 1.25rem;
+  --flb-card-pad-block: 1rem;
+  --flb-page-header-gap: 0.625rem;
+}

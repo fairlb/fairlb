@@ -1,0 +1,17 @@
+# 这是本仓唯一的 web workspace 根。
+#
+# 共享包（packages/*）此前同时是这里和 cloud/web 两个 workspace 的成员，后装的那个
+# 拥有它们的 node_modules。由此产生的不是一个问题而是一串：两份 React（一次让 console
+# 的 63 条 Playwright 红了 62 条）、两个 runner 各自的 optimizeDeps 预打包清单、
+# resolve.dedupe 补丁，以及「同一个 commit 零改动，Community 首屏在两种解析下差 57 KiB」
+# 这个无解的门禁。成因只有一个，补丁曾有五处。
+#
+# 所有权归发布的那棵树：Community 镜像只 copy public/，那时下面三条 ../../cloud/web
+# 的 glob 零匹配，成员集恰好收缩成 Community 真正发布的那些（pnpm 对零匹配 glob 不报错，
+# 且 --frozen-lockfile 接受 lockfile 里存在而目录不在的 importer——两者都实测过）。
+packages:
+  - apps/*
+  - packages/*
+  - ../../cloud/web
+  - ../../cloud/web/apps/*
+  - ../../cloud/web/packages/*

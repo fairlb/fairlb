@@ -1,0 +1,88 @@
+# Binaries for people who would rather not run Docker.
+#
+# The admin UI is baked into the binary (the `webembed` tag), so a release
+# artifact is one file: no static file server to configure, nothing to keep in
+# sync with the backend version.
+version: 2
+
+before:
+  hooks:
+    # The embed directive points at a build output, so the frontend has to exist
+    # before Go is invoked. Without this the build fails at compile time rather
+    # than shipping a binary with an empty UI — which is the right way round,
+    # but only if somebody remembers to build it.
+    - sh -c 'cd web && corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm --fail-if-no-match --filter @fairlb/staff build'
+
+# Brand display name baked into the binary; defaults to the product name when the
+# release environment does not set one.
+env:
+  - BRAND_NAME={{ if index .Env "BRAND_NAME" }}{{ .Env.BRAND_NAME }}{{ else }}FairLB{{ end }}
+
+builds:
+  - id: fairlb
+    main: ./cmd/fairlb
+    binary: fairlb
+    env: [CGO_ENABLED=0]
+    flags: ["-tags=webembed"]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+      # Same injection the Docker image does (ADR-0198 sixth slice); without it a
+      # branded binary release would still sign its mail and TOTP issuer "FairLB".
+      - -X 'github.com/fairlb/fairlb/foundation/brand.Name={{ .Env.BRAND_NAME }}'
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, NOTICE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+# An SBOM per archive. Anyone with a policy about what they run needs to answer
+# "what is in this" without unpacking and guessing.
+sboms:
+  - artifacts: archive
+
+# Keyless signing through the workflow's OIDC identity: no key to store, and
+# the signature says which workflow in which repository produced the artifact —
+# which is the claim people actually want to check.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - --yes
+    artifacts: checksum
+    output: true
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Everything else
+      order: 2
+  filters:
+    exclude: ['^docs:', '^test:', '^chore:']
+
+release:
+  footer: |
+    ## Container image
+
+    ```
+    docker pull ghcr.io/fairlb/fairlb:{{ .Version }}
+    ```
+
+    Or start everything with [docker-compose.yml](https://github.com/fairlb/fairlb/blob/main/docker-compose.yml).

@@ -1,0 +1,41 @@
+{
+  "name": "@fairlb/gateway-staff-features",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./admin-routes": "./src/admin-routes.tsx",
+    "./host": "./src/host.tsx",
+    "./kill-switch": "./src/kill-switch.tsx",
+    "./module": "./src/module.tsx",
+    "./org-access": "./src/org-access.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cloudflare/kumo": "2.10.0",
+    "@fairlb/api-client": "workspace:*",
+    "@fairlb/app-composition": "workspace:*",
+    "@fairlb/i18n": "workspace:*",
+    "@fairlb/ui": "workspace:*",
+    "@phosphor-icons/react": "2.1.10"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.101.4",
+    "@tanstack/react-router": "^1.170.18",
+    "@types/react": "^19.2.0",
+    "react": "^19.2.8",
+    "typescript": "^7.0.2",
+    "vitest": "4.1.10"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5.101.4",
+    "@tanstack/react-router": "^1.170.18",
+    "react": "^19.0.0"
+  }
+}

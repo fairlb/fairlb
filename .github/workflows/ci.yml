@@ -1,0 +1,25 @@
+# CI: runs `make verify`, which is the single source of truth for what has to
+# pass. This file is deliberately a thin shell around it — one set of criteria
+# implemented in two places will drift, and it always drifts toward "looks like
+# it passed". If you want to know what CI checks, read the Makefile.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: cd web && pnpm install --frozen-lockfile --prod=false
+      - run: make verify

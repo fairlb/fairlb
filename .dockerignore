@@ -1,0 +1,8 @@
+.git
+bin
+web/node_modules
+web/**/node_modules
+web/**/dist
+web/**/.astro
+web/**/test-results
+web/**/.vitest-screenshots

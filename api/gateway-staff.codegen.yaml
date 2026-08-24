@@ -1,0 +1,8 @@
+# oapi-codegen configuration: the gateway's admin API document becomes a strict
+# server interface for the gateway to implement.
+package: gwstaffapi
+output: internal/gateway/staffapi/api.gen.go
+generate:
+  chi-server: true
+  strict-server: true
+  models: true

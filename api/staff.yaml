@@ -1,0 +1,713 @@
+openapi: 3.1.0
+info:
+  title: FairLB Community Admin API
+  version: 0.1.0
+  description: |
+    Instance metadata, first-run setup, administrator sign-in, team and API key
+    management for a self-hosted deployment.
+
+    The current-identity response carries the public id of the team a key lands
+    in when none is named, and the organization-facing API (`/api/v1`: usage,
+    logs, bring-your-own-key) takes a team id in the path.
+
+    # What this document does and does not cover
+
+    Provider, model, routing and pricing configuration live in the gateway's own
+    admin document. This one adds what is specific to running the gateway as a
+    single-tenant deployment. Together, the two make up the admin API.
+
+    # Why key management is here
+
+    Managing API keys as an administrator of the whole deployment is a different
+    operation from managing them as a member of an organization: there is no
+    membership to authorize against and no self-service surface, only the one
+    administrator this instance has.
+
+    # Teams
+
+    A team is a group of keys that share a model allowance and a rate ceiling.
+    It is the same object a hosted deployment calls an organization, which is
+    why the gateway's own admin document already takes a team id where it
+    configures access tiers and rate limits.
+
+    One team is created at first start and is where keys land when no team is
+    named, so a deployment that never wants to think about this never has to.
+    A second team is what "these people may use only this model" is expressed
+    with: give the team an access tier, and issue that group its keys there.
+
+    Teams are suspended rather than deleted. Deleting one would take its keys
+    with it while leaving behind the usage rows that reference it — those are
+    recorded as they were, deliberately without foreign keys, so that billing
+    history survives the things it describes.
+
+    # Why sign-in is defined here rather than reused
+
+    Two sign-in endpoints can share a path and a payload shape and still not
+    share semantics: a deployment that enforces a second factor and an address
+    allowlist rejects requests this one accepts. Folding both into one document
+    would mean either fields annotated "required in one deployment, ignored in
+    another", or implementing a mechanism this deployment does not have. Two
+    documents are more honest than one document full of conditions.
+servers:
+  - url: /api/staff/v1
+tags:
+  - name: system
+    description: Instance metadata and first-run setup
+  - name: auth
+    description: Administrator identity — password plus a session cookie
+  - name: teams
+    description: Groups of keys that share a model allowance and a rate ceiling
+  - name: keys
+    description: Data-plane API keys, each belonging to one team
+paths:
+  /meta:
+    get:
+      tags: [system]
+      operationId: communityMeta
+      summary: Public instance metadata
+      description: |
+        Tells the sign-in page which of two screens to show, so it has to be
+        readable before anyone is signed in.
+
+        `setup_state` is an enum rather than a boolean because a boolean named
+        `configured` would have to answer two questions at once — "is there an
+        administrator" and "may I create one" — and would get one of them wrong
+        whichever way it was read.
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityMeta'
+  /setup:
+    post:
+      tags: [system]
+      operationId: communitySetup
+      summary: Create the first administrator
+      description: |
+        Available only while no administrator exists. Creating one signs that
+        person in, so installing does not end with a sign-in form and a password
+        they have not typed anywhere yet.
+
+        Set FAIRLB_SETUP_TOKEN to require a token here. That is worth doing when
+        the instance is reachable from the internet before anyone has finished
+        installing it; on a laptop or a private network it is friction with
+        nothing on the other side of it.
+
+        Concurrent requests are settled in the database: exactly one creates the
+        account and the rest get 409. Answering 204 to the losers would tell
+        them they own an instance that in fact belongs to whoever won.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunitySetupRequest'
+      responses:
+        '204':
+          description: Administrator created and signed in
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: communityLogin
+      summary: Sign in
+      description: |
+        Verifies the email and password and issues a session cookie.
+
+        A wrong password and an unknown account return the same 401. Telling
+        them apart would give an attacker a channel for enumerating accounts —
+        and so would answering faster for an unknown account, which is why the
+        password hash is computed either way.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityLoginRequest'
+      responses:
+        '204':
+          description: Signed in; the session cookie has been set
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: communityLogout
+      summary: Sign out
+      description: |
+        Revokes the current session and clears the cookie. Idempotent: with no
+        session, the answer is still 204.
+      responses:
+        '204':
+          description: Signed out
+        '401': { $ref: '#/components/responses/Problem' }
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: communityMe
+      summary: Current administrator identity
+      description: |
+        What the admin UI reads to decide whether anyone is signed in. `role` is
+        always `superadmin`: this deployment has one administrator identity and
+        no grades to distinguish.
+      responses:
+        '200':
+          description: The current identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityIdentity'
+        '401': { $ref: '#/components/responses/Problem' }
+  /teams:
+    get:
+      tags: [teams]
+      operationId: communityListTeams
+      summary: List teams
+      description: |
+        Oldest first, so the team created at first start is always the first
+        row and the list does not reorder as teams are added.
+      responses:
+        '200':
+          description: The teams
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Team' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [teams]
+      operationId: communityCreateTeam
+      summary: Create a team
+      description: |
+        A new team starts on the default access tier and with no rate ceiling —
+        the same position the first team is in. Narrowing it is a separate step
+        through the gateway admin API, so that creating a team and deciding what
+        it may reach are two decisions rather than one form.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+              additionalProperties: false
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Team' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /teams/{team_id}:
+    parameters:
+      - name: team_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [teams]
+      operationId: communityUpdateTeam
+      summary: Rename or suspend a team
+      description: |
+        Suspending a team refuses every request its keys make, immediately and
+        with a reason the caller can read. It is what this API offers instead of
+        deletion: the keys stay, so turning the team back on restores exactly
+        what was there, and the usage rows that name it keep naming something
+        that exists.
+
+        The first team cannot be suspended. It is where keys land when no team
+        is named, so suspending it would refuse requests for a deployment that
+        never opted into having teams at all.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                status:
+                  type: string
+                  enum: [active, suspended]
+              additionalProperties: false
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Team' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /settings:
+    get:
+      operationId: communityListSettings
+      tags: [system]
+      summary: Registered runtime settings with their current values
+      description: |
+        The keys this deployment assembled (the gateway's layer — exchange rate, BYOK fee,
+        anomaly thresholds, affinity TTL). Each row is rendered as a writable control;
+        `impact: high` keys take effect on every request or bill and require a reason.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SettingEntry'
+        default:
+          $ref: '#/components/responses/Problem'
+    put:
+      operationId: communityPutSettings
+      tags: [system]
+      summary: Write a batch of settings in one transaction
+      description: |
+        Keys of one section are written together and their rules are checked against the
+        merged values; a violation is 422 `common.settings_section_invalid`. Any
+        `impact: high` key requires `reason` (422 `common.settings_reason_required`).
+        Secrets are cleared by writing `""`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsBatch'
+      responses:
+        '204':
+          description: Written
+        default:
+          $ref: '#/components/responses/Problem'
+  /keys:
+    get:
+      tags: [keys]
+      operationId: communityListKeys
+      summary: List API keys
+      description: |
+        Newest first. The key material itself is never stored and can never be
+        read back.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: team_id
+          in: query
+          description: |
+            Whose keys to list; omit for the team created at first start.
+
+            It lists one team rather than all of them because that is the
+            question the screen asks: keys are managed inside a team, and a
+            merged list would need a column saying which team each row is in
+            before it meant anything. The team list carries a key count, so no
+            key is hidden by this.
+          schema: { type: string }
+      responses:
+        '200':
+          description: The keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ApiKey' }
+                additionalProperties: false
+        '401': { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [keys]
+      operationId: communityCreateKey
+      summary: Create an API key (the key itself is returned only now)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateKeyRequest' }
+      responses:
+        '201':
+          description: Created; this response is the only place the key appears
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyCreated' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+  /keys/{key_id}:
+    parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [keys]
+      operationId: communityUpdateKey
+      summary: Update a key's limits
+      description: |
+        Three states per field: omitted keeps the current value, a value sets
+        it, and clearing goes through the separate `clear` array.
+
+        Clearing is not expressed with `null` because it cannot be: after JSON
+        decoding, "sent as null" and "not sent at all" are the same nil pointer
+        in the generated types, so `{"spend_limit_nano":null}` and `{}` are
+        indistinguishable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateKeyRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKey' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [keys]
+      operationId: communityRevokeKey
+      summary: Revoke a key
+      description: |
+        Takes effect immediately: revocation invalidates the data plane's
+        authentication cache rather than waiting for its TTL to expire.
+      responses:
+        '204':
+          description: Revoked
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+components:
+  schemas:
+    Team:
+      type: object
+      required: [id, name, status, is_default, key_count, created_at]
+      properties:
+        id: { type: string, description: 'Public id, prefixed `org_`' }
+        name: { type: string }
+        status:
+          type: string
+          enum: [active, suspended]
+          description: A suspended team's keys are refused on every request
+        is_default:
+          type: boolean
+          description: |
+            The team created at first start, where a key lands when none is
+            named. It cannot be suspended.
+        key_count:
+          type: integer
+          description: How many active keys this team has
+        created_at: { type: string, format: date-time }
+      additionalProperties: false
+    ModelAccess:
+      type: object
+      description: |
+        Which models a key may call.
+
+        Two fields rather than one list, because "every model" and "no model at
+        all" both have to be sayable and a single list can only say one of them.
+        With `allow_all` the key adds no restriction of its own and reaches
+        whatever the organization's admission tier allows; otherwise `models` is
+        the exact set, and an empty set refuses every model.
+
+        A model listed here that the organization's tier does not admit is
+        rejected when it is saved, so this list can never promise more than the
+        tier behind it.
+      required: [allow_all, models]
+      properties:
+        allow_all:
+          type: boolean
+          description: True means every model the organization's tier allows; `models` must then be empty
+        models:
+          type: array
+          items: { type: string }
+          description: Exact model slugs, used only when `allow_all` is false
+      additionalProperties: false
+    ApiKey:
+      type: object
+      required: [id, team_id, name, prefix, scopes, status, total_spent_nano, created_at]
+      properties:
+        id: { type: string, description: 'Public id, prefixed `key_`' }
+        team_id: { type: string, description: 'Public id of the team this key belongs to, prefixed `org_`' }
+        name: { type: string }
+        prefix: { type: string, description: 'Display prefix: the fixed key prefix plus the first 8 random characters' }
+        scopes:
+          type: array
+          items: { type: string }
+        status:
+          type: string
+          enum: [active, revoked]
+        spend_limit_nano: { type: integer, format: int64 }
+        spend_limit_interval:
+          type: string
+          enum: [total, monthly, daily]
+        rate_limit_rpm: { type: integer, description: 'Requests per minute; absent means no limit' }
+        rate_limit_tpm: { type: integer, description: 'Tokens per minute; absent means no limit' }
+        model_access: { $ref: '#/components/schemas/ModelAccess' }
+        tags:
+          type: array
+          items: { type: string }
+          description: Free-form labels, for grouping keys by project or environment
+        total_spent_nano: { type: integer, format: int64 }
+        last_used_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+      additionalProperties: false
+    ApiKeyCreated:
+      type: object
+      description: The create response; the key itself appears only here
+      required: [key, api_key]
+      properties:
+        key:
+          type: string
+          description: The full key, returned only at creation and never retrievable again
+        api_key: { $ref: '#/components/schemas/ApiKey' }
+      additionalProperties: false
+    CreateKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        team_id:
+          type: string
+          description: Which team this key belongs to; omit for the team created at first start
+        expires_at: { type: string, format: date-time }
+        spend_limit_nano: { type: integer, format: int64, minimum: 1 }
+        spend_limit_interval:
+          type: string
+          enum: [total, monthly, daily]
+        rate_limit_rpm: { type: integer, minimum: 1 }
+        rate_limit_tpm: { type: integer, minimum: 1 }
+        model_access:
+          allOf:
+            - $ref: '#/components/schemas/ModelAccess'
+          description: Absent means unrestricted, the default for a new key
+        tags:
+          type: array
+          items: { type: string, maxLength: 40 }
+          maxItems: 16
+      additionalProperties: false
+    UpdateKeyRequest:
+      type: object
+      description: |
+        `scopes` is not editable: these keys are for the data plane only. The
+        admin API of a single-tenant deployment is served by the same process an
+        administrator is already signed in to, so there is no case for calling
+        it with an API key — and a credential that can grant itself more
+        privilege is one more thing to attack.
+      properties:
+        spend_limit_nano: { type: integer, format: int64, minimum: 1 }
+        spend_limit_interval:
+          type: string
+          enum: [total, monthly, daily]
+        rate_limit_rpm: { type: integer, minimum: 1 }
+        rate_limit_tpm: { type: integer, minimum: 1 }
+        expires_at: { type: string, format: date-time }
+        clear:
+          type: array
+          description: Limits to clear, i.e. set back to "no limit"
+          items:
+            type: string
+            enum: [spend_limit, rate_limit_rpm, rate_limit_tpm, expires_at]
+        model_access:
+          allOf:
+            - $ref: '#/components/schemas/ModelAccess'
+          description: |
+            Replaces the key's model gate whole. It is absent from `clear`
+            because it has no "no limit" state to return to: unrestricted is
+            said with `allow_all`.
+        tags:
+          type: array
+          items: { type: string, maxLength: 40 }
+          maxItems: 16
+      additionalProperties: false
+    CommunityMeta:
+      type: object
+      required: [version, setup_state, setup_requires_token]
+      properties:
+        version:
+          type: string
+          description: Build version.
+        setup_state:
+          type: string
+          enum: [complete, available]
+          description: |
+            `complete` — an administrator exists; show the sign-in form.
+            `available` — none exists yet; show the setup form.
+        setup_requires_token:
+          type: boolean
+          description: |
+            Whether POST /setup will ask for a token. Only meaningful while
+            `setup_state` is `available`. Saying so is what lets the form render
+            the field; it does not disclose the token.
+      additionalProperties: false
+    CommunitySetupRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          minLength: 12
+          maxLength: 1024
+          description: |
+            At least 12 characters. This account has no second factor and is the
+            only way in, so the one length rule in this API is here.
+        token:
+          type: string
+          maxLength: 256
+          description: Required when FAIRLB_SETUP_TOKEN is set.
+      additionalProperties: false
+    CommunityLoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          minLength: 1
+          maxLength: 1024
+      additionalProperties: false
+    CommunityIdentity:
+      type: object
+      required: [id, email, name, role, org_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          enum: [superadmin]
+          description: Always `superadmin` here; this deployment has no role grades
+        org_id:
+          type: string
+          description: |
+            Public id (prefixed `org_`) of the single organization this instance
+            serves.
+
+            The organization-facing endpoints take `{org_id}` in their path, and
+            this value is fixed at first start and never shown in the UI. It is
+            reported here rather than guessed or hard-coded by a client: a
+            hard-coded id would point at an organization that does not exist
+            after the database is replaced, and the symptom would be every page
+            rendering empty without an error.
+      additionalProperties: false
+    SettingsBatch:
+      type: object
+      required: [changes]
+      properties:
+        changes:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [key, value]
+            properties:
+              key: { type: string }
+              value:
+                description: A JSON value of the registered kind; `""` clears a secret
+        reason:
+          type: string
+          maxLength: 500
+          description: Goes into every key's audit row; required when any key is impact high
+    SettingEntry:
+      type: object
+      required: [key, kind, set, group, impact]
+      properties:
+        key: { type: string }
+        kind:
+          type: string
+          enum: [string, enum, string_list, email, bool, int, decimal_string, map_string_int, money, secret]
+        section:
+          type: string
+          description: The integration the key belongs to; one form, one transaction. Absent for a key on its own
+        hint:
+          type: string
+          description: Display mask of a stored secret; the value itself never comes back
+        description:
+          type: string
+          description: Fallback copy; the interface renders description_key instead
+        description_key:
+          type: string
+          description: Message key (`settingDesc*`) the interface translates
+        group:
+          type: string
+          enum: [access, billing, operations, retention]
+        impact:
+          type: string
+          enum: [normal, high]
+          description: high = reaches every request, every bill or data retention; needs confirmation and a reason
+        enum:
+          type: array
+          items: { type: string }
+        min: { type: integer, format: int64, description: Inclusive lower bound for int / map_string_int; in nano for money }
+        max: { type: integer, format: int64, description: Inclusive upper bound for int / map_string_int; in nano for money }
+        default:
+          description: Registered default, as JSON
+        value:
+          description: Current value (the default when unset); absent for secrets
+        set: { type: boolean }
+        updated_at: { type: string, format: date-time }
+        updated_by: { type: string }
+    Problem:
+      type: object
+      description: RFC 9457 problem+json, the same shape every endpoint uses
+      required: [type, title, status, code]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        request_id: { type: string }
+      additionalProperties: true
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  securitySchemes:
+    staffSession:
+      type: apiKey
+      in: cookie
+      name: __Host-flb_staff
+      description: Administrator session cookie, issued by the sign-in endpoint
+security:
+  - staffSession: []

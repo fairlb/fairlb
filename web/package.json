@@ -1,0 +1,21 @@
+{
+  "name": "fairlb-web",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --filter './apps/*' --filter './packages/*' build",
+    "typecheck": "pnpm --filter './apps/*' --filter './packages/*' typecheck",
+    "generate": "pnpm --fail-if-no-match --filter './packages/api-client' generate && vp fmt packages/api-client/src",
+    "lint": "vp lint -c .oxlintrc.json --ignore-pattern '**/dist/**' --deny-warnings",
+    "fmt": "vp fmt",
+    "fmt:check": "vp fmt --check",
+    "test": "pnpm --filter './apps/*' --filter './packages/*' --if-present test",
+    "dev": "pnpm --filter './apps/staff' dev"
+  },
+  "devDependencies": {
+    "knip": "^6.32.2",
+    "markdown-it": "^14.3.0",
+    "typescript": "^7.0.2",
+    "vite-plus": "^0.2.6"
+  },
+  "packageManager": "pnpm@10.33.0"
+}

@@ -1,0 +1,17 @@
+# oapi-codegen configuration: the self-hosted admin plane's identity and key
+# management document becomes a strict server interface.
+#
+# It covers only the operations that document defines. The provider, model and
+# routing endpoints come from the gateway's own admin document and are generated
+# once, from there.
+#
+# Wiring up a new configuration takes two edits, and doing only one of them
+# produces a silent drift where the spec changes, the generated code does not,
+# and every check still passes: add it to the Makefile's generate target, and
+# add its output to the Makefile's list of generated files.
+package: staffapi
+output: internal/community/staffapi/api.gen.go
+generate:
+  chi-server: true
+  strict-server: true
+  models: true

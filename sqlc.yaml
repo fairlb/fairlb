@@ -1,0 +1,18 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/gateway/queries"
+    gen:
+      go:
+        package: "gwdb"
+        out: "internal/gateway/db"
+        sql_package: "pgx/v5"
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/community/queries"
+    gen:
+      go:
+        package: "communitydb"
+        out: "internal/community/db"
+        sql_package: "pgx/v5"

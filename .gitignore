@@ -1,0 +1,22 @@
+# Build output
+/bin/
+/fairlb
+*.test
+coverage.out
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+.vitest-attachments/
+.vitest-screenshots/
+*.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
