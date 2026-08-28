@@ -10,8 +10,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/fairlb/fairlb/access/apikeys"
+	"github.com/jackc/pgx/v5"
 )
 
 // veoUpstream fakes the long-running-operation shape: a submit that returns an
@@ -48,8 +50,14 @@ func (u *veoUpstream) handler(t *testing.T) http.HandlerFunc {
 }
 
 func submitVideo(t *testing.T, h http.Handler, key, body, idem string) (int, map[string]any) {
+	return submitVideoContext(t, context.Background(), h, key, body, idem)
+}
+
+func submitVideoContext(
+	t *testing.T, ctx context.Context, h http.Handler, key, body, idem string,
+) (int, map[string]any) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/videos", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/videos", strings.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Idempotency-Key", idem)
 	rec := httptest.NewRecorder()
@@ -400,6 +408,111 @@ func TestConcurrentSubmitsUnderOneKeyGenerateOnceAndStrandNothing(t *testing.T) 
 	if !collided {
 		t.Skip("no insert collision was provoked in 40 rounds; this machine serialises the " +
 			"racers, so the conflict branch was not exercised")
+	}
+}
+
+// Admission must never acquire a second pool connection while it holds its
+// repeatable-read pricing transaction. With a saturated pool that dependency
+// is a closed cycle: every request owns one connection and every request waits
+// for another, so none can reach the commit that releases the first.
+//
+// The external connection locks the models table just long enough to line up
+// one request on every available pooled connection. Releasing it then makes
+// the requests advance together. This turns the production failure into a
+// deterministic test rather than hoping the scheduler happens to align them.
+func TestConcurrentAdmissionsDoNotDeadlockSaturatedPool(t *testing.T) {
+	up := &veoUpstream{}
+	f := newPipeFixture(t, up.handler(t))
+	plaintext, _, org := f.seedKey(t, apikeys.CreateInput{})
+	f.topup(t, org, 100_000_000_000)
+	f.seedVideoModel(t, "google/veo-3.1", veoEnvelope, 400_000_000)
+	h := f.videoRouter(t)
+	body := `{"model":"google/veo-3.1","prompt":"a cat","duration_seconds":8}`
+
+	maxConns := int(f.pool.Stat().MaxConns())
+	available := maxConns - int(f.pool.Stat().AcquiredConns())
+	if available < 2 {
+		t.Skipf("pool has only %d request connections available", available)
+	}
+	racers := min(available, 4)
+	// Large developer pools would otherwise leave spare capacity and fail to
+	// reproduce saturation. Hold only the excess; the requests get four real
+	// connections at most.
+	for range available - racers {
+		conn, err := f.pool.Acquire(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(conn.Release)
+	}
+
+	ctx := context.Background()
+	blocker, err := pgx.Connect(ctx, f.pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = blocker.Close(ctx) })
+	lockTx, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			_ = lockTx.Rollback(ctx)
+		}
+	})
+	if _, err := lockTx.Exec(ctx, `LOCK TABLE models IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	type result struct {
+		code    int
+		payload map[string]any
+	}
+	results := make(chan result, racers)
+	gate := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range racers {
+		wg.Go(func() {
+			<-gate
+			code, payload := submitVideoContext(t, requestCtx, h, plaintext, body,
+				fmt.Sprintf("idem-pool-%d", i))
+			results <- result{code: code, payload: payload}
+		})
+	}
+	close(gate)
+
+	// A stable full pool means every request is holding its pricing
+	// transaction at the table lock, not merely passing through an earlier
+	// authentication query.
+	deadline := time.Now().Add(3 * time.Second)
+	saturated := false
+	for time.Now().Before(deadline) {
+		if int(f.pool.Stat().AcquiredConns()) == maxConns {
+			time.Sleep(50 * time.Millisecond)
+			if int(f.pool.Stat().AcquiredConns()) == maxConns {
+				saturated = true
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := lockTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	locked = false
+	wg.Wait()
+	close(results)
+	if !saturated {
+		t.Fatal("requests did not saturate the database pool before the deadline")
+	}
+	for got := range results {
+		if got.code != http.StatusAccepted {
+			t.Fatalf("submit returned %d after pool saturation: %v", got.code, got.payload)
+		}
 	}
 }
 

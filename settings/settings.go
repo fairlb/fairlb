@@ -94,6 +94,14 @@ func New(pool *pgxpool.Pool, c cache.Store, reg *Registry, box *crypto.Box) *Sto
 	return &Store{db: pool, cache: c, reg: reg, box: box}
 }
 
+// WithTx returns a read view whose cache misses use the caller's transaction.
+// The shared cache remains safe to use: reads were already allowed to lag by
+// cacheTTL, while binding misses to tx prevents a caller that owns one pooled
+// connection from trying to acquire a second one.
+func (s *Store) WithTx(tx pgx.Tx) *Store {
+	return &Store{db: tx, cache: s.cache, reg: s.reg, box: s.box}
+}
+
 // Registry is what this Store accepts and renders. The settings endpoint asks it
 // before every write: an unregistered key is a 404.
 func (s *Store) Registry() *Registry { return s.reg }

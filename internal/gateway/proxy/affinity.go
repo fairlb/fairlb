@@ -26,6 +26,7 @@ const (
 // turn a known state id into a misleading 404 instead of the required 503.
 func (p *Pipeline) affinityResolutionError(
 	ctx context.Context, id Identity, in Request, cached *gwdb.GetResourceAffinityRow,
+	q *gwdb.Queries,
 ) *Error {
 	resourceType, upstreamID := affinityReference(in)
 	if upstreamID == "" {
@@ -34,7 +35,7 @@ func (p *Pipeline) affinityResolutionError(
 	if cached != nil {
 		return NewError(errcode.GatewayStateRouteUnavailable, "The resource's original route is unavailable")
 	}
-	_, err := p.gw.GetResourceAffinity(ctx, gwdb.GetResourceAffinityParams{
+	_, err := q.GetResourceAffinity(ctx, gwdb.GetResourceAffinityParams{
 		OrgID: id.OrgID, Protocol: string(in.Protocol),
 		ResourceType: resourceType, UpstreamID: upstreamID,
 	})

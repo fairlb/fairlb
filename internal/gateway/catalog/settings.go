@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/fairlb/fairlb/settings"
 )
 
@@ -113,6 +115,12 @@ func Specs() []settings.Spec {
 type Settings struct{ store *settings.Store }
 
 func NewSettings(store *settings.Store) *Settings { return &Settings{store: store} }
+
+// WithTx binds cache misses to the caller's transaction, so a request pricing
+// snapshot never needs a second pooled connection.
+func (s *Settings) WithTx(tx pgx.Tx) *Settings {
+	return &Settings{store: s.store.WithTx(tx)}
+}
 
 // defaultBYOKFeeBps matches the registered default and is the fallback when the
 // read fails.

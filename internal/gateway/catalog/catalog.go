@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/fairlb/fairlb/foundation/db"
@@ -443,8 +444,8 @@ func NewService(q *gwdb.Queries, c cache.Store, store *settings.Store) *Service 
 // Mutable catalog/current-version caches are deliberately bypassed: a cached
 // model price combined with plan or procurement rows from the transaction would
 // reintroduce the cross-version mix this view exists to prevent.
-func (s *Service) WithRequestSnapshot(q *gwdb.Queries) *Service {
-	return &Service{q: q, settings: s.settings, transport: s.transport}
+func (s *Service) WithRequestSnapshot(q *gwdb.Queries, tx pgx.Tx) *Service {
+	return &Service{q: q, settings: s.settings.WithTx(tx), transport: s.transport}
 }
 
 // Settings exposes the gateway settings reader, which the proxy layer consults

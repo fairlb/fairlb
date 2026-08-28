@@ -39,6 +39,8 @@ are stable, and breaking either needs a major version.
   including streamed responses, instead of assuming one image.
 - Video reservations, late settlement and repair queues are guarded against
   duplicate charging, expired holds and partially completed jobs.
+- Concurrent admissions no longer deadlock when they saturate a small database
+  connection pool while loading pricing settings.
 - Multipart requests rewrite model names consistently with JSON requests.
 
 ### Removed

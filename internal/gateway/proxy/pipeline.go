@@ -456,6 +456,13 @@ func (a *Admission) Prepare(ctx context.Context, in Request) (prepared, *Error) 
 		return out, gerr
 	}
 
+	// BYOK credentials are not part of the versioned catalog snapshot and read
+	// through the pool directly, so resolve them before holding a transaction
+	// connection. Everything after BeginTx must read through pricingQ (including
+	// settings cache misses) or a saturated pool can deadlock when every request
+	// holds one connection and waits for another.
+	out.byok = p.resolveBYOK(ctx, id.OrgID)
+
 	// The model price, the plan/organization binding and the procurement version of
 	// every candidate route must come from one MVCC instant. Under READ
 	// COMMITTED a sequence of individually correct SELECTs can still compose
@@ -472,9 +479,8 @@ func (a *Admission) Prepare(ctx context.Context, in Request) (prepared, *Error) 
 	}
 	defer func() { _ = pricingTx.Rollback(ctx) }()
 	pricingQ := p.gw.WithTx(pricingTx)
-	requestCatalog := p.catalog.WithRequestSnapshot(pricingQ)
+	requestCatalog := p.catalog.WithRequestSnapshot(pricingQ, pricingTx)
 
-	out.byok = p.resolveBYOK(ctx, id.OrgID)
 	res, err := requestCatalog.ResolveFor(ctx, modelSlug, in.Surface, id.ModelTierID, out.byok.vendors())
 	if err != nil {
 		if errors.Is(err, catalog.ErrModelUnpriced) {
@@ -487,7 +493,7 @@ func (a *Admission) Prepare(ctx context.Context, in Request) (prepared, *Error) 
 			return out, NewError(errcode.GatewayModelUnpriced, "Model is temporarily unavailable")
 		}
 		if errors.Is(err, catalog.ErrModelUnavailable) {
-			if affinityErr := p.affinityResolutionError(ctx, id, in, out.affinity); affinityErr != nil {
+			if affinityErr := p.affinityResolutionError(ctx, id, in, out.affinity, pricingQ); affinityErr != nil {
 				return out, affinityErr
 			}
 			return out, NewError(errcode.GatewayModelNotFound, "Model not found or unavailable")
@@ -508,7 +514,7 @@ func (a *Admission) Prepare(ctx context.Context, in Request) (prepared, *Error) 
 	}
 
 	// 4. Lock the whole pricing chain.
-	pricing, gerr := a.pricing.LockInputs(ctx, id, res, pricingQ)
+	pricing, gerr := a.pricing.LockInputs(ctx, id, res, pricingQ, requestCatalog.Settings())
 	if gerr != nil {
 		return out, gerr
 	}
@@ -774,7 +780,7 @@ func (p pricingInputs) holdInputs(
 	return catalog.BillablePriceOf(pricing), ceiling, p.rates
 }
 
-// quoteInputs resolves the pricing chain and the exchange rate.
+// LockInputs resolves the pricing chain and the exchange rate.
 //
 // Markup and discount are two orthogonal factors and are deliberately not
 // squeezed into one priority chain: markup answers "how much margin does this
@@ -782,9 +788,8 @@ func (p pricingInputs) holdInputs(
 // this customer get" (from the org's model settings, loaded with the Identity).
 func (s *PricingSnapshot) LockInputs(
 	ctx context.Context, id Identity, res catalog.Resolution, pricingQ *gwdb.Queries,
+	set *catalog.Settings,
 ) (pricingInputs, *Error) {
-	p := s.pipeline
-	set := p.catalog.Settings()
 	fx := set.FXRate(ctx, id.WalletCurrency)
 	if fx == "" {
 		// With no configured rate, refuse to bill rather than assume 1 -- that
