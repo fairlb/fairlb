@@ -17,6 +17,93 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for AvailableModelBillingUnit.
+const (
+	AvailableModelBillingUnitCall   AvailableModelBillingUnit = "call"
+	AvailableModelBillingUnitImage  AvailableModelBillingUnit = "image"
+	AvailableModelBillingUnitSecond AvailableModelBillingUnit = "second"
+	AvailableModelBillingUnitToken  AvailableModelBillingUnit = "token"
+)
+
+// Valid indicates whether the value is a known member of the AvailableModelBillingUnit enum.
+func (e AvailableModelBillingUnit) Valid() bool {
+	switch e {
+	case AvailableModelBillingUnitCall:
+		return true
+	case AvailableModelBillingUnitImage:
+		return true
+	case AvailableModelBillingUnitSecond:
+		return true
+	case AvailableModelBillingUnitToken:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AvailableModelOutputModalities.
+const (
+	AvailableModalityImage AvailableModelOutputModalities = "image"
+	AvailableModalityText  AvailableModelOutputModalities = "text"
+	AvailableModalityVideo AvailableModelOutputModalities = "video"
+)
+
+// Valid indicates whether the value is a known member of the AvailableModelOutputModalities enum.
+func (e AvailableModelOutputModalities) Valid() bool {
+	switch e {
+	case AvailableModalityImage:
+		return true
+	case AvailableModalityText:
+		return true
+	case AvailableModalityVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AvailableModelUnitRateAudio.
+const (
+	AvailableAudioAny AvailableModelUnitRateAudio = ""
+	AvailableAudioOff AvailableModelUnitRateAudio = "off"
+	AvailableAudioOn  AvailableModelUnitRateAudio = "on"
+)
+
+// Valid indicates whether the value is a known member of the AvailableModelUnitRateAudio enum.
+func (e AvailableModelUnitRateAudio) Valid() bool {
+	switch e {
+	case AvailableAudioAny:
+		return true
+	case AvailableAudioOff:
+		return true
+	case AvailableAudioOn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AvailableModelUnitRateUnit.
+const (
+	AvailableUnitCall   AvailableModelUnitRateUnit = "call"
+	AvailableUnitImage  AvailableModelUnitRateUnit = "image"
+	AvailableUnitSecond AvailableModelUnitRateUnit = "second"
+)
+
+// Valid indicates whether the value is a known member of the AvailableModelUnitRateUnit enum.
+func (e AvailableModelUnitRateUnit) Valid() bool {
+	switch e {
+	case AvailableUnitCall:
+		return true
+	case AvailableUnitImage:
+		return true
+	case AvailableUnitSecond:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OrgProviderKeyStatus.
 const (
 	Active   OrgProviderKeyStatus = "active"
@@ -32,6 +119,78 @@ func (e OrgProviderKeyStatus) Valid() bool {
 	case Disabled:
 		return true
 	case Invalid:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VideoJobBilledUnit.
+const (
+	VideoJobBilledUnitCall   VideoJobBilledUnit = "call"
+	VideoJobBilledUnitEmpty  VideoJobBilledUnit = ""
+	VideoJobBilledUnitSecond VideoJobBilledUnit = "second"
+)
+
+// Valid indicates whether the value is a known member of the VideoJobBilledUnit enum.
+func (e VideoJobBilledUnit) Valid() bool {
+	switch e {
+	case VideoJobBilledUnitCall:
+		return true
+	case VideoJobBilledUnitEmpty:
+		return true
+	case VideoJobBilledUnitSecond:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VideoJobCancel.
+const (
+	Anytime    VideoJobCancel = "anytime"
+	Never      VideoJobCancel = "never"
+	QueuedOnly VideoJobCancel = "queued_only"
+)
+
+// Valid indicates whether the value is a known member of the VideoJobCancel enum.
+func (e VideoJobCancel) Valid() bool {
+	switch e {
+	case Anytime:
+		return true
+	case Never:
+		return true
+	case QueuedOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VideoJobStatus.
+const (
+	VideoJobStatusCanceled   VideoJobStatus = "canceled"
+	VideoJobStatusCompleted  VideoJobStatus = "completed"
+	VideoJobStatusExpired    VideoJobStatus = "expired"
+	VideoJobStatusFailed     VideoJobStatus = "failed"
+	VideoJobStatusInProgress VideoJobStatus = "in_progress"
+	VideoJobStatusQueued     VideoJobStatus = "queued"
+)
+
+// Valid indicates whether the value is a known member of the VideoJobStatus enum.
+func (e VideoJobStatus) Valid() bool {
+	switch e {
+	case VideoJobStatusCanceled:
+		return true
+	case VideoJobStatusCompleted:
+		return true
+	case VideoJobStatusExpired:
+		return true
+	case VideoJobStatusFailed:
+		return true
+	case VideoJobStatusInProgress:
+		return true
+	case VideoJobStatusQueued:
 		return true
 	default:
 		return false
@@ -140,8 +299,43 @@ func (e ExportUsageCSVParamsGranularity) Valid() bool {
 	}
 }
 
+// Defines values for ListVideoJobsParamsStatus.
+const (
+	ListVideoJobsParamsStatusCanceled   ListVideoJobsParamsStatus = "canceled"
+	ListVideoJobsParamsStatusCompleted  ListVideoJobsParamsStatus = "completed"
+	ListVideoJobsParamsStatusExpired    ListVideoJobsParamsStatus = "expired"
+	ListVideoJobsParamsStatusFailed     ListVideoJobsParamsStatus = "failed"
+	ListVideoJobsParamsStatusInProgress ListVideoJobsParamsStatus = "in_progress"
+	ListVideoJobsParamsStatusQueued     ListVideoJobsParamsStatus = "queued"
+)
+
+// Valid indicates whether the value is a known member of the ListVideoJobsParamsStatus enum.
+func (e ListVideoJobsParamsStatus) Valid() bool {
+	switch e {
+	case ListVideoJobsParamsStatusCanceled:
+		return true
+	case ListVideoJobsParamsStatusCompleted:
+		return true
+	case ListVideoJobsParamsStatusExpired:
+		return true
+	case ListVideoJobsParamsStatusFailed:
+		return true
+	case ListVideoJobsParamsStatusInProgress:
+		return true
+	case ListVideoJobsParamsStatusQueued:
+		return true
+	default:
+		return false
+	}
+}
+
 // AvailableModel defines model for AvailableModel.
 type AvailableModel struct {
+	// BillingUnit What this model is charged by. `token` is the four-bucket family the price fields below describe; `second`, `call` and `image` are charged from `unit_rates` instead, and the token fields are then absent.
+	//
+	// It exists because "priced by the second" and "not priced" used to be indistinguishable here: a per-second model stores explicit zeros in the token columns, and a catalogue reading those zeros showed a priced model as unpriced. Omitted for a caller without the financial read capability, along with everything else about price.
+	BillingUnit *AvailableModelBillingUnit `json:"billing_unit,omitempty"`
+
 	// Capabilities Display metadata such as vision or tool support.
 	//
 	// What can actually be called is always what the model's routes have
@@ -164,6 +358,9 @@ type AvailableModel struct {
 	IsFree          *bool `json:"is_free,omitempty"`
 	MaxOutputTokens *int  `json:"max_output_tokens,omitempty"`
 
+	// OutputModalities What this model produces. Declared on the model rather than derived from `endpoints`: the two do not line up, because Gemini serves its image models on the same `generate_content` endpoint as its text models. It is what the catalogue's modality filter reads.
+	OutputModalities []AvailableModelOutputModalities `json:"output_modalities"`
+
 	// PriceCacheReadNanoPerMtok Omitted for a caller without the financial read capability
 	PriceCacheReadNanoPerMtok *int64 `json:"price_cache_read_nano_per_mtok,omitempty"`
 
@@ -182,7 +379,38 @@ type AvailableModel struct {
 	// `/v1/chat/completions` and `/v1/messages`.
 	Protocols []string `json:"protocols"`
 	Slug      string   `json:"slug"`
+
+	// UnitRates The rate card for a model not billed by token. Omitted for a caller without the financial read capability.
+	UnitRates *[]AvailableModelUnitRate `json:"unit_rates,omitempty"`
 }
+
+// AvailableModelBillingUnit What this model is charged by. `token` is the four-bucket family the price fields below describe; `second`, `call` and `image` are charged from `unit_rates` instead, and the token fields are then absent.
+//
+// It exists because "priced by the second" and "not priced" used to be indistinguishable here: a per-second model stores explicit zeros in the token columns, and a catalogue reading those zeros showed a priced model as unpriced. Omitted for a caller without the financial read capability, along with everything else about price.
+type AvailableModelBillingUnit string
+
+// AvailableModelOutputModalities defines model for AvailableModel.OutputModalities.
+type AvailableModelOutputModalities string
+
+// AvailableModelUnitRate One line of a per-unit rate card, at this organization's own multipliers. An empty axis means the rate does not vary on it and applies to every value.
+type AvailableModelUnitRate struct {
+	// Audio Video only; an image rate leaves it empty
+	Audio       *AvailableModelUnitRateAudio `json:"audio,omitempty"`
+	NanoPerUnit int64                        `json:"nano_per_unit"`
+
+	// Resolution The output size this rate applies to; empty applies to every resolution
+	Resolution *string                    `json:"resolution,omitempty"`
+	Unit       AvailableModelUnitRateUnit `json:"unit"`
+
+	// Variant A subdivision within the unit, such as the quality tier an image model sells. Empty applies to every variant. Without it a model priced at two quality tiers renders two identical-looking lines carrying different numbers.
+	Variant *string `json:"variant,omitempty"`
+}
+
+// AvailableModelUnitRateAudio Video only; an image rate leaves it empty
+type AvailableModelUnitRateAudio string
+
+// AvailableModelUnitRateUnit defines model for AvailableModelUnitRate.Unit.
+type AvailableModelUnitRateUnit string
 
 // OrgProviderKey defines model for OrgProviderKey.
 type OrgProviderKey struct {
@@ -252,6 +480,12 @@ type RequestLog struct {
 	// ApiKeyId An API key's `key_…` public id; omitted without `keys.manage`.
 	ApiKeyId *string `json:"api_key_id,omitempty"`
 
+	// BilledUnit Which unit `billed_units` counts, when it counts anything. Empty for token-billed rows.
+	BilledUnit *string `json:"billed_unit,omitempty"`
+
+	// BilledUnits Billable units for surfaces not billed by token — seconds of video, or generations. 0 where nothing on this row was billed that way; the token columns are 0 for a row that was.
+	BilledUnits *int64 `json:"billed_units,omitempty"`
+
 	// ChargedNano 0 for a caller without the financial read capability
 	ChargedNano int64     `json:"charged_nano"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -272,6 +506,12 @@ type RequestLog struct {
 type RequestLogDetail struct {
 	// ApiKeyId An API key's `key_…` public id; omitted without `keys.manage`.
 	ApiKeyId *string `json:"api_key_id,omitempty"`
+
+	// BilledUnit Which unit `billed_units` counts, when it counts anything. Empty for token-billed rows.
+	BilledUnit *string `json:"billed_unit,omitempty"`
+
+	// BilledUnits Billable units for surfaces not billed by token — seconds of video, or generations. 0 where nothing on this row was billed that way; the token columns are 0 for a row that was.
+	BilledUnits *int64 `json:"billed_units,omitempty"`
 
 	// ChargedCurrency Omitted for a caller without the financial read capability
 	ChargedCurrency *string `json:"charged_currency,omitempty"`
@@ -305,6 +545,17 @@ type RequestLogDetail struct {
 
 // UsageGroup defines model for UsageGroup.
 type UsageGroup struct {
+	// BilledCalls Generations billed per call, for upstreams that sell prepaid packs rather than time. 0 where nothing here was billed that way.
+	//
+	// A column of its own rather than a share of one `billed_units` total: a second of video and a generation are different dimensions, and adding them yields a number that denotes nothing — the same reason neither is summed into the token counters beside them. Named columns rather than a map keyed by unit, because the unit set is closed and adding one should be a contract change somebody has to make, not a key that appears. `billed_images` is that change having been made.
+	BilledCalls int64 `json:"billed_calls"`
+
+	// BilledImages Images billed per produced image. 0 where nothing here was billed that way. A column of its own for the same reason billed_calls is: a request for four images is four units here and one there, so the two cannot share a total.
+	BilledImages int64 `json:"billed_images"`
+
+	// BilledSeconds Seconds of video billed in this bucket. 0 where nothing here was billed by the second.
+	BilledSeconds int64 `json:"billed_seconds"`
+
 	// ChargedNano 0 for a caller without the financial read capability
 	ChargedNano int64 `json:"charged_nano"`
 
@@ -334,7 +585,17 @@ type UsageLatency struct {
 
 // UsagePoint defines model for UsagePoint.
 type UsagePoint struct {
-	BucketStart time.Time `json:"bucket_start"`
+	// BilledCalls Generations billed per call, for upstreams that sell prepaid packs rather than time. 0 where nothing here was billed that way.
+	//
+	// A column of its own rather than a share of one `billed_units` total: a second of video and a generation are different dimensions, and adding them yields a number that denotes nothing — the same reason neither is summed into the token counters beside them. Named columns rather than a map keyed by unit, because the unit set is closed and adding one should be a contract change somebody has to make, not a key that appears. `billed_images` is that change having been made.
+	BilledCalls int64 `json:"billed_calls"`
+
+	// BilledImages Images billed per produced image. 0 where nothing here was billed that way. A column of its own for the same reason billed_calls is: a request for four images is four units here and one there, so the two cannot share a total.
+	BilledImages int64 `json:"billed_images"`
+
+	// BilledSeconds Seconds of video billed in this bucket. 0 where nothing here was billed by the second.
+	BilledSeconds int64     `json:"billed_seconds"`
+	BucketStart   time.Time `json:"bucket_start"`
 
 	// ChargedNano 0 for a caller without the financial read capability
 	ChargedNano int64  `json:"charged_nano"`
@@ -358,6 +619,17 @@ type UsageReport struct {
 
 // UsageTotals defines model for UsageTotals.
 type UsageTotals struct {
+	// BilledCalls Generations billed per call, for upstreams that sell prepaid packs rather than time. 0 where nothing here was billed that way.
+	//
+	// A column of its own rather than a share of one `billed_units` total: a second of video and a generation are different dimensions, and adding them yields a number that denotes nothing — the same reason neither is summed into the token counters beside them. Named columns rather than a map keyed by unit, because the unit set is closed and adding one should be a contract change somebody has to make, not a key that appears. `billed_images` is that change having been made.
+	BilledCalls int64 `json:"billed_calls"`
+
+	// BilledImages Images billed per produced image. 0 where nothing here was billed that way. A column of its own for the same reason billed_calls is: a request for four images is four units here and one there, so the two cannot share a total.
+	BilledImages int64 `json:"billed_images"`
+
+	// BilledSeconds Seconds of video billed in this bucket. 0 where nothing here was billed by the second.
+	BilledSeconds int64 `json:"billed_seconds"`
+
 	// ChargedNano 0 for a caller without the financial read capability
 	ChargedNano int64 `json:"charged_nano"`
 
@@ -373,6 +645,78 @@ type UsageTotals struct {
 	TokensIn  int64         `json:"tokens_in"`
 	TokensOut int64         `json:"tokens_out"`
 }
+
+// VideoJob One video job as its owner sees it. The upstream's own job id and the upstream download URL are absent by design and not by omission: upstream anonymity is a property of this gateway, and that URL is one it can neither renew nor revoke.
+//
+// So is `settlement_state`. What the money did is a separate column from what the caller sees, deliberately — the two really do come apart — but it is bookkeeping for whoever runs the deployment, not an answer this organization asked for. `charged_nano` is.
+type VideoJob struct {
+	// Artifact What is holdable of the result. Absent until the job completes, and its `available` goes false once the retention window has passed.
+	Artifact *struct {
+		Available   bool    `json:"available"`
+		Bytes       *int64  `json:"bytes,omitempty"`
+		ContentType *string `json:"content_type,omitempty"`
+	} `json:"artifact,omitempty"`
+	AspectRatio *string `json:"aspect_ratio,omitempty"`
+	Audio       *bool   `json:"audio,omitempty"`
+
+	// BilledUnit Which unit `billed_units` counts. Empty before the job reaches a terminal state.
+	BilledUnit *VideoJobBilledUnit `json:"billed_unit,omitempty"`
+
+	// BilledUnits How many units this job was charged for — seconds of output, or generations
+	BilledUnits *int64 `json:"billed_units,omitempty"`
+
+	// Cancel How far this job can still be stopped, carried on the row so that the interface can decide whether to offer a stop button rather than offering one that fails. It is the model's declared capability, not a promise about this instant — a `queued_only` job that has started generating still refuses.
+	Cancel *VideoJobCancel `json:"cancel,omitempty"`
+
+	// ChargedCurrency Omitted for a caller without the financial read capability
+	ChargedCurrency *string `json:"charged_currency,omitempty"`
+
+	// ChargedNano 0 for a caller without the financial read capability, and 0 for a job that produced nothing: a failed or cancelled job is never charged, and its row is kept rather than hidden so that the zero is visible.
+	ChargedNano *int64    `json:"charged_nano,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+
+	// Deletable Whether this job can be deleted right now, carried for the same reason `cancel` is: so the interface can offer the control only where it works. False while the job is still running, and false while it is still holding a reservation — a job whose charge has not been settled or voided is the only row that points at that hold, and deleting it would strand the money.
+	//
+	// It is a capability rather than the settlement state itself. That is not a redaction: on a terminal job a false here does mean the charge is still held or protected, so this much of the settlement state is derivable by anyone who can list jobs. What the contract withholds is the amount, which `charged_nano` gates on the financial read capability.
+	Deletable       bool `json:"deletable"`
+	DurationSeconds *int `json:"duration_seconds,omitempty"`
+
+	// Error Present on a failed job. The upstream's own words are kept verbatim — a content refusal rendered as a bare code is a support ticket.
+	Error *struct {
+		Code    string  `json:"code"`
+		Message *string `json:"message,omitempty"`
+	} `json:"error,omitempty"`
+
+	// ExpiresAt When this row and its video are removed. It is a retention setting of the deployment, not a property of the vendor's link.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Id The job's id, prefixed `vid_`
+	Id string `json:"id"`
+
+	// Model The catalog slug as it was at submission, snapshotted — the row stays readable after the model is renamed or removed
+	Model          string  `json:"model"`
+	N              *int    `json:"n,omitempty"`
+	NegativePrompt *string `json:"negative_prompt,omitempty"`
+	Progress       *int    `json:"progress,omitempty"`
+
+	// Prompt What was asked for
+	Prompt     *string        `json:"prompt,omitempty"`
+	Resolution *string        `json:"resolution,omitempty"`
+	Status     VideoJobStatus `json:"status"`
+
+	// SubmittedAt When the upstream accepted it. Null while the hold exists but nothing has been sent.
+	SubmittedAt *time.Time `json:"submitted_at,omitempty"`
+	TerminalAt  *time.Time `json:"terminal_at,omitempty"`
+}
+
+// VideoJobBilledUnit Which unit `billed_units` counts. Empty before the job reaches a terminal state.
+type VideoJobBilledUnit string
+
+// VideoJobCancel How far this job can still be stopped, carried on the row so that the interface can decide whether to offer a stop button rather than offering one that fails. It is the model's declared capability, not a promise about this instant — a `queued_only` job that has started generating still refuses.
+type VideoJobCancel string
+
+// VideoJobStatus defines model for VideoJob.Status.
+type VideoJobStatus string
 
 // Cursor defines model for Cursor.
 type Cursor = string
@@ -515,6 +859,23 @@ type ExportUsageCSVParams struct {
 // ExportUsageCSVParamsGranularity defines parameters for ExportUsageCSV.
 type ExportUsageCSVParamsGranularity string
 
+// ListVideoJobsParams defines parameters for ListVideoJobs.
+type ListVideoJobsParams struct {
+	Status *ListVideoJobsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+	Model  *string                    `form:"model,omitempty" json:"model,omitempty"`
+	From   *time.Time                 `form:"from,omitempty" json:"from,omitempty"`
+	To     *time.Time                 `form:"to,omitempty" json:"to,omitempty"`
+
+	// Cursor Where to resume from — the previous response's `next_cursor`
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit Rows per page
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListVideoJobsParamsStatus defines parameters for ListVideoJobs.
+type ListVideoJobsParamsStatus string
+
 // CreateOrgProviderKeyJSONRequestBody defines body for CreateOrgProviderKey for application/json ContentType.
 type CreateOrgProviderKeyJSONRequestBody CreateOrgProviderKeyJSONBody
 
@@ -553,6 +914,21 @@ type ServerInterface interface {
 	// ExportUsageCSV Export usage as CSV, with the same filters as /usage
 	// (GET /orgs/{org_id}/usage.csv)
 	ExportUsageCSV(w http.ResponseWriter, r *http.Request, orgId OrgID, params ExportUsageCSVParams)
+	// ListVideoJobs Video jobs, filterable and cursor-paginated
+	// (GET /orgs/{org_id}/videos)
+	ListVideoJobs(w http.ResponseWriter, r *http.Request, orgId OrgID, params ListVideoJobsParams)
+	// DeleteVideoJob Delete a finished job and the video it holds
+	// (DELETE /orgs/{org_id}/videos/{video_id})
+	DeleteVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string)
+	// GetVideoJob One video job
+	// (GET /orgs/{org_id}/videos/{video_id})
+	GetVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string)
+	// CancelVideoJob Stop a running job; nothing is charged for it
+	// (POST /orgs/{org_id}/videos/{video_id}/cancel)
+	CancelVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string)
+	// GetVideoJobContent The video itself
+	// (GET /orgs/{org_id}/videos/{video_id}/content)
+	GetVideoJobContent(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -616,6 +992,36 @@ func (_ Unimplemented) GetUsage(w http.ResponseWriter, r *http.Request, orgId Or
 // ExportUsageCSV Export usage as CSV, with the same filters as /usage
 // (GET /orgs/{org_id}/usage.csv)
 func (_ Unimplemented) ExportUsageCSV(w http.ResponseWriter, r *http.Request, orgId OrgID, params ExportUsageCSVParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListVideoJobs Video jobs, filterable and cursor-paginated
+// (GET /orgs/{org_id}/videos)
+func (_ Unimplemented) ListVideoJobs(w http.ResponseWriter, r *http.Request, orgId OrgID, params ListVideoJobsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DeleteVideoJob Delete a finished job and the video it holds
+// (DELETE /orgs/{org_id}/videos/{video_id})
+func (_ Unimplemented) DeleteVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetVideoJob One video job
+// (GET /orgs/{org_id}/videos/{video_id})
+func (_ Unimplemented) GetVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CancelVideoJob Stop a running job; nothing is charged for it
+// (POST /orgs/{org_id}/videos/{video_id}/cancel)
+func (_ Unimplemented) CancelVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetVideoJobContent The video itself
+// (GET /orgs/{org_id}/videos/{video_id}/content)
+func (_ Unimplemented) GetVideoJobContent(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1305,6 +1711,253 @@ func (siw *ServerInterfaceWrapper) ExportUsageCSV(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// ListVideoJobs operation middleware
+func (siw *ServerInterfaceWrapper) ListVideoJobs(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "org_id" -------------
+	var orgId OrgID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "org_id", chi.URLParam(r, "org_id"), &orgId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "org_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListVideoJobsParams
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "model" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "model", r.URL.Query(), &params.Model, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "model"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "model", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", r.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "from"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "from", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", r.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "to"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "to", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListVideoJobs(w, r, orgId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteVideoJob operation middleware
+func (siw *ServerInterfaceWrapper) DeleteVideoJob(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "org_id" -------------
+	var orgId OrgID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "org_id", chi.URLParam(r, "org_id"), &orgId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "org_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "video_id" -------------
+	var videoId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "video_id", chi.URLParam(r, "video_id"), &videoId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "video_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteVideoJob(w, r, orgId, videoId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetVideoJob operation middleware
+func (siw *ServerInterfaceWrapper) GetVideoJob(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "org_id" -------------
+	var orgId OrgID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "org_id", chi.URLParam(r, "org_id"), &orgId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "org_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "video_id" -------------
+	var videoId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "video_id", chi.URLParam(r, "video_id"), &videoId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "video_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetVideoJob(w, r, orgId, videoId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelVideoJob operation middleware
+func (siw *ServerInterfaceWrapper) CancelVideoJob(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "org_id" -------------
+	var orgId OrgID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "org_id", chi.URLParam(r, "org_id"), &orgId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "org_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "video_id" -------------
+	var videoId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "video_id", chi.URLParam(r, "video_id"), &videoId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "video_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelVideoJob(w, r, orgId, videoId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetVideoJobContent operation middleware
+func (siw *ServerInterfaceWrapper) GetVideoJobContent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "org_id" -------------
+	var orgId OrgID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "org_id", chi.URLParam(r, "org_id"), &orgId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "org_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "video_id" -------------
+	var videoId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "video_id", chi.URLParam(r, "video_id"), &videoId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "video_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetVideoJobContent(w, r, orgId, videoId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1447,6 +2100,21 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/orgs/{org_id}/provider-keys/{key_id}/test", wrapper.TestOrgProviderKey)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/orgs/{org_id}/videos", wrapper.ListVideoJobs)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/orgs/{org_id}/videos/{video_id}", wrapper.DeleteVideoJob)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/orgs/{org_id}/videos/{video_id}", wrapper.GetVideoJob)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/orgs/{org_id}/videos/{video_id}/cancel", wrapper.CancelVideoJob)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/orgs/{org_id}/videos/{video_id}/content", wrapper.GetVideoJobContent)
 	})
 
 	return r
@@ -1947,6 +2615,254 @@ func (response ExportUsageCSVdefaultApplicationProblemPlusJSONResponse) VisitExp
 	return err
 }
 
+type ListVideoJobsRequestObject struct {
+	OrgId  OrgID `json:"org_id"`
+	Params ListVideoJobsParams
+}
+
+type ListVideoJobsResponseObject interface {
+	VisitListVideoJobsResponse(w http.ResponseWriter) error
+}
+
+type ListVideoJobs200JSONResponse struct {
+	Items []VideoJob `json:"items"`
+
+	// NextCursor Null when there are no more pages
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+func (response ListVideoJobs200JSONResponse) VisitListVideoJobsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListVideoJobsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	Headers    ProblemResponseHeaders
+	StatusCode int
+}
+
+func (response ListVideoJobsdefaultApplicationProblemPlusJSONResponse) VisitListVideoJobsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	if response.Headers.XRequestId != nil {
+		w.Header().Set("X-Request-Id", fmt.Sprint(*response.Headers.XRequestId))
+	}
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteVideoJobRequestObject struct {
+	OrgId   OrgID  `json:"org_id"`
+	VideoId string `json:"video_id"`
+}
+
+type DeleteVideoJobResponseObject interface {
+	VisitDeleteVideoJobResponse(w http.ResponseWriter) error
+}
+
+type DeleteVideoJob200JSONResponse struct {
+	Deleted bool   `json:"deleted"`
+	Id      string `json:"id"`
+}
+
+func (response DeleteVideoJob200JSONResponse) VisitDeleteVideoJobResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteVideoJobdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	Headers    ProblemResponseHeaders
+	StatusCode int
+}
+
+func (response DeleteVideoJobdefaultApplicationProblemPlusJSONResponse) VisitDeleteVideoJobResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	if response.Headers.XRequestId != nil {
+		w.Header().Set("X-Request-Id", fmt.Sprint(*response.Headers.XRequestId))
+	}
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetVideoJobRequestObject struct {
+	OrgId   OrgID  `json:"org_id"`
+	VideoId string `json:"video_id"`
+}
+
+type GetVideoJobResponseObject interface {
+	VisitGetVideoJobResponse(w http.ResponseWriter) error
+}
+
+type GetVideoJob200JSONResponse VideoJob
+
+func (response GetVideoJob200JSONResponse) VisitGetVideoJobResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetVideoJobdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	Headers    ProblemResponseHeaders
+	StatusCode int
+}
+
+func (response GetVideoJobdefaultApplicationProblemPlusJSONResponse) VisitGetVideoJobResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	if response.Headers.XRequestId != nil {
+		w.Header().Set("X-Request-Id", fmt.Sprint(*response.Headers.XRequestId))
+	}
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelVideoJobRequestObject struct {
+	OrgId   OrgID  `json:"org_id"`
+	VideoId string `json:"video_id"`
+}
+
+type CancelVideoJobResponseObject interface {
+	VisitCancelVideoJobResponse(w http.ResponseWriter) error
+}
+
+type CancelVideoJob200JSONResponse VideoJob
+
+func (response CancelVideoJob200JSONResponse) VisitCancelVideoJobResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelVideoJobdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	Headers    ProblemResponseHeaders
+	StatusCode int
+}
+
+func (response CancelVideoJobdefaultApplicationProblemPlusJSONResponse) VisitCancelVideoJobResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	if response.Headers.XRequestId != nil {
+		w.Header().Set("X-Request-Id", fmt.Sprint(*response.Headers.XRequestId))
+	}
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetVideoJobContentRequestObject struct {
+	OrgId   OrgID  `json:"org_id"`
+	VideoId string `json:"video_id"`
+}
+
+type GetVideoJobContentResponseObject interface {
+	VisitGetVideoJobContentResponse(w http.ResponseWriter) error
+}
+
+type GetVideoJobContent200Videomp4Response struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response GetVideoJobContent200Videomp4Response) VisitGetVideoJobContentResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "video/mp4")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetVideoJobContent410ApplicationProblemPlusJSONResponse Problem
+
+func (response GetVideoJobContent410ApplicationProblemPlusJSONResponse) VisitGetVideoJobContentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(410)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetVideoJobContentdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	Headers    ProblemResponseHeaders
+	StatusCode int
+}
+
+func (response GetVideoJobContentdefaultApplicationProblemPlusJSONResponse) VisitGetVideoJobContentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	if response.Headers.XRequestId != nil {
+		w.Header().Set("X-Request-Id", fmt.Sprint(*response.Headers.XRequestId))
+	}
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// ListRequestLogs Request log, filterable and cursor-paginated
@@ -1979,6 +2895,21 @@ type StrictServerInterface interface {
 	// ExportUsageCSV Export usage as CSV, with the same filters as /usage
 	// (GET /orgs/{org_id}/usage.csv)
 	ExportUsageCSV(ctx context.Context, request ExportUsageCSVRequestObject) (ExportUsageCSVResponseObject, error)
+	// ListVideoJobs Video jobs, filterable and cursor-paginated
+	// (GET /orgs/{org_id}/videos)
+	ListVideoJobs(ctx context.Context, request ListVideoJobsRequestObject) (ListVideoJobsResponseObject, error)
+	// DeleteVideoJob Delete a finished job and the video it holds
+	// (DELETE /orgs/{org_id}/videos/{video_id})
+	DeleteVideoJob(ctx context.Context, request DeleteVideoJobRequestObject) (DeleteVideoJobResponseObject, error)
+	// GetVideoJob One video job
+	// (GET /orgs/{org_id}/videos/{video_id})
+	GetVideoJob(ctx context.Context, request GetVideoJobRequestObject) (GetVideoJobResponseObject, error)
+	// CancelVideoJob Stop a running job; nothing is charged for it
+	// (POST /orgs/{org_id}/videos/{video_id}/cancel)
+	CancelVideoJob(ctx context.Context, request CancelVideoJobRequestObject) (CancelVideoJobResponseObject, error)
+	// GetVideoJobContent The video itself
+	// (GET /orgs/{org_id}/videos/{video_id}/content)
+	GetVideoJobContent(ctx context.Context, request GetVideoJobContentRequestObject) (GetVideoJobContentResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -2296,6 +3227,141 @@ func (sh *strictHandler) ExportUsageCSV(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ExportUsageCSVResponseObject); ok {
 		if err := validResponse.VisitExportUsageCSVResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListVideoJobs operation middleware
+func (sh *strictHandler) ListVideoJobs(w http.ResponseWriter, r *http.Request, orgId OrgID, params ListVideoJobsParams) {
+	var request ListVideoJobsRequestObject
+
+	request.OrgId = orgId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListVideoJobs(ctx, request.(ListVideoJobsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListVideoJobs")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListVideoJobsResponseObject); ok {
+		if err := validResponse.VisitListVideoJobsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteVideoJob operation middleware
+func (sh *strictHandler) DeleteVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string) {
+	var request DeleteVideoJobRequestObject
+
+	request.OrgId = orgId
+	request.VideoId = videoId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteVideoJob(ctx, request.(DeleteVideoJobRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteVideoJob")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteVideoJobResponseObject); ok {
+		if err := validResponse.VisitDeleteVideoJobResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetVideoJob operation middleware
+func (sh *strictHandler) GetVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string) {
+	var request GetVideoJobRequestObject
+
+	request.OrgId = orgId
+	request.VideoId = videoId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetVideoJob(ctx, request.(GetVideoJobRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetVideoJob")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetVideoJobResponseObject); ok {
+		if err := validResponse.VisitGetVideoJobResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelVideoJob operation middleware
+func (sh *strictHandler) CancelVideoJob(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string) {
+	var request CancelVideoJobRequestObject
+
+	request.OrgId = orgId
+	request.VideoId = videoId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelVideoJob(ctx, request.(CancelVideoJobRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelVideoJob")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelVideoJobResponseObject); ok {
+		if err := validResponse.VisitCancelVideoJobResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetVideoJobContent operation middleware
+func (sh *strictHandler) GetVideoJobContent(w http.ResponseWriter, r *http.Request, orgId OrgID, videoId string) {
+	var request GetVideoJobContentRequestObject
+
+	request.OrgId = orgId
+	request.VideoId = videoId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetVideoJobContent(ctx, request.(GetVideoJobContentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetVideoJobContent")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetVideoJobContentResponseObject); ok {
+		if err := validResponse.VisitGetVideoJobContentResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

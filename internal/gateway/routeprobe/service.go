@@ -56,8 +56,9 @@ const (
 	StatusUnsupported = "unsupported"
 	StatusFailed      = "failed"
 
-	SourceProbe    = "probe"
-	SourceOperator = "operator"
+	// The other source, "operator", has no constant here: every operator verdict
+	// is written by catalog.sql, which cannot reference a Go identifier anyway.
+	SourceProbe = "probe"
 )
 
 // Seed writes the unverified rows a route has on a provider that speaks the
@@ -104,6 +105,29 @@ func Enqueue(
 	}
 	if _, err := client.InsertTx(ctx, tx, Args{RouteID: uuid.UUID(routeID.Bytes)}, nil); err != nil {
 		return fmt.Errorf("routeprobe: enqueue probe job: %w", err)
+	}
+	return markEnqueued(ctx, q, routeID, nil)
+}
+
+// markEnqueued records that a probe of these endpoints is in flight, so the
+// interface can say so and stop offering to buy a second one.
+//
+// A nil endpoint list means the job will probe every automatically probed
+// endpoint, which is the worker's own rule and is expressed in SQL through the
+// stored `probe_mode` column rather than restated here.
+//
+// Failing to mark is a warning, never an error: the job is already enqueued,
+// and refusing the write that enqueued it because a display field could not be
+// set would trade a real outcome for a cosmetic one.
+func markEnqueued(ctx context.Context, q *gwdb.Queries, routeID pgtype.UUID, endpoints []string) error {
+	if endpoints == nil {
+		endpoints = []string{}
+	}
+	if err := q.MarkRouteProbesEnqueued(ctx, gwdb.MarkRouteProbesEnqueuedParams{
+		RouteID: routeID, Endpoints: endpoints,
+	}); err != nil {
+		slog.WarnContext(ctx, "routeprobe: failed to mark the probe as in flight; it still runs",
+			"route_id", uuid.UUID(routeID.Bytes), "error", err)
 	}
 	return nil
 }
@@ -193,7 +217,9 @@ func (s *Service) Request(ctx context.Context, routeID pgtype.UUID, endpoint str
 		if err != nil {
 			slog.WarnContext(ctx, "routeprobe: failed to request a probe after an upstream 404",
 				"route_id", uuid.UUID(routeID.Bytes), "endpoint", endpoint, "error", err)
+			return
 		}
+		_ = markEnqueued(ctx, s.q, routeID, []string{endpoint})
 	}()
 }
 
@@ -243,7 +269,9 @@ func (s *Service) EnqueueProviderRoutes(ctx context.Context, providerID pgtype.U
 		if _, err := s.river.Insert(ctx, Args{RouteID: uuid.UUID(id.Bytes)}, nil); err != nil {
 			slog.WarnContext(ctx, "routeprobe: failed to enqueue a probe after a key was added",
 				"route_id", uuid.UUID(id.Bytes), "error", err)
+			continue
 		}
+		_ = markEnqueued(ctx, s.q, id, nil)
 	}
 }
 
@@ -283,7 +311,7 @@ func (s *Service) ClearOverride(ctx context.Context, routeID pgtype.UUID, endpoi
 	if _, err := s.river.Insert(ctx, Args{RouteID: uuid.UUID(routeID.Bytes), Endpoints: []string{endpoint}}, nil); err != nil {
 		return fmt.Errorf("routeprobe: enqueue the probe after clearing the override: %w", err)
 	}
-	return nil
+	return markEnqueued(ctx, s.q, routeID, []string{endpoint})
 }
 
 // Probe asks for a probe of one route on the endpoints named (all of the
@@ -295,7 +323,7 @@ func (s *Service) Probe(ctx context.Context, routeID pgtype.UUID, endpoints []st
 	if _, err := s.river.Insert(ctx, Args{RouteID: uuid.UUID(routeID.Bytes), Endpoints: endpoints}, nil); err != nil {
 		return fmt.Errorf("routeprobe: enqueue the probe: %w", err)
 	}
-	return nil
+	return markEnqueued(ctx, s.q, routeID, endpoints)
 }
 
 // Worker sends one minimal request per endpoint a route is probed on.
@@ -322,6 +350,23 @@ func NewWorker(pool *pgxpool.Pool, box *crypto.Box, jobs *river.Client[pgx.Tx]) 
 
 func (w *Worker) Work(ctx context.Context, job *river.Job[Args]) error {
 	routeID := pgtype.UUID{Bytes: job.Args.RouteID, Valid: true}
+	// However this pass ends, nothing on this route is in flight afterwards.
+	// Each verdict already clears its own row as it lands -- that is what makes
+	// the badges stop one at a time -- and this catches what is left: an
+	// operator's row the upsert refused to touch, an endpoint skipped because
+	// the provider has no credential yet, a route deleted under the job.
+	//
+	// Detached from the job's context so that a cancelled or timed-out pass
+	// still clears: a marker that outlives its job is one an operator can never
+	// clear themselves, and the interface would refuse to let them ask again.
+	defer func() {
+		clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), requestTimeout)
+		defer cancel()
+		if err := w.q.ClearRouteProbesEnqueued(clearCtx, routeID); err != nil {
+			slog.WarnContext(clearCtx, "routeprobe: failed to clear the in-flight marker; the sweeper will",
+				"route_id", job.Args.RouteID, "error", err)
+		}
+	}()
 	r, err := w.q.RouteForProbe(ctx, routeID)
 	if err != nil {
 		// A deleted route means the job is stale, not failed. Returning an
@@ -344,7 +389,7 @@ func (w *Worker) Work(ctx context.Context, job *river.Job[Args]) error {
 		return fmt.Errorf("routeprobe: decrypt the key for probing: %w", err)
 	}
 	target := Target{
-		BaseURL: r.BaseUrl, Protocols: r.Protocols,
+		BaseURL: r.BaseUrl, Protocols: r.Protocols, Vendor: r.Vendor,
 		Headers: r.ProviderHeaders, Transport: r.ProviderTransport,
 	}
 	// The endpoint set is derived from the provider's protocols, the same
@@ -452,6 +497,16 @@ const (
 	// sweepBatch bounds one sweep; what it does not reach this hour it reaches
 	// the next.
 	sweepBatch = 500
+	// inFlightTTL is how long an in-flight marker may stand before the sweeper
+	// declares the job that set it dead.
+	//
+	// The worker clears its own marker however its pass ends, so a row still
+	// marked after this long means the process holding the job went away
+	// between marking and answering. Generously longer than any probe: this is
+	// a backstop, and clearing early would re-offer a probe that is still
+	// running -- on the endpoints that cost a real generation, that is the
+	// second charge the marker exists to prevent.
+	inFlightTTL = 2 * time.Hour
 )
 
 type SweepArgs struct{}
@@ -497,6 +552,19 @@ func (w *SweepWorker) Work(ctx context.Context, _ *river.Job[SweepArgs]) error {
 	}
 	if enqueued > 0 {
 		slog.InfoContext(ctx, "route probe sweep enqueued re-probes", "routes", enqueued, "verdicts", len(rows))
+	}
+	// Markers left by a worker that died. Without this they stand forever, and
+	// forever is the one duration an operator cannot wait out: the interface
+	// would never let them ask for that probe again.
+	stale, err := w.q.SweepStaleProbeEnqueued(ctx, pgtype.Timestamptz{
+		Time: time.Now().Add(-inFlightTTL), Valid: true,
+	})
+	if err != nil {
+		return fmt.Errorf("routeprobe: clear stale in-flight markers: %w", err)
+	}
+	if stale > 0 {
+		slog.WarnContext(ctx, "route probe sweep cleared in-flight markers left by a worker that never answered",
+			"rows", stale)
 	}
 	return nil
 }

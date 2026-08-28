@@ -70,11 +70,11 @@ function isActive(pathname: string, path: string): boolean {
  *
  * Three headings, and **no collapsible groups**. Those are two separate
  * decisions and only the second one is about size: a collapsible group costs a
- * click and buys back vertical space a nine-entry sidebar does not need, so
- * there are none. A heading, on the other hand, is free — and without them all
- * nine entries sat under "Gateway" while five of them (Requests, Usage,
- * Playground, API keys, Teams) are not gateway configuration. The reader was
- * being told something untrue by the only label on screen.
+ * click and buys back vertical space a sidebar this size does not need, so
+ * there are none. A heading, on the other hand, is free — and without them every
+ * entry sat under "Gateway" while several of them (Requests, Usage, API keys,
+ * Teams) are not gateway configuration. The reader was being told something
+ * untrue by the only label on screen.
  *
  * Order comes from `ADMIN_SECTIONS` and, within a section, from the registry
  * array. There is no second place either is written down.

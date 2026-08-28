@@ -110,6 +110,7 @@ const (
 	GatewayProviderProtocolsAnthropic GatewayProviderProtocols = "anthropic"
 	GatewayProviderProtocolsGemini    GatewayProviderProtocols = "gemini"
 	GatewayProviderProtocolsOpenai    GatewayProviderProtocols = "openai"
+	GatewayProviderProtocolsVideo     GatewayProviderProtocols = "video"
 )
 
 // Valid indicates whether the value is a known member of the GatewayProviderProtocols enum.
@@ -120,6 +121,8 @@ func (e GatewayProviderProtocols) Valid() bool {
 	case GatewayProviderProtocolsGemini:
 		return true
 	case GatewayProviderProtocolsOpenai:
+		return true
+	case GatewayProviderProtocolsVideo:
 		return true
 	default:
 		return false
@@ -170,6 +173,7 @@ const (
 	GatewayProviderInputProtocolsAnthropic GatewayProviderInputProtocols = "anthropic"
 	GatewayProviderInputProtocolsGemini    GatewayProviderInputProtocols = "gemini"
 	GatewayProviderInputProtocolsOpenai    GatewayProviderInputProtocols = "openai"
+	GatewayProviderInputProtocolsVideo     GatewayProviderInputProtocols = "video"
 )
 
 // Valid indicates whether the value is a known member of the GatewayProviderInputProtocols enum.
@@ -180,6 +184,8 @@ func (e GatewayProviderInputProtocols) Valid() bool {
 	case GatewayProviderInputProtocolsGemini:
 		return true
 	case GatewayProviderInputProtocolsOpenai:
+		return true
+	case GatewayProviderInputProtocolsVideo:
 		return true
 	default:
 		return false
@@ -253,11 +259,13 @@ const (
 	GatewayRouteProbeEndpointGeminiInteractions       GatewayRouteProbeEndpoint = "gemini_interactions"
 	GatewayRouteProbeEndpointGenerateContent          GatewayRouteProbeEndpoint = "generate_content"
 	GatewayRouteProbeEndpointImages                   GatewayRouteProbeEndpoint = "images"
+	GatewayRouteProbeEndpointImagesEdits              GatewayRouteProbeEndpoint = "images_edits"
 	GatewayRouteProbeEndpointMessages                 GatewayRouteProbeEndpoint = "messages"
 	GatewayRouteProbeEndpointMessagesCountTokens      GatewayRouteProbeEndpoint = "messages_count_tokens"
 	GatewayRouteProbeEndpointResponses                GatewayRouteProbeEndpoint = "responses"
 	GatewayRouteProbeEndpointResponsesCompact         GatewayRouteProbeEndpoint = "responses_compact"
 	GatewayRouteProbeEndpointResponsesInputTokens     GatewayRouteProbeEndpoint = "responses_input_tokens"
+	GatewayRouteProbeEndpointVideo                    GatewayRouteProbeEndpoint = "video"
 )
 
 // Valid indicates whether the value is a known member of the GatewayRouteProbeEndpoint enum.
@@ -279,6 +287,8 @@ func (e GatewayRouteProbeEndpoint) Valid() bool {
 		return true
 	case GatewayRouteProbeEndpointImages:
 		return true
+	case GatewayRouteProbeEndpointImagesEdits:
+		return true
 	case GatewayRouteProbeEndpointMessages:
 		return true
 	case GatewayRouteProbeEndpointMessagesCountTokens:
@@ -288,6 +298,8 @@ func (e GatewayRouteProbeEndpoint) Valid() bool {
 	case GatewayRouteProbeEndpointResponsesCompact:
 		return true
 	case GatewayRouteProbeEndpointResponsesInputTokens:
+		return true
+	case GatewayRouteProbeEndpointVideo:
 		return true
 	default:
 		return false
@@ -507,6 +519,8 @@ const (
 	AudioOutput ModelPriceDimensionRateBucket = "audio_output"
 	CacheRead   ModelPriceDimensionRateBucket = "cache_read"
 	CacheWrite  ModelPriceDimensionRateBucket = "cache_write"
+	ImageInput  ModelPriceDimensionRateBucket = "image_input"
+	ImageOutput ModelPriceDimensionRateBucket = "image_output"
 	Input       ModelPriceDimensionRateBucket = "input"
 	Output      ModelPriceDimensionRateBucket = "output"
 )
@@ -522,6 +536,10 @@ func (e ModelPriceDimensionRateBucket) Valid() bool {
 		return true
 	case CacheWrite:
 		return true
+	case ImageInput:
+		return true
+	case ImageOutput:
+		return true
 	case Input:
 		return true
 	case Output:
@@ -533,19 +551,82 @@ func (e ModelPriceDimensionRateBucket) Valid() bool {
 
 // Defines values for ModelPriceDimensionRateServiceTier.
 const (
-	Batch    ModelPriceDimensionRateServiceTier = "batch"
-	Priority ModelPriceDimensionRateServiceTier = "priority"
-	Standard ModelPriceDimensionRateServiceTier = "standard"
+	ModelPriceDimensionRateServiceTierBatch    ModelPriceDimensionRateServiceTier = "batch"
+	ModelPriceDimensionRateServiceTierPriority ModelPriceDimensionRateServiceTier = "priority"
+	ModelPriceDimensionRateServiceTierStandard ModelPriceDimensionRateServiceTier = "standard"
 )
 
 // Valid indicates whether the value is a known member of the ModelPriceDimensionRateServiceTier enum.
 func (e ModelPriceDimensionRateServiceTier) Valid() bool {
 	switch e {
-	case Batch:
+	case ModelPriceDimensionRateServiceTierBatch:
 		return true
-	case Priority:
+	case ModelPriceDimensionRateServiceTierPriority:
 		return true
-	case Standard:
+	case ModelPriceDimensionRateServiceTierStandard:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelPriceUnitRateAudio.
+const (
+	AudioAxisAny ModelPriceUnitRateAudio = ""
+	AudioAxisOff ModelPriceUnitRateAudio = "off"
+	AudioAxisOn  ModelPriceUnitRateAudio = "on"
+)
+
+// Valid indicates whether the value is a known member of the ModelPriceUnitRateAudio enum.
+func (e ModelPriceUnitRateAudio) Valid() bool {
+	switch e {
+	case AudioAxisAny:
+		return true
+	case AudioAxisOff:
+		return true
+	case AudioAxisOn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelPriceUnitRateServiceTier.
+const (
+	ModelPriceUnitRateServiceTierBatch    ModelPriceUnitRateServiceTier = "batch"
+	ModelPriceUnitRateServiceTierPriority ModelPriceUnitRateServiceTier = "priority"
+	ModelPriceUnitRateServiceTierStandard ModelPriceUnitRateServiceTier = "standard"
+)
+
+// Valid indicates whether the value is a known member of the ModelPriceUnitRateServiceTier enum.
+func (e ModelPriceUnitRateServiceTier) Valid() bool {
+	switch e {
+	case ModelPriceUnitRateServiceTierBatch:
+		return true
+	case ModelPriceUnitRateServiceTierPriority:
+		return true
+	case ModelPriceUnitRateServiceTierStandard:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelPriceUnitRateUnit.
+const (
+	UnitCall   ModelPriceUnitRateUnit = "call"
+	UnitImage  ModelPriceUnitRateUnit = "image"
+	UnitSecond ModelPriceUnitRateUnit = "second"
+)
+
+// Valid indicates whether the value is a known member of the ModelPriceUnitRateUnit enum.
+func (e ModelPriceUnitRateUnit) Valid() bool {
+	switch e {
+	case UnitCall:
+		return true
+	case UnitImage:
+		return true
+	case UnitSecond:
 		return true
 	default:
 		return false
@@ -588,6 +669,27 @@ func (e ModelPricingResourceBillingMode) Valid() bool {
 	}
 }
 
+// Defines values for ModelSuggestionSource.
+const (
+	Seed     ModelSuggestionSource = "seed"
+	Upstream ModelSuggestionSource = "upstream"
+	Vendor   ModelSuggestionSource = "vendor"
+)
+
+// Valid indicates whether the value is a known member of the ModelSuggestionSource enum.
+func (e ModelSuggestionSource) Valid() bool {
+	switch e {
+	case Seed:
+		return true
+	case Upstream:
+		return true
+	case Vendor:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OrgGatewaySettingsTierStatus.
 const (
 	OrgGatewaySettingsTierStatusActive   OrgGatewaySettingsTierStatus = "active"
@@ -600,6 +702,24 @@ func (e OrgGatewaySettingsTierStatus) Valid() bool {
 	case OrgGatewaySettingsTierStatusActive:
 		return true
 	case OrgGatewaySettingsTierStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PricingFamily.
+const (
+	PricingFamilyTokens PricingFamily = "tokens"
+	PricingFamilyUnits  PricingFamily = "units"
+)
+
+// Valid indicates whether the value is a known member of the PricingFamily enum.
+func (e PricingFamily) Valid() bool {
+	switch e {
+	case PricingFamilyTokens:
+		return true
+	case PricingFamilyUnits:
 		return true
 	default:
 		return false
@@ -670,6 +790,7 @@ const (
 	NegativeMargin         PricingRiskCode = "negative_margin"
 	PaidAllZero            PricingRiskCode = "paid_all_zero"
 	SwitchToFree           PricingRiskCode = "switch_to_free"
+	UnitsWithoutRates      PricingRiskCode = "units_without_rates"
 	UnknownProcurementCost PricingRiskCode = "unknown_procurement_cost"
 	UnverifiedPriceSource  PricingRiskCode = "unverified_price_source"
 )
@@ -692,6 +813,8 @@ func (e PricingRiskCode) Valid() bool {
 	case PaidAllZero:
 		return true
 	case SwitchToFree:
+		return true
+	case UnitsWithoutRates:
 		return true
 	case UnknownProcurementCost:
 		return true
@@ -732,6 +855,66 @@ func (e ReferencePriceImportResultOutcome) Valid() bool {
 	}
 }
 
+// Defines values for VideoEnvelopeAudio.
+const (
+	VideoEnvelopeAudioAlways   VideoEnvelopeAudio = "always"
+	VideoEnvelopeAudioNever    VideoEnvelopeAudio = "never"
+	VideoEnvelopeAudioOptional VideoEnvelopeAudio = "optional"
+)
+
+// Valid indicates whether the value is a known member of the VideoEnvelopeAudio enum.
+func (e VideoEnvelopeAudio) Valid() bool {
+	switch e {
+	case VideoEnvelopeAudioAlways:
+		return true
+	case VideoEnvelopeAudioNever:
+		return true
+	case VideoEnvelopeAudioOptional:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VideoEnvelopeCancel.
+const (
+	VideoEnvelopeCancelAnytime    VideoEnvelopeCancel = "anytime"
+	VideoEnvelopeCancelNever      VideoEnvelopeCancel = "never"
+	VideoEnvelopeCancelQueuedOnly VideoEnvelopeCancel = "queued_only"
+)
+
+// Valid indicates whether the value is a known member of the VideoEnvelopeCancel enum.
+func (e VideoEnvelopeCancel) Valid() bool {
+	switch e {
+	case VideoEnvelopeCancelAnytime:
+		return true
+	case VideoEnvelopeCancelNever:
+		return true
+	case VideoEnvelopeCancelQueuedOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VideoEnvelopeSource.
+const (
+	Declared VideoEnvelopeSource = "declared"
+	Observed VideoEnvelopeSource = "observed"
+)
+
+// Valid indicates whether the value is a known member of the VideoEnvelopeSource enum.
+func (e VideoEnvelopeSource) Valid() bool {
+	switch e {
+	case Declared:
+		return true
+	case Observed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateGatewayProviderKeyJSONBodyStatus.
 const (
 	UpdateGatewayProviderKeyJSONBodyStatusActive   UpdateGatewayProviderKeyJSONBodyStatus = "active"
@@ -760,11 +943,13 @@ const (
 	TestGatewayProviderJSONBodyEndpointGeminiInteractions       TestGatewayProviderJSONBodyEndpoint = "gemini_interactions"
 	TestGatewayProviderJSONBodyEndpointGenerateContent          TestGatewayProviderJSONBodyEndpoint = "generate_content"
 	TestGatewayProviderJSONBodyEndpointImages                   TestGatewayProviderJSONBodyEndpoint = "images"
+	TestGatewayProviderJSONBodyEndpointImagesEdits              TestGatewayProviderJSONBodyEndpoint = "images_edits"
 	TestGatewayProviderJSONBodyEndpointMessages                 TestGatewayProviderJSONBodyEndpoint = "messages"
 	TestGatewayProviderJSONBodyEndpointMessagesCountTokens      TestGatewayProviderJSONBodyEndpoint = "messages_count_tokens"
 	TestGatewayProviderJSONBodyEndpointResponses                TestGatewayProviderJSONBodyEndpoint = "responses"
 	TestGatewayProviderJSONBodyEndpointResponsesCompact         TestGatewayProviderJSONBodyEndpoint = "responses_compact"
 	TestGatewayProviderJSONBodyEndpointResponsesInputTokens     TestGatewayProviderJSONBodyEndpoint = "responses_input_tokens"
+	TestGatewayProviderJSONBodyEndpointVideo                    TestGatewayProviderJSONBodyEndpoint = "video"
 )
 
 // Valid indicates whether the value is a known member of the TestGatewayProviderJSONBodyEndpoint enum.
@@ -786,6 +971,8 @@ func (e TestGatewayProviderJSONBodyEndpoint) Valid() bool {
 		return true
 	case TestGatewayProviderJSONBodyEndpointImages:
 		return true
+	case TestGatewayProviderJSONBodyEndpointImagesEdits:
+		return true
 	case TestGatewayProviderJSONBodyEndpointMessages:
 		return true
 	case TestGatewayProviderJSONBodyEndpointMessagesCountTokens:
@@ -795,6 +982,8 @@ func (e TestGatewayProviderJSONBodyEndpoint) Valid() bool {
 	case TestGatewayProviderJSONBodyEndpointResponsesCompact:
 		return true
 	case TestGatewayProviderJSONBodyEndpointResponsesInputTokens:
+		return true
+	case TestGatewayProviderJSONBodyEndpointVideo:
 		return true
 	default:
 		return false
@@ -806,6 +995,9 @@ type DecimalUSDPerCall = string
 
 // DecimalUSDPerM USD per million tokens. At most 9 decimal places; exponents, negatives and floating-point transport are not allowed. Configuration input is capped at 92233720.368547758 so that the largest model price combined with a plan multiplier remains exactly representable.
 type DecimalUSDPerM = string
+
+// DecimalUSDPerUnit USD per billing unit -- one second of output, or one generation. Per *unit*, never per million of them: the token rates beside this one are quoted per million and are divided by a million on the way in, and a rate that travelled through that conversion would be wrong by a factor of a million. The unit belongs to the schema, not to a convention somebody has to remember (ADR-0220).
+type DecimalUSDPerUnit = string
 
 // DiscoverModelsResult defines model for DiscoverModelsResult.
 type DiscoverModelsResult struct {
@@ -845,6 +1037,17 @@ type DiscoveredModel struct {
 	// State routed — already served; mappable — a route can be created in one step; unpriced — present locally but with no price; unknown — not present locally
 	State DiscoveredModelState `json:"state"`
 
+	// Suggestion The catalog entry an unknown upstream model would create. Present only when the state
+	// is `unknown`, and only when one can actually be derived — it is absent, rather than
+	// blank, whenever nothing here can name the model. On Azure, Bedrock and Vertex the upstream
+	// name is a deployment name or an ARN with no creator in it, and a prefix invented for those
+	// would be a guess wearing the shape of an answer, for a slug that can never be changed
+	// afterwards.
+	//
+	// Every field is a starting point for a person to edit, never a decision. What the source
+	// says is how much is actually known behind it.
+	Suggestion *ModelSuggestion `json:"suggestion,omitempty"`
+
 	// UpstreamModel The model id as reported upstream
 	UpstreamModel string `json:"upstream_model"`
 }
@@ -866,6 +1069,12 @@ type GatewayHealth struct {
 
 	// RetryBudget Usage of the global retry budget, which is capped at 10%
 	RetryBudget GatewayRetryBudget `json:"retry_budget"`
+
+	// StuckMoney Asynchronous jobs that reached a terminal state while their reservation never moved — settled neither onto the customer nor back off them.
+	// Every row is a customer either overcharged or not charged at all, so this is a repair queue rather than a statistic.
+	// Absent when the count could not be read; that is not the same as zero, and the interface must not render it as zero.
+	// It carries no amount on purpose: a hold is denominated in its organisation's wallet currency, so one total across organisations would be a cross-currency addition, and the wallet table is not readable from this module at all.
+	StuckMoney *GatewayStuckMoney `json:"stuck_money,omitempty"`
 
 	// SwitchCounts Current counts for the second and third levels of the kill switch, counted by the server across the whole table.
 	// The interface must not count them from the catalog lists instead: those lists are capped, at 200 providers and 500 models,
@@ -924,8 +1133,12 @@ type GatewayModel struct {
 	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
 
 	// Metadata Additional metadata. `price_sources` is not an accepted key and its presence is rejected, because prices are never written through metadata.
-	Metadata       *map[string]interface{} `json:"metadata,omitempty"`
-	PriceUpdatedAt *time.Time              `json:"price_updated_at,omitempty"`
+	Metadata *map[string]interface{} `json:"metadata,omitempty"`
+
+	// OutputModalities What the model produces. Declared rather than observed: no probe can report whether the bytes coming back are words or pixels, and it cannot be derived from the endpoint set either, because Gemini serves its image models on the same `generate_content` endpoint as its text models.
+	// An array because a model may genuinely produce more than one — Gemini's image models return text and image parts in the same response.
+	OutputModalities OutputModalities `json:"output_modalities"`
+	PriceUpdatedAt   *time.Time       `json:"price_updated_at,omitempty"`
 
 	// PriceVerified Whether a person has confirmed this price against the vendor's own list, which is what the pricing editor's checked-on date records.
 	//
@@ -968,6 +1181,10 @@ type GatewayModelInput struct {
 
 	// MaxOutputTokens The model's default output cap, used for the pre-authorisation estimate when a request carries no max_tokens
 	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
+
+	// OutputModalities What the model produces. Declared rather than observed: no probe can report whether the bytes coming back are words or pixels, and it cannot be derived from the endpoint set either, because Gemini serves its image models on the same `generate_content` endpoint as its text models.
+	// An array because a model may genuinely produce more than one — Gemini's image models return text and image parts in the same response.
+	OutputModalities *OutputModalities `json:"output_modalities,omitempty"`
 
 	// Slug The public model name, required at creation, for example "openai/gpt-5.4"
 	Slug       *string                      `json:"slug,omitempty"`
@@ -1232,6 +1449,11 @@ type GatewayRoute struct {
 	Headers *map[string]string `json:"headers,omitempty"`
 	Id      openapi_types.UUID `json:"id"`
 
+	// MaxImages The most images one request to this route can come back with. Empty means one.
+	//
+	// It is the image plane''s whole envelope, and what a per-image reservation is taken against: how many images a request produces is not knowable until it has been made, so the charge follows the response and the reservation has to cover the most it could have returned. Left at one, an organisation passes a budget check on the strength of one image and is then charged for however many the upstream chose to return.
+	MaxImages *int `json:"max_images,omitempty"`
+
 	// MaxOutputTokens This upstream's output limit override; empty means use the model's own value
 	MaxOutputTokens *int               `json:"max_output_tokens,omitempty"`
 	ModelId         openapi_types.UUID `json:"model_id"`
@@ -1259,7 +1481,14 @@ type GatewayRoute struct {
 	// Setting it true means this upstream does not honour the output limit in the request — one relay was measured returning 94 tokens for a request capped at 16.
 	// The pre-authorisation estimate then stops treating the request cap as an upper bound on cost; otherwise the credit guard stops working.
 	Quirks *map[string]interface{} `json:"quirks,omitempty"`
-	Weight int                     `json:"weight"`
+
+	// VideoEnvelope What one deployment of a video model accepts. It lives on the route rather than the model because the same model on two channels can accept different duration steps, and it is load-bearing: admission validates against the union of the candidate routes' envelopes and refuses outside it *before* any hold is taken (ADR-0221).
+	//
+	// Declared, not observed -- the one deliberate exception to "capability is observed". Answering "does this model accept a twelve-second clip" costs a twelve-second clip, and the value space is duration x resolution x aspect ratio x audio. What makes the exception safe is that neither direction of drift bills anyone wrongly: declaring too little refuses at admission having spent nothing, declaring too much ends in an upstream refusal, a failed job and a voided hold.
+	//
+	// Typed and closed rather than the free-form object the transport profile beside it is. That one is the server's to judge; this one decides whether money moves, and the schema is the only place its shape is stated.
+	VideoEnvelope *VideoEnvelope `json:"video_envelope,omitempty"`
+	Weight        int            `json:"weight"`
 }
 
 // GatewayRouteBatchCreate Create one route. `provider_id` is not here because it is a path parameter:
@@ -1355,9 +1584,18 @@ type GatewayRouteBatchItemResultOutcome string
 // wrong catalog entry. A caller renames and retries, or
 // switches to `model_id` to say explicitly which model to attach to.
 type GatewayRouteBatchNewModel struct {
-	DisplayName *string `json:"display_name,omitempty"`
+	// ContextWindow Omitted or zero leaves it unset, the same as creating the model from the catalog page. It is here so a model created while wiring a provider can be as complete as one created directly — otherwise every discovered model arrives with a zero window and has to be finished one at a time on its own page.
+	ContextWindow *int    `json:"context_window,omitempty"`
+	DisplayName   *string `json:"display_name,omitempty"`
 
-	// Slug The model's identity here. It cannot be changed once created, so the interface has to let someone check it first.
+	// MaxOutputTokens Omitted takes the same conservative default the catalog page applies, because an output cap of zero degrades the pre-authorisation estimate for requests that carry no max_tokens into an input-only one.
+	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
+
+	// OutputModalities What the model produces. Declared rather than observed: no probe can report whether the bytes coming back are words or pixels, and it cannot be derived from the endpoint set either, because Gemini serves its image models on the same `generate_content` endpoint as its text models.
+	// An array because a model may genuinely produce more than one — Gemini's image models return text and image parts in the same response.
+	OutputModalities *OutputModalities `json:"output_modalities,omitempty"`
+
+	// Slug The model's identity here. Written `<creator>/<name>`, lowercase, where the creator is who made the model rather than which provider serves it. It cannot be changed once created, so the interface has to let someone check it first, and a bare upstream name is refused rather than stored.
 	Slug string `json:"slug"`
 }
 
@@ -1376,6 +1614,11 @@ type GatewayRouteInput struct {
 	Enabled       *bool              `json:"enabled,omitempty"`
 	Headers       *map[string]string `json:"headers,omitempty"`
 
+	// MaxImages The most images one request to this route can come back with. Empty means one.
+	//
+	// It is the image plane''s whole envelope, and what a per-image reservation is taken against: how many images a request produces is not knowable until it has been made, so the charge follows the response and the reservation has to cover the most it could have returned. Left at one, an organisation passes a budget check on the strength of one image and is then charged for however many the upstream chose to return.
+	MaxImages *int `json:"max_images,omitempty"`
+
 	// MaxOutputTokens This upstream's output limit override; empty means use the model's own value
 	MaxOutputTokens *int                `json:"max_output_tokens,omitempty"`
 	Priority        *int                `json:"priority,omitempty"`
@@ -1386,7 +1629,12 @@ type GatewayRouteInput struct {
 	// Setting it true means this upstream does not honour the output limit in the request — one relay was measured returning 94 tokens for a request capped at 16.
 	// The pre-authorisation estimate then stops treating the request cap as an upper bound on cost; otherwise the credit guard stops working.
 	Quirks *map[string]interface{} `json:"quirks,omitempty"`
-	Weight *int                    `json:"weight,omitempty"`
+
+	// VideoEnvelope Supplied, it replaces the whole envelope; omitted, the existing one is kept. `source` inside it is ignored — the write path always records `declared`.
+	//
+	// **An empty object unconfigures the route**, which is how a route stops serving video. There is no null variant: the column is NOT NULL, so "no envelope" and "an envelope that declares nothing" are one stored state, and a second spelling of it would be one that quietly did nothing.
+	VideoEnvelope *VideoEnvelope `json:"video_envelope,omitempty"`
+	Weight        *int           `json:"weight,omitempty"`
 }
 
 // GatewayRouteProbe What is known about one endpoint of one route. This is the route's only
@@ -1419,11 +1667,16 @@ type GatewayRouteProbe struct {
 	Endpoint  GatewayRouteProbeEndpoint `json:"endpoint"`
 
 	// Error The upstream text, truncated and otherwise unaltered. It is the only clue separating a bad credential from a bad model name or an unsupported endpoint.
-	Error     *string                    `json:"error,omitempty"`
-	LatencyMs *int                       `json:"latency_ms,omitempty"`
-	ProbeMode GatewayRouteProbeProbeMode `json:"probe_mode"`
-	Source    GatewayRouteProbeSource    `json:"source"`
-	Status    GatewayRouteProbeStatus    `json:"status"`
+	Error     *string `json:"error,omitempty"`
+	LatencyMs *int    `json:"latency_ms,omitempty"`
+
+	// ProbeEnqueuedAt When a probe was queued, and null once its verdict has landed. It is a field of its own and not a fifth `status`, because `status` is the verdict and a re-probe must not erase the standing one: the catalogue publishes endpoints found `ok`, so a pending value living in `status` would take the route out of the catalogue for as long as the re-probe ran (ADR-0224).
+	//
+	// It is what lets the interface say "this is running" — which matters most on the endpoints that are never probed automatically, because each of those costs a real generation and the alternative to saying so is an operator paying for it twice.
+	ProbeEnqueuedAt *time.Time                 `json:"probe_enqueued_at,omitempty"`
+	ProbeMode       GatewayRouteProbeProbeMode `json:"probe_mode"`
+	Source          GatewayRouteProbeSource    `json:"source"`
+	Status          GatewayRouteProbeStatus    `json:"status"`
 
 	// StatusCode Upstream HTTP status; empty when the connection itself failed
 	StatusCode *int `json:"status_code,omitempty"`
@@ -1453,6 +1706,17 @@ type GatewayRouteProbeOverrideStatus string
 type GatewayRouteProbeRequest struct {
 	// Endpoints The endpoints to probe. Empty or absent means every endpoint the route is probed on automatically.
 	Endpoints *[]string `json:"endpoints,omitempty"`
+}
+
+// GatewayStuckMoney Asynchronous jobs that reached a terminal state while their reservation never moved — settled neither onto the customer nor back off them.
+// Every row is a customer either overcharged or not charged at all, so this is a repair queue rather than a statistic.
+// Absent when the count could not be read; that is not the same as zero, and the interface must not render it as zero.
+// It carries no amount on purpose: a hold is denominated in its organisation's wallet currency, so one total across organisations would be a cross-currency addition, and the wallet table is not readable from this module at all.
+type GatewayStuckMoney struct {
+	Jobs int64 `json:"jobs"`
+
+	// OldestTerminalAt Absent when nothing is stuck. How long the oldest one has been waiting is what separates a live incident from one stranded row.
+	OldestTerminalAt *time.Time `json:"oldest_terminal_at,omitempty"`
 }
 
 // GatewayTier defines model for GatewayTier.
@@ -1519,6 +1783,17 @@ type GatewayVendor struct {
 		Template bool   `json:"template"`
 		Url      string `json:"url"`
 	} `json:"base_urls"`
+
+	// Creator The creator segment of the catalog slug for the models this platform publishes as a first party — the `openai` of `openai/gpt-5.6-sol`.
+	//
+	// Absent for platforms and aggregators, and that absence carries information: they serve other
+	// people's models, so they cannot say who made one, and a prefix taken from the platform's own
+	// name would write the routing dimension into the catalog key.
+	//
+	// Distinct from `refdata_provider`, which says who prices the model, and from `model_id_example`,
+	// which says how the upstream spells it. Any two of the three agreeing is a coincidence: xAI
+	// creates `x-ai` models, is priced under `x-ai`, and is itself `xai`.
+	Creator *string `json:"creator,omitempty"`
 
 	// DefaultProtocols The subset the preset below is wired for: its base URL and transport
 	// profile serve these. A provider created without naming its protocols
@@ -1595,9 +1870,43 @@ type ModelPriceToolRate struct {
 	Tool           string            `json:"tool"`
 }
 
+// ModelPriceUnitRate One rate in the per-unit family. `resolution`, `audio` and `variant` are the axes a rate varies on, and an empty one means "this rate does not vary on that axis" and matches any request -- the opposite direction from the token rates, which walk *down* to a base rate. A model with one flat per-unit price is a single row with every axis empty.
+// Which axes carry meaning depends on the unit: a video rate varies on resolution and audio, an image rate on resolution (the requested size) and variant (the quality tier the upstream sells).
+type ModelPriceUnitRate struct {
+	// Audio Whether this rate is the one with sound or without; empty applies to both. Video only — an image rate leaves it empty.
+	Audio *ModelPriceUnitRateAudio `json:"audio,omitempty"`
+
+	// RateUsdPerUnit USD per billing unit -- one second of output, or one generation. Per *unit*, never per million of them: the token rates beside this one are quoted per million and are divided by a million on the way in, and a rate that travelled through that conversion would be wrong by a factor of a million. The unit belongs to the schema, not to a convention somebody has to remember (ADR-0220).
+	RateUsdPerUnit DecimalUSDPerUnit `json:"rate_usd_per_unit"`
+
+	// Resolution The output size this rate applies to; empty applies to every resolution
+	Resolution  *string                        `json:"resolution,omitempty"`
+	ServiceTier *ModelPriceUnitRateServiceTier `json:"service_tier,omitempty"`
+
+	// Unit `second` is per second of produced output. `image` is per produced image. `call` is per generation regardless of how many outputs it produced, for upstreams that sell prepaid generation packs rather than time.
+	// `image` and `call` count different things: a request for four images is four units on the first and one on the second.
+	Unit ModelPriceUnitRateUnit `json:"unit"`
+
+	// Variant A subdivision within the unit, such as the quality tier an image model sells. Empty applies to every variant.
+	Variant *string `json:"variant,omitempty"`
+}
+
+// ModelPriceUnitRateAudio Whether this rate is the one with sound or without; empty applies to both. Video only — an image rate leaves it empty.
+type ModelPriceUnitRateAudio string
+
+// ModelPriceUnitRateServiceTier defines model for ModelPriceUnitRate.ServiceTier.
+type ModelPriceUnitRateServiceTier string
+
+// ModelPriceUnitRateUnit `second` is per second of produced output. `image` is per produced image. `call` is per generation regardless of how many outputs it produced, for upstreams that sell prepaid generation packs rather than time.
+// `image` and `call` count different things: a request for four images is four units on the first and one on the second.
+type ModelPriceUnitRateUnit string
+
 // ModelPricingInput Saving takes effect immediately. The reason went from optional to required: the publication record used to carry
 // who changed it, when and why, and without it only the audit log can hold those — which is also the only place
 // the previous value can be read when rolling back.
+//
+// `official_rates` is required for the `tokens` family and refused for `units`: a per-second model has no token price, and
+// making the caller send four zeros to say so would push an invariant the schema cannot hold onto every client.
 type ModelPricingInput struct {
 	// AcknowledgedRisks Warning codes that have been seen and accepted. Blockers cannot be acknowledged: they mean incomplete data or
 	// a broken configuration, and acknowledging one would be accepting a bill that cannot be computed.
@@ -1610,13 +1919,21 @@ type ModelPricingInput struct {
 	DimensionRates *[]ModelPriceDimensionRate `json:"dimension_rates,omitempty"`
 
 	// OfficialRates The four editable prices. null means missing, which blocks a paid model from being enabled; the string "0" means explicitly free.
-	OfficialRates DraftTokenRatesUSDPerM `json:"official_rates"`
-	Reason        string                 `json:"reason"`
-	SourceName    string                 `json:"source_name"`
-	SourceUrl     *string                `json:"source_url,omitempty"`
+	OfficialRates *DraftTokenRatesUSDPerM `json:"official_rates,omitempty"`
+
+	// PricingFamily Which rates actually charge this model. `tokens` is the four-bucket family every text model uses. `units` bills by second or by generation and is what makes a video model representable at all: it never falls back to a token rate, because falling back would bill a clip at the price of a paragraph (ADR-0220).
+	//
+	// A `units` model has no token price -- not an unknown one, an absent one -- so its four token fields are stored as explicit zeros rather than nulls, and `official_rates` is not required on input for it.
+	PricingFamily *PricingFamily `json:"pricing_family,omitempty"`
+	Reason        string         `json:"reason"`
+	SourceName    string         `json:"source_name"`
+	SourceUrl     *string        `json:"source_url,omitempty"`
 
 	// ToolRates Supplied, it replaces the whole group; omitted, the existing values are kept
 	ToolRates *[]ModelPriceToolRate `json:"tool_rates,omitempty"`
+
+	// UnitRates Supplied, it replaces the whole group; omitted, the existing values are kept. A paid `units` model whose rates are explicitly emptied is refused with `units_without_rates`: it is a model that cannot be charged for, and admission would answer 503 to every request against it. Omitting the field is not the same instruction and is not refused.
+	UnitRates *[]ModelPriceUnitRate `json:"unit_rates,omitempty"`
 }
 
 // ModelPricingInputBillingMode defines model for ModelPricingInput.BillingMode.
@@ -1631,21 +1948,63 @@ type ModelPricingResource struct {
 	DimensionRates *[]ModelPriceDimensionRate       `json:"dimension_rates,omitempty"`
 	ModelId        openapi_types.UUID               `json:"model_id"`
 
-	// OfficialRates The four editable prices. null means missing, which blocks a paid model from being enabled; the string "0" means explicitly free.
+	// OfficialRates Absent on a `units` model. Its four token columns are stored as explicit zeros, and returning them would show a priced model as costing nothing per token — a true statement about a number that does not charge it.
 	OfficialRates *DraftTokenRatesUSDPerM `json:"official_rates,omitempty"`
 
 	// Priced Whether a price has been set. When false the price fields below are absent entirely, rather than being four zeros.
-	Priced      bool                  `json:"priced"`
-	PublicRates *TokenRatesUSDPerM    `json:"public_rates,omitempty"`
-	Reason      *string               `json:"reason,omitempty"`
-	SourceName  *string               `json:"source_name,omitempty"`
-	SourceUrl   *string               `json:"source_url,omitempty"`
-	ToolRates   *[]ModelPriceToolRate `json:"tool_rates,omitempty"`
-	UpdatedAt   *time.Time            `json:"updated_at,omitempty"`
+	Priced bool `json:"priced"`
+
+	// PricingFamily Which rates actually charge this model. `tokens` is the four-bucket family every text model uses. `units` bills by second or by generation and is what makes a video model representable at all: it never falls back to a token rate, because falling back would bill a clip at the price of a paragraph (ADR-0220).
+	//
+	// A `units` model has no token price -- not an unknown one, an absent one -- so its four token fields are stored as explicit zeros rather than nulls, and `official_rates` is not required on input for it.
+	PricingFamily *PricingFamily        `json:"pricing_family,omitempty"`
+	PublicRates   *TokenRatesUSDPerM    `json:"public_rates,omitempty"`
+	Reason        *string               `json:"reason,omitempty"`
+	SourceName    *string               `json:"source_name,omitempty"`
+	SourceUrl     *string               `json:"source_url,omitempty"`
+	ToolRates     *[]ModelPriceToolRate `json:"tool_rates,omitempty"`
+	UnitRates     *[]ModelPriceUnitRate `json:"unit_rates,omitempty"`
+	UpdatedAt     *time.Time            `json:"updated_at,omitempty"`
 }
 
 // ModelPricingResourceBillingMode defines model for ModelPricingResource.BillingMode.
 type ModelPricingResourceBillingMode string
+
+// ModelSuggestion The catalog entry an unknown upstream model would create. Present only when the state
+// is `unknown`, and only when one can actually be derived — it is absent, rather than
+// blank, whenever nothing here can name the model. On Azure, Bedrock and Vertex the upstream
+// name is a deployment name or an ARN with no creator in it, and a prefix invented for those
+// would be a guess wearing the shape of an answer, for a slug that can never be changed
+// afterwards.
+//
+// Every field is a starting point for a person to edit, never a decision. What the source
+// says is how much is actually known behind it.
+type ModelSuggestion struct {
+	// ContextWindow Zero when unknown, and also when the vendor publishes no limit — as for image models, which are reached on endpoints that state none
+	ContextWindow *int `json:"context_window,omitempty"`
+
+	// DisplayName Empty unless the seeded catalog names this model
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// ManualProbe This model is reachable only on an endpoint the gateway will not probe by itself (images), so it is not a routing candidate until an operator probes it or records a verdict. Creating it without saying so leaves an entry that looks finished and answers 404.
+	ManualProbe *bool `json:"manual_probe,omitempty"`
+
+	// MaxOutputTokens Zero when unknown, on the same terms as context_window
+	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
+
+	// OutputModalities What the model produces. Declared rather than observed: no probe can report whether the bytes coming back are words or pixels, and it cannot be derived from the endpoint set either, because Gemini serves its image models on the same `generate_content` endpoint as its text models.
+	// An array because a model may genuinely produce more than one — Gemini's image models return text and image parts in the same response.
+	OutputModalities *OutputModalities `json:"output_modalities,omitempty"`
+
+	// Slug The proposed `<creator>/<name>` slug
+	Slug string `json:"slug"`
+
+	// Source seed — the seeded catalog names this model, so the display name and both windows come from the vendor's own documentation; upstream — the upstream reports a two-part name already, as aggregators do, and it is used as it stands; vendor — the slug was assembled from the vendor's creator segment and the upstream name, which makes it correctly shaped and nothing more.
+	Source ModelSuggestionSource `json:"source"`
+}
+
+// ModelSuggestionSource seed — the seeded catalog names this model, so the display name and both windows come from the vendor's own documentation; upstream — the upstream reports a two-part name already, as aggregators do, and it is used as it stands; vendor — the slug was assembled from the vendor's creator segment and the upstream name, which makes it correctly shaped and nothing more.
+type ModelSuggestionSource string
 
 // OrgGatewaySettings defines model for OrgGatewaySettings.
 type OrgGatewaySettings struct {
@@ -1697,11 +2056,20 @@ type OrgPricingPlanAssignmentInput struct {
 	Reason        string              `json:"reason"`
 }
 
+// OutputModalities What the model produces. Declared rather than observed: no probe can report whether the bytes coming back are words or pixels, and it cannot be derived from the endpoint set either, because Gemini serves its image models on the same `generate_content` endpoint as its text models.
+// An array because a model may genuinely produce more than one — Gemini's image models return text and image parts in the same response.
+type OutputModalities = []string
+
 // PricingAdjustment defines model for PricingAdjustment.
 type PricingAdjustment struct {
 	// MultiplierBps In basis points — 10000 is the list price, 8000 a 20% discount, 12000 a 20% surcharge. Capped at ten times.
 	MultiplierBps int `json:"multiplier_bps"`
 }
+
+// PricingFamily Which rates actually charge this model. `tokens` is the four-bucket family every text model uses. `units` bills by second or by generation and is what makes a video model representable at all: it never falls back to a token rate, because falling back would bill a clip at the price of a paragraph (ADR-0220).
+//
+// A `units` model has no token price -- not an unknown one, an absent one -- so its four token fields are stored as explicit zeros rather than nulls, and `official_rates` is not required on input for it.
+type PricingFamily string
 
 // PricingPlan defines model for PricingPlan.
 type PricingPlan struct {
@@ -1892,6 +2260,58 @@ type TokenRatesUSDPerM struct {
 	Output DecimalUSDPerM `json:"output"`
 }
 
+// VideoEnvelope What one deployment of a video model accepts. It lives on the route rather than the model because the same model on two channels can accept different duration steps, and it is load-bearing: admission validates against the union of the candidate routes' envelopes and refuses outside it *before* any hold is taken (ADR-0221).
+//
+// Declared, not observed -- the one deliberate exception to "capability is observed". Answering "does this model accept a twelve-second clip" costs a twelve-second clip, and the value space is duration x resolution x aspect ratio x audio. What makes the exception safe is that neither direction of drift bills anyone wrongly: declaring too little refuses at admission having spent nothing, declaring too much ends in an upstream refusal, a failed job and a voided hold.
+//
+// Typed and closed rather than the free-form object the transport profile beside it is. That one is the server's to judge; this one decides whether money moves, and the schema is the only place its shape is stated.
+type VideoEnvelope struct {
+	AspectRatios *[]string `json:"aspect_ratios,omitempty"`
+
+	// Audio `always` is a model whose sound is native and has no parameter; `optional` is one with a switch; `never` is silent.
+	Audio *VideoEnvelopeAudio `json:"audio,omitempty"`
+
+	// Cancel How far a job of this model can be stopped. Declared because the vendors genuinely differ, and unset reads as `never`: an operator who has not said a model can be stopped has not promised that it can.
+	Cancel *VideoEnvelopeCancel `json:"cancel,omitempty"`
+
+	// DurationsSeconds The clip lengths this deployment accepts. Nothing here is "roughly" anything — 4/6/8, 5/10 and 4/8/12 are three real vendors, and a request outside the set is refused rather than rounded.
+	DurationsSeconds *[]int32 `json:"durations_seconds,omitempty"`
+
+	// MaxJobSeconds This model's own ceiling on how long a job may run before the reconciler calls it expired. It also sizes the hold's TTL, which is why it belongs to the model rather than to one global constant.
+	MaxJobSeconds *int32 `json:"max_job_seconds,omitempty"`
+	MaxN          *int32 `json:"max_n,omitempty"`
+
+	// MaxPromptChars In characters, and upstream limits are not always: one vendor publishes 2000 characters, another publishes 1024 *tokens*. Configuring a token limit here as if it were characters refuses valid prompts, so a model whose limit is not expressed in characters leaves this at 0 and lets the upstream be the one to refuse.
+	MaxPromptChars *int32 `json:"max_prompt_chars,omitempty"`
+
+	// MaxReferenceImages 0 where steering images are not accepted at all
+	MaxReferenceImages *int32    `json:"max_reference_images,omitempty"`
+	Resolutions        *[]string `json:"resolutions,omitempty"`
+
+	// Source Where this came from. `observed` means a vendor's own capability endpoint answered it; `declared` means a person typed it.
+	//
+	// Read-only on purpose. The rule is that the interface must never show a person's entry as an observation, and an input able to set this field is exactly how that rule gets broken. The write path always stores `declared`, and `observed` is reserved for a capability-discovery path. No vendor in this build publishes one, so today every envelope is `declared` — which the interface says rather than leaving the reader to assume.
+	Source               *VideoEnvelopeSource `json:"source,omitempty"`
+	SupportsImageToVideo *bool                `json:"supports_image_to_video,omitempty"`
+
+	// SupportsLastFrame Separate from `supports_image_to_video` because upstreams gate the two separately — one accepts an end frame only in its pro mode.
+	SupportsLastFrame *bool `json:"supports_last_frame,omitempty"`
+
+	// SupportsNegativePrompt Declared rather than assumed. It is near-universal but not universal, and silently dropping it bills the caller for a clip that ignored half of what they asked for.
+	SupportsNegativePrompt *bool `json:"supports_negative_prompt,omitempty"`
+}
+
+// VideoEnvelopeAudio `always` is a model whose sound is native and has no parameter; `optional` is one with a switch; `never` is silent.
+type VideoEnvelopeAudio string
+
+// VideoEnvelopeCancel How far a job of this model can be stopped. Declared because the vendors genuinely differ, and unset reads as `never`: an operator who has not said a model can be stopped has not promised that it can.
+type VideoEnvelopeCancel string
+
+// VideoEnvelopeSource Where this came from. `observed` means a vendor's own capability endpoint answered it; `declared` means a person typed it.
+//
+// Read-only on purpose. The rule is that the interface must never show a person's entry as an observation, and an input able to set this field is exactly how that rule gets broken. The write path always stores `declared`, and `observed` is reserved for a capability-discovery path. No vendor in this build publishes one, so today every envelope is `declared` — which the interface says rather than leaving the reader to assume.
+type VideoEnvelopeSource string
+
 // Cursor defines model for Cursor.
 type Cursor = string
 
@@ -2071,6 +2491,12 @@ type SetGatewayTierModelsJSONBody struct {
 	ModelIds []openapi_types.UUID `json:"model_ids"`
 }
 
+// GetGatewayVendorVideoEnvelopeParams defines parameters for GetGatewayVendorVideoEnvelope.
+type GetGatewayVendorVideoEnvelopeParams struct {
+	// UpstreamModel The real upstream model name, the same value a route stores in `provider_model_id`
+	UpstreamModel string `form:"upstream_model" json:"upstream_model"`
+}
+
 // PutGatewayKillSwitchJSONRequestBody defines body for PutGatewayKillSwitch for application/json ContentType.
 type PutGatewayKillSwitchJSONRequestBody = GatewayKillSwitchInput
 
@@ -2244,7 +2670,10 @@ type ServerInterface interface {
 	// UpdateGatewayProvider Update a provider, including enabling or disabling it by hand
 	// (PATCH /gateway/providers/{provider_id})
 	UpdateGatewayProvider(w http.ResponseWriter, r *http.Request, providerId openapi_types.UUID)
-	// DiscoverProviderModels Fetch the upstream model list and compare it with the local catalog — read-only, nothing is stored
+	// GetProviderDiscoveredModels The last catalogue this provider reported, reclassified against the catalog as it stands now
+	// (GET /gateway/providers/{provider_id}/discover-models)
+	GetProviderDiscoveredModels(w http.ResponseWriter, r *http.Request, providerId openapi_types.UUID)
+	// DiscoverProviderModels Fetch the upstream model list and compare it with the local catalog — costs an upstream call
 	// (POST /gateway/providers/{provider_id}/discover-models)
 	DiscoverProviderModels(w http.ResponseWriter, r *http.Request, providerId openapi_types.UUID)
 	// ListGatewayProviderKeys List a provider's keys, masked; the secret never leaves the server
@@ -2292,6 +2721,9 @@ type ServerInterface interface {
 	// ListGatewayVendors The API platforms this build knows how to reach, with what a provider for each of them starts as
 	// (GET /gateway/vendors)
 	ListGatewayVendors(w http.ResponseWriter, r *http.Request)
+	// GetGatewayVendorVideoEnvelope What this build records a vendor's video model as accepting, for prefilling a route's envelope
+	// (GET /gateway/vendors/{vendor}/video-envelope)
+	GetGatewayVendorVideoEnvelope(w http.ResponseWriter, r *http.Request, vendor string, params GetGatewayVendorVideoEnvelopeParams)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -2496,7 +2928,13 @@ func (_ Unimplemented) UpdateGatewayProvider(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// DiscoverProviderModels Fetch the upstream model list and compare it with the local catalog — read-only, nothing is stored
+// GetProviderDiscoveredModels The last catalogue this provider reported, reclassified against the catalog as it stands now
+// (GET /gateway/providers/{provider_id}/discover-models)
+func (_ Unimplemented) GetProviderDiscoveredModels(w http.ResponseWriter, r *http.Request, providerId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DiscoverProviderModels Fetch the upstream model list and compare it with the local catalog — costs an upstream call
 // (POST /gateway/providers/{provider_id}/discover-models)
 func (_ Unimplemented) DiscoverProviderModels(w http.ResponseWriter, r *http.Request, providerId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -2589,6 +3027,12 @@ func (_ Unimplemented) SetGatewayTierModels(w http.ResponseWriter, r *http.Reque
 // ListGatewayVendors The API platforms this build knows how to reach, with what a provider for each of them starts as
 // (GET /gateway/vendors)
 func (_ Unimplemented) ListGatewayVendors(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetGatewayVendorVideoEnvelope What this build records a vendor's video model as accepting, for prefilling a route's envelope
+// (GET /gateway/vendors/{vendor}/video-envelope)
+func (_ Unimplemented) GetGatewayVendorVideoEnvelope(w http.ResponseWriter, r *http.Request, vendor string, params GetGatewayVendorVideoEnvelopeParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -3621,6 +4065,32 @@ func (siw *ServerInterfaceWrapper) UpdateGatewayProvider(w http.ResponseWriter, 
 	handler.ServeHTTP(w, r)
 }
 
+// GetProviderDiscoveredModels operation middleware
+func (siw *ServerInterfaceWrapper) GetProviderDiscoveredModels(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "provider_id" -------------
+	var providerId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "provider_id", chi.URLParam(r, "provider_id"), &providerId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "provider_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetProviderDiscoveredModels(w, r, providerId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // DiscoverProviderModels operation middleware
 func (siw *ServerInterfaceWrapper) DiscoverProviderModels(w http.ResponseWriter, r *http.Request) {
 
@@ -4093,6 +4563,48 @@ func (siw *ServerInterfaceWrapper) ListGatewayVendors(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
+// GetGatewayVendorVideoEnvelope operation middleware
+func (siw *ServerInterfaceWrapper) GetGatewayVendorVideoEnvelope(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "vendor" -------------
+	var vendor string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "vendor", chi.URLParam(r, "vendor"), &vendor, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "vendor", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetGatewayVendorVideoEnvelopeParams
+
+	// ------------- Required query parameter "upstream_model" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "upstream_model", r.URL.Query(), &params.UpstreamModel, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "upstream_model"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "upstream_model", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetGatewayVendorVideoEnvelope(w, r, vendor, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -4315,6 +4827,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/gateway/vendors", wrapper.ListGatewayVendors)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/gateway/vendors/{vendor}/video-envelope", wrapper.GetGatewayVendorVideoEnvelope)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/gateway/kill-switch", wrapper.GetGatewayKillSwitch)
 	})
 	r.Group(func(r chi.Router) {
@@ -4322,6 +4837,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/gateway/health", wrapper.GetGatewayHealth)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/gateway/providers/{provider_id}/discover-models", wrapper.GetProviderDiscoveredModels)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/gateway/providers/{provider_id}/discover-models", wrapper.DiscoverProviderModels)
@@ -5958,6 +6476,49 @@ func (response UpdateGatewayProviderdefaultApplicationProblemPlusJSONResponse) V
 	return err
 }
 
+type GetProviderDiscoveredModelsRequestObject struct {
+	ProviderId openapi_types.UUID `json:"provider_id"`
+}
+
+type GetProviderDiscoveredModelsResponseObject interface {
+	VisitGetProviderDiscoveredModelsResponse(w http.ResponseWriter) error
+}
+
+type GetProviderDiscoveredModels200JSONResponse DiscoverModelsResult
+
+func (response GetProviderDiscoveredModels200JSONResponse) VisitGetProviderDiscoveredModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProviderDiscoveredModelsdefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	Headers    ProblemResponseHeaders
+	StatusCode int
+}
+
+func (response GetProviderDiscoveredModelsdefaultApplicationProblemPlusJSONResponse) VisitGetProviderDiscoveredModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	if response.Headers.XRequestId != nil {
+		w.Header().Set("X-Request-Id", fmt.Sprint(*response.Headers.XRequestId))
+	}
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DiscoverProviderModelsRequestObject struct {
 	ProviderId openapi_types.UUID `json:"provider_id"`
 }
@@ -6663,6 +7224,71 @@ func (response ListGatewayVendorsdefaultApplicationProblemPlusJSONResponse) Visi
 	return err
 }
 
+type GetGatewayVendorVideoEnvelopeRequestObject struct {
+	Vendor string `json:"vendor"`
+	Params GetGatewayVendorVideoEnvelopeParams
+}
+
+type GetGatewayVendorVideoEnvelopeResponseObject interface {
+	VisitGetGatewayVendorVideoEnvelopeResponse(w http.ResponseWriter) error
+}
+
+type GetGatewayVendorVideoEnvelope200JSONResponse struct {
+	// Envelope What one deployment of a video model accepts. It lives on the route rather than the model because the same model on two channels can accept different duration steps, and it is load-bearing: admission validates against the union of the candidate routes' envelopes and refuses outside it *before* any hold is taken (ADR-0221).
+	//
+	// Declared, not observed -- the one deliberate exception to "capability is observed". Answering "does this model accept a twelve-second clip" costs a twelve-second clip, and the value space is duration x resolution x aspect ratio x audio. What makes the exception safe is that neither direction of drift bills anyone wrongly: declaring too little refuses at admission having spent nothing, declaring too much ends in an upstream refusal, a failed job and a voided hold.
+	//
+	// Typed and closed rather than the free-form object the transport profile beside it is. That one is the server's to judge; this one decides whether money moves, and the schema is the only place its shape is stated.
+	Envelope VideoEnvelope `json:"envelope"`
+}
+
+func (response GetGatewayVendorVideoEnvelope200JSONResponse) VisitGetGatewayVendorVideoEnvelopeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetGatewayVendorVideoEnvelope404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetGatewayVendorVideoEnvelope404ApplicationProblemPlusJSONResponse) VisitGetGatewayVendorVideoEnvelopeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetGatewayVendorVideoEnvelopedefaultApplicationProblemPlusJSONResponse struct {
+	Body       Problem
+	Headers    ProblemResponseHeaders
+	StatusCode int
+}
+
+func (response GetGatewayVendorVideoEnvelopedefaultApplicationProblemPlusJSONResponse) VisitGetGatewayVendorVideoEnvelopeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	if response.Headers.XRequestId != nil {
+		w.Header().Set("X-Request-Id", fmt.Sprint(*response.Headers.XRequestId))
+	}
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetGatewayHealth Health dashboard — breaker state, error rates and latency
@@ -6764,7 +7390,10 @@ type StrictServerInterface interface {
 	// UpdateGatewayProvider Update a provider, including enabling or disabling it by hand
 	// (PATCH /gateway/providers/{provider_id})
 	UpdateGatewayProvider(ctx context.Context, request UpdateGatewayProviderRequestObject) (UpdateGatewayProviderResponseObject, error)
-	// DiscoverProviderModels Fetch the upstream model list and compare it with the local catalog — read-only, nothing is stored
+	// GetProviderDiscoveredModels The last catalogue this provider reported, reclassified against the catalog as it stands now
+	// (GET /gateway/providers/{provider_id}/discover-models)
+	GetProviderDiscoveredModels(ctx context.Context, request GetProviderDiscoveredModelsRequestObject) (GetProviderDiscoveredModelsResponseObject, error)
+	// DiscoverProviderModels Fetch the upstream model list and compare it with the local catalog — costs an upstream call
 	// (POST /gateway/providers/{provider_id}/discover-models)
 	DiscoverProviderModels(ctx context.Context, request DiscoverProviderModelsRequestObject) (DiscoverProviderModelsResponseObject, error)
 	// ListGatewayProviderKeys List a provider's keys, masked; the secret never leaves the server
@@ -6812,6 +7441,9 @@ type StrictServerInterface interface {
 	// ListGatewayVendors The API platforms this build knows how to reach, with what a provider for each of them starts as
 	// (GET /gateway/vendors)
 	ListGatewayVendors(ctx context.Context, request ListGatewayVendorsRequestObject) (ListGatewayVendorsResponseObject, error)
+	// GetGatewayVendorVideoEnvelope What this build records a vendor's video model as accepting, for prefilling a route's envelope
+	// (GET /gateway/vendors/{vendor}/video-envelope)
+	GetGatewayVendorVideoEnvelope(ctx context.Context, request GetGatewayVendorVideoEnvelopeRequestObject) (GetGatewayVendorVideoEnvelopeResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -7830,6 +8462,32 @@ func (sh *strictHandler) UpdateGatewayProvider(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// GetProviderDiscoveredModels operation middleware
+func (sh *strictHandler) GetProviderDiscoveredModels(w http.ResponseWriter, r *http.Request, providerId openapi_types.UUID) {
+	var request GetProviderDiscoveredModelsRequestObject
+
+	request.ProviderId = providerId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetProviderDiscoveredModels(ctx, request.(GetProviderDiscoveredModelsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetProviderDiscoveredModels")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetProviderDiscoveredModelsResponseObject); ok {
+		if err := validResponse.VisitGetProviderDiscoveredModelsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // DiscoverProviderModels operation middleware
 func (sh *strictHandler) DiscoverProviderModels(w http.ResponseWriter, r *http.Request, providerId openapi_types.UUID) {
 	var request DiscoverProviderModelsRequestObject
@@ -8287,6 +8945,33 @@ func (sh *strictHandler) ListGatewayVendors(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListGatewayVendorsResponseObject); ok {
 		if err := validResponse.VisitListGatewayVendorsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetGatewayVendorVideoEnvelope operation middleware
+func (sh *strictHandler) GetGatewayVendorVideoEnvelope(w http.ResponseWriter, r *http.Request, vendor string, params GetGatewayVendorVideoEnvelopeParams) {
+	var request GetGatewayVendorVideoEnvelopeRequestObject
+
+	request.Vendor = vendor
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetGatewayVendorVideoEnvelope(ctx, request.(GetGatewayVendorVideoEnvelopeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetGatewayVendorVideoEnvelope")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetGatewayVendorVideoEnvelopeResponseObject); ok {
+		if err := validResponse.VisitGetGatewayVendorVideoEnvelopeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

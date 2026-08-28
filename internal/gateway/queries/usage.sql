@@ -22,7 +22,9 @@ INSERT INTO usage_logs (
     -- into the charge, so without them the amount cannot be re-derived from
     -- this row alone.
     tool_calls, service_tier,
-    tokens_audio_in, tokens_audio_out, tokens_cache_write_5m, tokens_cache_write_1h,
+    tokens_audio_in, tokens_audio_out, tokens_image_in, tokens_image_out,
+    billed_units, billed_unit,
+    tokens_cache_write_5m, tokens_cache_write_1h,
     pricing_snapshot,
     -- Which route served it, and the hops that failed first.
     route_id, attempts
@@ -39,6 +41,10 @@ INSERT INTO usage_logs (
     sqlc.narg('service_tier')::text,
     sqlc.narg('tokens_audio_in')::integer,
     sqlc.narg('tokens_audio_out')::integer,
+    sqlc.narg('tokens_image_in')::integer,
+    sqlc.narg('tokens_image_out')::integer,
+    sqlc.narg('billed_units')::integer,
+    sqlc.arg('billed_unit')::text,
     sqlc.narg('tokens_cache_write_5m')::integer,
     sqlc.narg('tokens_cache_write_1h')::integer,
     sqlc.narg('pricing_snapshot')::jsonb,
@@ -64,7 +70,9 @@ WHERE created_at > @after::timestamptz
 INSERT INTO gateway_usage_rollups (
     org_id, bucket_start, granularity, api_key_id, model_slug, provider_id,
     requests, tokens_in, tokens_out, tokens_cached_read, tokens_cache_write,
-    tokens_reasoning, tokens_audio_in, tokens_audio_out,
+    tokens_reasoning, tokens_audio_in, tokens_audio_out, tokens_image_in,
+    tokens_image_out,
+    billed_seconds, billed_calls, billed_images,
     tokens_cache_write_5m, tokens_cache_write_1h,
     charged_nano, upstream_cost_usd_nano, errors,
     lat_le_100, lat_le_250, lat_le_500, lat_le_1000, lat_le_2500, lat_le_5000,
@@ -86,6 +94,14 @@ SELECT
     COALESCE(sum(tokens_reasoning), 0)::bigint,
     COALESCE(sum(tokens_audio_in), 0)::bigint,
     COALESCE(sum(tokens_audio_out), 0)::bigint,
+    COALESCE(sum(tokens_image_in), 0)::bigint,
+    COALESCE(sum(tokens_image_out), 0)::bigint,
+    -- Per unit, never one total. A second of video, a prepaid generation and a
+    -- produced image are different dimensions; summing them yields a number
+    -- nothing denotes.
+    COALESCE(sum(billed_units) FILTER (WHERE billed_unit = 'second'), 0)::bigint,
+    COALESCE(sum(billed_units) FILTER (WHERE billed_unit = 'call'), 0)::bigint,
+    COALESCE(sum(billed_units) FILTER (WHERE billed_unit = 'image'), 0)::bigint,
     COALESCE(sum(tokens_cache_write_5m), 0)::bigint,
     COALESCE(sum(tokens_cache_write_1h), 0)::bigint,
     COALESCE(sum(charged_nano), 0)::bigint,
@@ -119,6 +135,11 @@ ON CONFLICT (org_id, bucket_start, granularity, api_key_id, model_slug, provider
         tokens_reasoning = excluded.tokens_reasoning,
         tokens_audio_in = excluded.tokens_audio_in,
         tokens_audio_out = excluded.tokens_audio_out,
+        tokens_image_in = excluded.tokens_image_in,
+        tokens_image_out = excluded.tokens_image_out,
+        billed_seconds = excluded.billed_seconds,
+        billed_calls = excluded.billed_calls,
+        billed_images = excluded.billed_images,
         tokens_cache_write_5m = excluded.tokens_cache_write_5m,
         tokens_cache_write_1h = excluded.tokens_cache_write_1h,
         charged_nano = excluded.charged_nano,
@@ -161,14 +182,6 @@ SELECT COALESCE(SUM(lat_count), 0)::bigint AS samples,
 FROM gateway_usage_rollups
 WHERE org_id = $1 AND bucket_start >= @from_ts::timestamptz AND bucket_start < @to_ts::timestamptz
   AND (sqlc.narg('api_key_id')::uuid IS NULL OR api_key_id = sqlc.narg('api_key_id')::uuid);
-
--- Margin data source for periodic reports. Consumed through an injected
--- interface rather than by querying these tables directly from another layer.
--- name: SumUpstreamCostByRange :one
-SELECT COALESCE(SUM(upstream_cost_usd_nano), 0)::bigint AS upstream_cost_usd_nano,
-       COALESCE(SUM(charged_nano), 0)::bigint AS charged_nano
-FROM gateway_usage_rollups
-WHERE org_id = $1 AND bucket_start >= @from_ts::timestamptz AND bucket_start < @to_ts::timestamptz;
 
 -- name: RecordUnsettled :exec
 -- Written on a separate connection: it must not join the transaction that has
@@ -403,6 +416,9 @@ agg AS (
            SUM(requests) AS requests,
            SUM(tokens_in) AS tokens_in,
            SUM(tokens_out) AS tokens_out,
+           SUM(billed_seconds) AS billed_seconds,
+           SUM(billed_calls) AS billed_calls,
+           SUM(billed_images) AS billed_images,
            SUM(charged_nano) AS charged_nano,
            SUM(errors) AS errors
     FROM gateway_usage_rollups
@@ -414,6 +430,9 @@ SELECT timezone(@tz::text, g.bucket)::timestamptz AS bucket,
        COALESCE(a.requests, 0)::bigint AS requests,
        COALESCE(a.tokens_in, 0)::bigint AS tokens_in,
        COALESCE(a.tokens_out, 0)::bigint AS tokens_out,
+       COALESCE(a.billed_seconds, 0)::bigint AS billed_seconds,
+       COALESCE(a.billed_calls, 0)::bigint AS billed_calls,
+       COALESCE(a.billed_images, 0)::bigint AS billed_images,
        COALESCE(a.charged_nano, 0)::bigint AS charged_nano,
        COALESCE(a.errors, 0)::bigint AS errors
 FROM bounds b,
@@ -438,6 +457,9 @@ agg AS (
            SUM(requests) AS requests,
            SUM(tokens_in) AS tokens_in,
            SUM(tokens_out) AS tokens_out,
+           SUM(billed_seconds) AS billed_seconds,
+           SUM(billed_calls) AS billed_calls,
+           SUM(billed_images) AS billed_images,
            SUM(charged_nano) AS charged_nano,
            SUM(errors) AS errors
     FROM gateway_usage_rollups
@@ -449,6 +471,9 @@ SELECT g.bucket::timestamptz AS bucket,
        COALESCE(a.requests, 0)::bigint AS requests,
        COALESCE(a.tokens_in, 0)::bigint AS tokens_in,
        COALESCE(a.tokens_out, 0)::bigint AS tokens_out,
+       COALESCE(a.billed_seconds, 0)::bigint AS billed_seconds,
+       COALESCE(a.billed_calls, 0)::bigint AS billed_calls,
+       COALESCE(a.billed_images, 0)::bigint AS billed_images,
        COALESCE(a.charged_nano, 0)::bigint AS charged_nano,
        COALESCE(a.errors, 0)::bigint AS errors
 FROM bounds b,
@@ -479,6 +504,9 @@ SELECT r.model_slug AS key,
        COALESCE(SUM(r.requests), 0)::bigint AS requests,
        COALESCE(SUM(r.tokens_in), 0)::bigint AS tokens_in,
        COALESCE(SUM(r.tokens_out), 0)::bigint AS tokens_out,
+       COALESCE(SUM(r.billed_seconds), 0)::bigint AS billed_seconds,
+       COALESCE(SUM(r.billed_calls), 0)::bigint AS billed_calls,
+       COALESCE(SUM(r.billed_images), 0)::bigint AS billed_images,
        COALESCE(SUM(r.charged_nano), 0)::bigint AS charged_nano
 FROM gateway_usage_rollups r
 LEFT JOIN models m ON m.slug = r.model_slug
@@ -494,6 +522,9 @@ SELECT r.api_key_id AS key,
        COALESCE(SUM(r.requests), 0)::bigint AS requests,
        COALESCE(SUM(r.tokens_in), 0)::bigint AS tokens_in,
        COALESCE(SUM(r.tokens_out), 0)::bigint AS tokens_out,
+       COALESCE(SUM(r.billed_seconds), 0)::bigint AS billed_seconds,
+       COALESCE(SUM(r.billed_calls), 0)::bigint AS billed_calls,
+       COALESCE(SUM(r.billed_images), 0)::bigint AS billed_images,
        COALESCE(SUM(r.charged_nano), 0)::bigint AS charged_nano
 FROM gateway_usage_rollups r
 LEFT JOIN api_keys k ON k.id = r.api_key_id
@@ -505,6 +536,9 @@ GROUP BY r.api_key_id ORDER BY charged_nano DESC;
 SELECT COALESCE(SUM(requests), 0)::bigint AS requests,
        COALESCE(SUM(tokens_in), 0)::bigint AS tokens_in,
        COALESCE(SUM(tokens_out), 0)::bigint AS tokens_out,
+       COALESCE(SUM(billed_seconds), 0)::bigint AS billed_seconds,
+       COALESCE(SUM(billed_calls), 0)::bigint AS billed_calls,
+       COALESCE(SUM(billed_images), 0)::bigint AS billed_images,
        COALESCE(SUM(charged_nano), 0)::bigint AS charged_nano,
        COALESCE(SUM(errors), 0)::bigint AS errors
 FROM gateway_usage_rollups

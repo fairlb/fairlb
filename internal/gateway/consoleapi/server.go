@@ -10,6 +10,7 @@
 package gwconsoleapi
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/csv"
@@ -18,7 +19,7 @@ import (
 	"fmt"
 	"github.com/fairlb/fairlb/foundation/strutil"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/fairlb/fairlb/internal/gateway/catalog"
 	gwdb "github.com/fairlb/fairlb/internal/gateway/db"
 	"github.com/fairlb/fairlb/internal/gateway/orgscope"
+	"github.com/fairlb/fairlb/internal/gateway/proxy"
 	"github.com/fairlb/fairlb/internal/gateway/tiers"
 	gwusage "github.com/fairlb/fairlb/internal/gateway/usage"
 )
@@ -55,6 +57,17 @@ type Server struct {
 	// probeClient serves the BYOK connectivity test; nil means a default client
 	// with a timeout. Tests inject their own.
 	probeClient *http.Client
+	// videoJobs is the video plane's own job surface, shared with the data
+	// plane rather than reimplemented here. What "cancelled" means -- the
+	// model's declared cancel mode, the upstream's verdict deciding rather than
+	// the call completing, the hold voided however it ends -- is one chain of
+	// judgements, and two copies of it are how two surfaces come to disagree
+	// about whether a customer was charged.
+	//
+	// Nil in an assembly with no data plane: the console then answers the video
+	// endpoints as unavailable rather than panicking, which is what a
+	// configuration-only deployment should say.
+	videoJobs *proxy.VideoJobs
 	// cat is the only way catalog and pricing are read. The organization catalog once
 	// carried its own SQL that read price columns off the model row and never
 	// applied the plan multiplier -- the same mechanism as a defect in the model
@@ -73,6 +86,7 @@ type ServerConfig struct {
 	Catalog            *catalog.Service
 	Cipher             *crypto.Box
 	ProbeClient        *http.Client
+	VideoJobs          *proxy.VideoJobs
 }
 
 // OrgAuthorizer decides the caller's read and write access to an org.
@@ -91,6 +105,7 @@ func NewServer(cfg ServerConfig) *Server {
 		pool: cfg.Pool, q: gwdb.New(cfg.Pool),
 		scope: orgscope.New(cfg.Pool, cfg.OrganizationAccess),
 		cat:   cfg.Catalog, box: cfg.Cipher, probeClient: cfg.ProbeClient,
+		videoJobs: cfg.VideoJobs,
 	}
 }
 
@@ -138,9 +153,16 @@ func (s *Server) scopeRead(
 // PostgreSQL's `timezone` raise "invalid time zone name" outright, and an
 // unrecognised name would turn a whole page into a 500 -- so both fall back to
 // UTC, and day boundaries degrade to plain UTC instead.
+// `group_by` is validated here for the same reason, and it took a 500 to notice:
+// the spec declares an enum, but oapi-codegen binds the raw string and never
+// calls the generated `Valid()`, and no request-validator middleware is mounted
+// -- so `?group_by=banana` reaches the domain. While the read model treated an
+// unknown axis as "group by model" that was merely odd; once it started
+// rejecting the value outright, the same request became an internal error.
+// An unrecognised axis is a client mistake, so it gets a 400 that names it.
 func reportQuery(
 	from, to time.Time, key pgtype.UUID, gran *string, groupBy *string, tz *string,
-) gwusage.ReportQuery {
+) (gwusage.ReportQuery, error) {
 	// Not named `q`: in a handler package that identifier means the sqlc query
 	// set, and check-handler-purity keys on it.
 	out := gwusage.ReportQuery{
@@ -150,10 +172,15 @@ func reportQuery(
 	if gran != nil && *gran == string(gwusage.Hourly) {
 		out.Granularity = gwusage.Hourly
 	}
-	if groupBy != nil {
-		out.GroupBy = gwusage.GroupBy(*groupBy)
+	if groupBy != nil && *groupBy != "" {
+		axis := gwusage.GroupBy(*groupBy)
+		if axis != gwusage.ByAPIKey && axis != gwusage.ByModel {
+			return gwusage.ReportQuery{}, httpx.ErrCodeDetail(errcode.CommonValidation,
+				"group_by must be one of: api_key, model")
+		}
+		out.GroupBy = axis
 	}
-	return out
+	return out, nil
 }
 
 func normalizeTZ(tz *string) string {
@@ -172,7 +199,9 @@ func usageReportDTO(rep gwusage.Report, access orgReadAccess) UsageReport {
 		point := UsagePoint{
 			BucketStart: p.BucketStart, Requests: p.Requests,
 			TokensIn: p.TokensIn, TokensOut: p.TokensOut,
-			ChargedNano: p.ChargedNano, Errors: &p.Errors,
+			BilledSeconds: p.BilledSeconds, BilledCalls: p.BilledCalls,
+			BilledImages: p.BilledImages,
+			ChargedNano:  p.ChargedNano, Errors: &p.Errors,
 		}
 		if !access.Finance {
 			point.ChargedNano = 0
@@ -181,8 +210,11 @@ func usageReportDTO(rep gwusage.Report, access orgReadAccess) UsageReport {
 	}
 	out.Totals = UsageTotals{
 		Requests: rep.Totals.Requests, TokensIn: rep.Totals.TokensIn,
-		TokensOut: rep.Totals.TokensOut, ChargedNano: rep.Totals.ChargedNano,
-		Errors: &rep.Totals.Errors, Currency: rep.Totals.Currency,
+		TokensOut:     rep.Totals.TokensOut,
+		BilledSeconds: rep.Totals.BilledSeconds, BilledCalls: rep.Totals.BilledCalls,
+		BilledImages: rep.Totals.BilledImages,
+		ChargedNano:  rep.Totals.ChargedNano,
+		Errors:       &rep.Totals.Errors, Currency: rep.Totals.Currency,
 	}
 	if !access.Finance {
 		out.Totals.ChargedNano, out.Totals.Currency = 0, ""
@@ -206,7 +238,10 @@ func usageReportDTO(rep gwusage.Report, access orgReadAccess) UsageReport {
 			}
 			group := UsageGroup{
 				Key: key, Label: &label, Requests: g.Requests,
-				TokensIn: g.TokensIn, TokensOut: g.TokensOut, ChargedNano: g.ChargedNano,
+				TokensIn: g.TokensIn, TokensOut: g.TokensOut,
+				BilledSeconds: g.BilledSeconds, BilledCalls: g.BilledCalls,
+				BilledImages: g.BilledImages,
+				ChargedNano:  g.ChargedNano,
 			}
 			if !access.Finance {
 				group.ChargedNano = 0
@@ -216,11 +251,9 @@ func usageReportDTO(rep gwusage.Report, access orgReadAccess) UsageReport {
 		// Without the finance dimension the spend ordering the query applied is
 		// invisible and looks arbitrary, so re-sort by what the caller can see.
 		if !access.Finance {
-			sort.Slice(groups, func(i, j int) bool {
-				if groups[i].Requests != groups[j].Requests {
-					return groups[i].Requests > groups[j].Requests
-				}
-				return groups[i].Key < groups[j].Key
+			slices.SortFunc(groups, func(a, b UsageGroup) int {
+				// Requests 降序（b 在前），Key 升序。
+				return cmp.Or(cmp.Compare(b.Requests, a.Requests), cmp.Compare(a.Key, b.Key))
 			})
 		}
 		out.Groups = &groups
@@ -237,8 +270,11 @@ func (s *Server) GetUsage(ctx context.Context, req GetUsageRequestObject) (GetUs
 	if err != nil {
 		return nil, err
 	}
-	query := reportQuery(from, to, key,
+	query, err := reportQuery(from, to, key,
 		(*string)(req.Params.Granularity), (*string)(req.Params.GroupBy), req.Params.Tz)
+	if err != nil {
+		return nil, err
+	}
 
 	var rep gwusage.Report
 	require := orgReadRequirements{KeyMetadata: key.Valid || query.GroupBy == gwusage.ByAPIKey}
@@ -274,7 +310,10 @@ func (s *Server) ExportUsageCSV(ctx context.Context, req ExportUsageCSVRequestOb
 	if err != nil {
 		return nil, err
 	}
-	query := reportQuery(from, to, key, (*string)(req.Params.Granularity), nil, req.Params.Tz)
+	query, err := reportQuery(from, to, key, (*string)(req.Params.Granularity), nil, req.Params.Tz)
+	if err != nil {
+		return nil, err
+	}
 
 	var rep gwusage.Report
 	require := orgReadRequirements{Finance: true, KeyMetadata: key.Valid}
@@ -399,6 +438,11 @@ func (s *Server) ListAvailableModels(ctx context.Context, req ListAvailableModel
 			m := AvailableModel{
 				Slug: r.Slug, Protocols: r.Protocols, Endpoints: r.Endpoints,
 				DisplayName: strutil.Ptr(r.DisplayName),
+				// What the model produces, which the catalogue filters by. It
+				// is not derivable from Endpoints beside it: Gemini's image
+				// models are reached on the same endpoint as its text ones
+				// (ADR-0226).
+				OutputModalities: availableModalities(r.OutputModalities),
 			}
 			cw, mo := int(r.ContextWindow), int(r.MaxOutputTokens)
 			m.ContextWindow, m.MaxOutputTokens = &cw, &mo
@@ -428,6 +472,35 @@ func (s *Server) ListAvailableModels(ctx context.Context, req ListAvailableModel
 			// read zero.
 			if includeFinance {
 				m.IsFree = &r.IsFree
+				// What charges this model, said outright. Without it the four
+				// token rates below are the only evidence, and a model billed
+				// by the second stores explicit zeros in them -- so the
+				// catalogue read a priced model as unpriced and said so on
+				// screen, in the warning colour, next to a model that really
+				// was unpriced.
+				m.BillingUnit = new(AvailableModelBillingUnit(r.BillingUnit))
+				if r.UnitBilled() {
+					card := make([]AvailableModelUnitRate, 0, len(r.UnitRates))
+					for _, u := range r.UnitRates {
+						card = append(card, AvailableModelUnitRate{
+							Unit:       AvailableModelUnitRateUnit(u.Unit),
+							Audio:      new(AvailableModelUnitRateAudio(u.Audio)),
+							Resolution: new(u.Resolution),
+							// The quality tier an image rate varies on. Without
+							// it two rows of one card render identically while
+							// carrying different numbers.
+							Variant:     new(u.Variant),
+							NanoPerUnit: u.NanoPerUnit,
+						})
+					}
+					m.UnitRates = &card
+					// The four token fields stay absent. Rendering the zeros
+					// stored there would state a token price for a model that
+					// has none, which is the mistake this whole field exists to
+					// undo.
+					data = append(data, m)
+					continue
+				}
 				rates := catalog.RatesForOrgModel(r, catalog.Rates{})
 				in := catalog.OrgPriceNanoPerMTok(r.PriceIn, rates)
 				out := catalog.OrgPriceNanoPerMTok(r.PriceOut, rates)
@@ -488,11 +561,11 @@ func payloadETag(v any) (string, error) {
 // looks identical to "recorded, and all of them false".
 // A decode failure also returns nil: this column is presentation metadata, and
 // broken metadata should not turn the whole catalog into a 500.
-func decodeCapabilities(raw []byte) *map[string]interface{} {
+func decodeCapabilities(raw []byte) *map[string]any {
 	if len(raw) == 0 {
 		return nil
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil || len(m) == 0 {
 		return nil
 	}
@@ -522,4 +595,15 @@ func optKeyID(raw *string) (pgtype.UUID, error) {
 		return pgtype.UUID{}, httpx.ErrCodeDetail(errcode.CommonValidation, "Invalid api_key_id")
 	}
 	return id, nil
+}
+
+// availableModalities converts the stored list into the generated enum type.
+// The values are the same strings; only the type differs, and converting here
+// rather than at the column keeps the wire enum a transport concern.
+func availableModalities(v []string) []AvailableModelOutputModalities {
+	out := make([]AvailableModelOutputModalities, 0, len(v))
+	for _, m := range v {
+		out = append(out, AvailableModelOutputModalities(m))
+	}
+	return out
 }

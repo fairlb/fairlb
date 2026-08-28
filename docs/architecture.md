@@ -168,11 +168,11 @@ name the team pointing at nothing; those rows record what was consumed, and they
 outlive the things they describe on purpose. The first team cannot be suspended,
 since it is the one keys fall back to.
 
-Note what "no models" means, because two opposite settings used to look
-identical. A tier that allows every model and a tier that allows none are both
-tiers with an empty list; what tells them apart is the switch, not the count. The
-same is true of a key. If a list is empty and the switch is off, nothing is
-allowed — which is a real thing to want, and used to be unsayable.
+Note what "no models" means, because two opposite settings look alike. A tier
+that allows every model and a tier that allows none are both tiers with an empty
+list; what tells them apart is the switch, not the count. The same is true of a
+key. If a list is empty and the switch is off, nothing is allowed — which is a
+real thing to want, and the switch is what makes it sayable.
 
 Revocation invalidates the data plane's key cache immediately. Without that
 step the API would answer "revoked" while a leaked key kept working until its

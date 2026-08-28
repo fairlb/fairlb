@@ -10,10 +10,11 @@ func TestOwnerOf(t *testing.T) {
 		{"google/gemini-2.5-flash", "google"},
 		// A deeper path still reports its first segment.
 		{"openrouter/openai/gpt-4o", "openrouter"},
-		// A bare slug has no creator segment, and a model owns no protocol to
-		// fall back on: the field is omitted rather than guessed.
+		// Neither of the next two can reach the catalog any more --
+		// models_slug_shape refuses them on the way in. They are kept because
+		// the answer this function gives if one ever does is the difference
+		// between omitting owned_by and publishing a wrong one.
 		{"gpt-4o", ""},
-		// A leading slash is not a creator segment.
 		{"/gpt-4o", ""},
 	}
 	for _, c := range cases {

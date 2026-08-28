@@ -1,7 +1,7 @@
 import { useKumoToastManager } from "@cloudflare/kumo/components/toast";
 import { RouteStatusBadge, WiringIntentCell, WiringTable } from "./wiring-table";
 import { gatewayStaffApi, type GatewayStaffTypes, apiErrorMessage } from "@fairlb/api-client";
-import { useI18n } from "@fairlb/i18n";
+import { useI18n, type MessageKey } from "@fairlb/i18n";
 import {
   Alert,
   Button,
@@ -263,6 +263,22 @@ export function ProviderModelsDialog({
                     ...(c.newModel.displayName.trim()
                       ? { display_name: c.newModel.displayName.trim() }
                       : {}),
+                    // Omitted rather than sent as 0 when the field is empty. For the
+                    // output cap the two are different answers on the server: absent
+                    // takes the same conservative default the catalog page applies,
+                    // while a zero would quietly turn the pre-authorization estimate
+                    // for a request without max_tokens into an input-only one.
+                    ...draftWindow("context_window", c.newModel.contextWindow),
+                    ...draftWindow("max_output_tokens", c.newModel.maxOutputTokens),
+                    // Sent only when the suggestion knew: absent leaves the
+                    // column at text, which is what an unknown model is until
+                    // somebody says otherwise.
+                    ...(c.newModel.outputModalities.length
+                      ? {
+                          output_modalities: c.newModel
+                            .outputModalities as GatewayStaffTypes.OutputModalities,
+                        }
+                      : {}),
                   },
                 }
               : { model_id: c.modelId ?? "" }),
@@ -459,12 +475,14 @@ export function ProviderModelsDialog({
               }
               onToggle={(key, next) => {
                 setOver((prev) => new Map(prev).set(key, next));
-                // Ticking an unknown row seeds a draft with the slug prefilled from the
-                // upstream name. **Unticking does not discard it**: someone who fills in
-                // half of it and mis-clicks finds their work still there.
+                // Ticking an unknown row seeds a draft from the server's suggestion,
+                // which may be absent — an upstream whose names carry no creator gets
+                // empty fields and a prompt, not a guess.
+                // **Unticking does not discard it**: someone who fills in half of it
+                // and mis-clicks finds their work still there.
                 const row = rows.find((r) => r.key === key);
                 if (next && row && row.modelId === null && !drafts.has(key)) {
-                  setDrafts((prev) => new Map(prev).set(key, newModelDraft(row.upstream)));
+                  setDrafts((prev) => new Map(prev).set(key, newModelDraft(row.suggestion)));
                 }
               }}
               onDraft={(key, next) => setDrafts((prev) => new Map(prev).set(key, next))}
@@ -822,9 +840,18 @@ function ModelWiringTable({
 /**
  * The inline review of an unknown row.
  *
- * Both fields are editable: the slug (prefilled from the upstream name) and the
- * display name. There is no protocol to choose — a model owns none; the route is
- * probed on whatever this provider speaks.
+ * Four editable fields, because a catalog entry created here should not be less
+ * complete than one created from the catalog page — that difference is why every
+ * discovered model used to arrive with a zero context window and had to be finished
+ * one at a time on its own page afterwards.
+ *
+ * There is no protocol to choose — a model owns none; the route is probed on
+ * whatever this provider speaks.
+ *
+ * The provenance line is not decoration. A seeded entry has been checked against the
+ * vendor's documentation, while a slug assembled from a vendor's creator segment is
+ * only correctly *shaped* — and a slug cannot be changed once created, so which of
+ * the two you are looking at is the thing worth knowing before saving.
  */
 function NewModelFields({
   draft,
@@ -837,16 +864,67 @@ function NewModelFields({
 }) {
   const { t } = useI18n();
   const issue = draftIssue(draft);
+  const sourceNote: Record<NonNullable<NewModelDraft["source"]>, MessageKey> = {
+    seed: "gwWiringDraftFromSeed",
+    upstream: "gwWiringDraftFromUpstream",
+    vendor: "gwWiringDraftFromVendor",
+  };
   return (
-    <div className="space-y-1">
+    <div className="space-y-2">
       <Input
         aria-label={t("gwWiringDraftSlug")}
         value={draft.slug}
         disabled={disabled}
+        placeholder={t("gwWiringDraftSlugPlaceholder")}
+        // autoFocus where there was nothing to prefill: the operator has to supply
+        // the one thing nobody else could, so put the cursor in it.
+        autoFocus={draft.source === null}
         className="font-mono"
         onChange={(e) => onChange({ ...draft, slug: e.target.value })}
       />
+      <Input
+        aria-label={t("gwWiringDraftDisplayName")}
+        value={draft.displayName}
+        disabled={disabled}
+        placeholder={t("gwWiringDraftDisplayName")}
+        onChange={(e) => onChange({ ...draft, displayName: e.target.value })}
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <Input
+          aria-label={t("gwContextWindow")}
+          value={draft.contextWindow}
+          disabled={disabled}
+          inputMode="numeric"
+          placeholder={t("gwContextWindow")}
+          onChange={(e) => onChange({ ...draft, contextWindow: e.target.value })}
+        />
+        <Input
+          aria-label={t("gwMaxOutputTokens")}
+          value={draft.maxOutputTokens}
+          disabled={disabled}
+          inputMode="numeric"
+          placeholder={t("gwMaxOutputTokens")}
+          onChange={(e) => onChange({ ...draft, maxOutputTokens: e.target.value })}
+        />
+      </div>
+      {draft.source === null ? (
+        <p className="text-base text-kumo-subtle">{t("gwWiringDraftNoSuggestion")}</p>
+      ) : (
+        <p className="text-base text-kumo-subtle">{t(sourceNote[draft.source])}</p>
+      )}
+      {draft.manualProbe && (
+        <p className="text-base text-kumo-subtle">{t("gwWiringDraftManualProbe")}</p>
+      )}
       {issue && <p className="text-base text-kumo-danger">{t(issue)}</p>}
     </div>
   );
+}
+
+/** One optional token-count field, omitted entirely when the operator left it blank. */
+function draftWindow(field: "context_window" | "max_output_tokens", raw: string) {
+  const trimmed = raw.trim();
+  if (trimmed === "") return {};
+  const n = Number(trimmed);
+  if (!Number.isSafeInteger(n) || n <= 0) return {};
+  return { [field]: n };
 }

@@ -15,6 +15,10 @@ import type { GatewayConsoleHost } from "./host";
  *
  * gate-honesty: 无跳过路径。两条自检先跑——两张表任一为空、或前缀假设不再成立，
  * 都让用例失败而不是报「没发现问题」。
+ *
+ * 自检的界是**非空**，不是当天的表长。此前写的是 `> 3`，那是把当时的四条路由抄成了
+ * 常量：删掉试玩台这一条合法的删除让它红了，而它本该守的「表塌成空集」一点没变。
+ * 一条被碰到就得挪的线不是界（ADR-0158 同一判据）。
  */
 
 const ORG_ROUTE_PREFIX = "/orgs/$orgId";
@@ -28,13 +32,13 @@ test("every org-scoped route path is a declared destination path", () => {
   const routes = (module.routes ?? []).map((r) => r.path);
 
   // ── 自检：两张表塌成空集时，下面的断言会真空通过 ──────────────────
-  expect(destinations.length, "目的地表是空的").toBeGreaterThan(3);
-  expect(routes.length, "路由表是空的").toBeGreaterThan(3);
+  expect(destinations.length, "目的地表是空的").toBeGreaterThan(0);
+  expect(routes.length, "路由表是空的").toBeGreaterThan(0);
   // 前缀假设本身也要成立：全部路由都不带这个前缀时，下面筛出来的是空集。
   expect(
     routes.filter((p) => p.startsWith(ORG_ROUTE_PREFIX)).length,
     `没有一条路由以 ${ORG_ROUTE_PREFIX} 开头：前缀变了，本用例在检查一个不存在的东西`,
-  ).toBeGreaterThan(3);
+  ).toBeGreaterThan(0);
 
   // ── 判据 ────────────────────────────────────────────────────────────
   const orphans = routes

@@ -45,7 +45,9 @@ type Presentation struct {
 // Handles reports whether a mode needs this package. Everything else is a
 // header the request builder writes on its own.
 func Handles(mode string) bool {
-	return mode == catalog.AuthAWSSigV4 || mode == catalog.AuthGCPServiceAccount
+	return mode == catalog.AuthAWSSigV4 ||
+		mode == catalog.AuthGCPServiceAccount ||
+		mode == catalog.AuthKlingJWT
 }
 
 // Present writes the derived credential onto the request.
@@ -58,6 +60,8 @@ func Present(ctx context.Context, p Presentation) error {
 		return signAWS(ctx, p)
 	case catalog.AuthGCPServiceAccount:
 		return setGCPBearer(ctx, p)
+	case catalog.AuthKlingJWT:
+		return setKlingBearer(p)
 	default:
 		return fmt.Errorf("upstream: %q is not a derived credential", p.Mode)
 	}

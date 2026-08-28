@@ -11,6 +11,15 @@
  *
  * OpenAPI spec version: 0.1.0
  */
+export type AvailableModelOutputModalitiesItem =
+  (typeof AvailableModelOutputModalitiesItem)[keyof typeof AvailableModelOutputModalitiesItem];
+
+export const AvailableModelOutputModalitiesItem = {
+  AvailableModalityText: "text",
+  AvailableModalityImage: "image",
+  AvailableModalityVideo: "video",
+} as const;
+
 /**
  * Display metadata such as vision or tool support.
  *
@@ -20,9 +29,64 @@
  */
 export type AvailableModelCapabilities = { [key: string]: unknown };
 
+/**
+ * What this model is charged by. `token` is the four-bucket family the price fields below describe; `second`, `call` and `image` are charged from `unit_rates` instead, and the token fields are then absent.
+ *
+ * It exists because "priced by the second" and "not priced" used to be indistinguishable here: a per-second model stores explicit zeros in the token columns, and a catalogue reading those zeros showed a priced model as unpriced. Omitted for a caller without the financial read capability, along with everything else about price.
+ */
+export type AvailableModelBillingUnit =
+  (typeof AvailableModelBillingUnit)[keyof typeof AvailableModelBillingUnit];
+
+export const AvailableModelBillingUnit = {
+  token: "token",
+  second: "second",
+  call: "call",
+  image: "image",
+} as const;
+
+export type AvailableModelUnitRateUnit =
+  (typeof AvailableModelUnitRateUnit)[keyof typeof AvailableModelUnitRateUnit];
+
+export const AvailableModelUnitRateUnit = {
+  AvailableUnitSecond: "second",
+  AvailableUnitCall: "call",
+  AvailableUnitImage: "image",
+} as const;
+
+/**
+ * Video only; an image rate leaves it empty
+ */
+export type AvailableModelUnitRateAudio =
+  (typeof AvailableModelUnitRateAudio)[keyof typeof AvailableModelUnitRateAudio];
+
+export const AvailableModelUnitRateAudio = {
+  AvailableAudioAny: "",
+  AvailableAudioOn: "on",
+  AvailableAudioOff: "off",
+} as const;
+
+/**
+ * One line of a per-unit rate card, at this organization's own multipliers. An empty axis means the rate does not vary on it and applies to every value.
+ */
+export interface AvailableModelUnitRate {
+  unit: AvailableModelUnitRateUnit;
+  /** The output size this rate applies to; empty applies to every resolution */
+  resolution?: string;
+  /** Video only; an image rate leaves it empty */
+  audio?: AvailableModelUnitRateAudio;
+  /** A subdivision within the unit, such as the quality tier an image model sells. Empty applies to every variant. Without it a model priced at two quality tiers renders two identical-looking lines carrying different numbers. */
+  variant?: string;
+  nano_per_unit: number;
+}
+
 export interface AvailableModel {
   slug: string;
   display_name?: string;
+  /**
+   * What this model produces. Declared on the model rather than derived from `endpoints`: the two do not line up, because Gemini serves its image models on the same `generate_content` endpoint as its text models. It is what the catalogue's modality filter reads.
+   * @minItems 1
+   */
+  output_modalities: AvailableModelOutputModalitiesItem[];
   /**
    * The protocols the verified endpoints belong to. A model owns no
    * protocol of its own: it is reachable on whichever protocols its
@@ -50,6 +114,14 @@ export interface AvailableModel {
   capabilities?: AvailableModelCapabilities;
   context_window?: number;
   max_output_tokens?: number;
+  /**
+   * What this model is charged by. `token` is the four-bucket family the price fields below describe; `second`, `call` and `image` are charged from `unit_rates` instead, and the token fields are then absent.
+   *
+   * It exists because "priced by the second" and "not priced" used to be indistinguishable here: a per-second model stores explicit zeros in the token columns, and a catalogue reading those zeros showed a priced model as unpriced. Omitted for a caller without the financial read capability, along with everything else about price.
+   */
+  billing_unit?: AvailableModelBillingUnit;
+  /** The rate card for a model not billed by token. Omitted for a caller without the financial read capability. */
+  unit_rates?: AvailableModelUnitRate[];
   /** Omitted for a caller without the financial read capability */
   price_in_nano_per_mtok?: number;
   /** Omitted for a caller without the financial read capability */
@@ -136,6 +208,10 @@ export interface RequestLog {
   stream?: boolean;
   tokens_in?: number;
   tokens_out?: number;
+  /** Billable units for surfaces not billed by token — seconds of video, or generations. 0 where nothing on this row was billed that way; the token columns are 0 for a row that was. */
+  billed_units?: number;
+  /** Which unit `billed_units` counts, when it counts anything. Empty for token-billed rows. */
+  billed_unit?: string;
   /** 0 for a caller without the financial read capability */
   charged_nano: number;
   duration_ms?: number;
@@ -166,6 +242,16 @@ export interface UsageGroup {
   requests: number;
   tokens_in: number;
   tokens_out: number;
+  /** Seconds of video billed in this bucket. 0 where nothing here was billed by the second. */
+  billed_seconds: number;
+  /**
+   * Generations billed per call, for upstreams that sell prepaid packs rather than time. 0 where nothing here was billed that way.
+   *
+   * A column of its own rather than a share of one `billed_units` total: a second of video and a generation are different dimensions, and adding them yields a number that denotes nothing — the same reason neither is summed into the token counters beside them. Named columns rather than a map keyed by unit, because the unit set is closed and adding one should be a contract change somebody has to make, not a key that appears. `billed_images` is that change having been made.
+   */
+  billed_calls: number;
+  /** Images billed per produced image. 0 where nothing here was billed that way. A column of its own for the same reason billed_calls is: a request for four images is four units here and one there, so the two cannot share a total. */
+  billed_images: number;
   /** 0 for a caller without the financial read capability */
   charged_nano: number;
 }
@@ -190,6 +276,16 @@ export interface UsagePoint {
   requests: number;
   tokens_in: number;
   tokens_out: number;
+  /** Seconds of video billed in this bucket. 0 where nothing here was billed by the second. */
+  billed_seconds: number;
+  /**
+   * Generations billed per call, for upstreams that sell prepaid packs rather than time. 0 where nothing here was billed that way.
+   *
+   * A column of its own rather than a share of one `billed_units` total: a second of video and a generation are different dimensions, and adding them yields a number that denotes nothing — the same reason neither is summed into the token counters beside them. Named columns rather than a map keyed by unit, because the unit set is closed and adding one should be a contract change somebody has to make, not a key that appears. `billed_images` is that change having been made.
+   */
+  billed_calls: number;
+  /** Images billed per produced image. 0 where nothing here was billed that way. A column of its own for the same reason billed_calls is: a request for four images is four units here and one there, so the two cannot share a total. */
+  billed_images: number;
   /** 0 for a caller without the financial read capability */
   charged_nano: number;
   errors?: number;
@@ -199,6 +295,16 @@ export interface UsageTotals {
   requests: number;
   tokens_in: number;
   tokens_out: number;
+  /** Seconds of video billed in this bucket. 0 where nothing here was billed by the second. */
+  billed_seconds: number;
+  /**
+   * Generations billed per call, for upstreams that sell prepaid packs rather than time. 0 where nothing here was billed that way.
+   *
+   * A column of its own rather than a share of one `billed_units` total: a second of video and a generation are different dimensions, and adding them yields a number that denotes nothing — the same reason neither is summed into the token counters beside them. Named columns rather than a map keyed by unit, because the unit set is closed and adding one should be a contract change somebody has to make, not a key that appears. `billed_images` is that change having been made.
+   */
+  billed_calls: number;
+  /** Images billed per produced image. 0 where nothing here was billed that way. A column of its own for the same reason billed_calls is: a request for four images is four units here and one there, so the two cannot share a total. */
+  billed_images: number;
   /** 0 for a caller without the financial read capability */
   charged_nano: number;
   errors?: number;
@@ -217,6 +323,112 @@ export interface UsageReport {
    */
   groups?: UsageGroup[];
   totals: UsageTotals;
+}
+
+export type VideoJobStatus = (typeof VideoJobStatus)[keyof typeof VideoJobStatus];
+
+export const VideoJobStatus = {
+  queued: "queued",
+  in_progress: "in_progress",
+  completed: "completed",
+  failed: "failed",
+  canceled: "canceled",
+  expired: "expired",
+} as const;
+
+/**
+ * How far this job can still be stopped, carried on the row so that the interface can decide whether to offer a stop button rather than offering one that fails. It is the model's declared capability, not a promise about this instant — a `queued_only` job that has started generating still refuses.
+ */
+export type VideoJobCancel = (typeof VideoJobCancel)[keyof typeof VideoJobCancel];
+
+export const VideoJobCancel = {
+  never: "never",
+  queued_only: "queued_only",
+  anytime: "anytime",
+} as const;
+
+/**
+ * Which unit `billed_units` counts. Empty before the job reaches a terminal state.
+ */
+export type VideoJobBilledUnit = (typeof VideoJobBilledUnit)[keyof typeof VideoJobBilledUnit];
+
+export const VideoJobBilledUnit = {
+  "": "",
+  second: "second",
+  call: "call",
+} as const;
+
+/**
+ * Present on a failed job. The upstream's own words are kept verbatim — a content refusal rendered as a bare code is a support ticket.
+ */
+export type VideoJobError = {
+  code: string;
+  message?: string;
+};
+
+/**
+ * What is holdable of the result. Absent until the job completes, and its `available` goes false once the retention window has passed.
+ */
+export type VideoJobArtifact = {
+  available: boolean;
+  bytes?: number;
+  content_type?: string;
+};
+
+/**
+ * One video job as its owner sees it. The upstream's own job id and the upstream download URL are absent by design and not by omission: upstream anonymity is a property of this gateway, and that URL is one it can neither renew nor revoke.
+ *
+ * So is `settlement_state`. What the money did is a separate column from what the caller sees, deliberately — the two really do come apart — but it is bookkeeping for whoever runs the deployment, not an answer this organization asked for. `charged_nano` is.
+ */
+export interface VideoJob {
+  /** The job's id, prefixed `vid_` */
+  id: string;
+  /** The catalog slug as it was at submission, snapshotted — the row stays readable after the model is renamed or removed */
+  model: string;
+  status: VideoJobStatus;
+  /**
+   * @minimum 0
+   * @maximum 100
+   */
+  progress?: number;
+  /** What was asked for */
+  prompt?: string;
+  negative_prompt?: string;
+  duration_seconds?: number;
+  resolution?: string;
+  aspect_ratio?: string;
+  audio?: boolean;
+  n?: number;
+  /** How far this job can still be stopped, carried on the row so that the interface can decide whether to offer a stop button rather than offering one that fails. It is the model's declared capability, not a promise about this instant — a `queued_only` job that has started generating still refuses. */
+  cancel?: VideoJobCancel;
+  /**
+   * Whether this job can be deleted right now, carried for the same reason `cancel` is: so the interface can offer the control only where it works. False while the job is still running, and false while it is still holding a reservation — a job whose charge has not been settled or voided is the only row that points at that hold, and deleting it would strand the money.
+   *
+   * It is a capability rather than the settlement state itself. That is not a redaction: on a terminal job a false here does mean the charge is still held or protected, so this much of the settlement state is derivable by anyone who can list jobs. What the contract withholds is the amount, which `charged_nano` gates on the financial read capability.
+   */
+  deletable: boolean;
+  /** How many units this job was charged for — seconds of output, or generations */
+  billed_units?: number;
+  /** Which unit `billed_units` counts. Empty before the job reaches a terminal state. */
+  billed_unit?: VideoJobBilledUnit;
+  /** 0 for a caller without the financial read capability, and 0 for a job that produced nothing: a failed or cancelled job is never charged, and its row is kept rather than hidden so that the zero is visible. */
+  charged_nano?: number;
+  /** Omitted for a caller without the financial read capability */
+  charged_currency?: string;
+  /** Present on a failed job. The upstream's own words are kept verbatim — a content refusal rendered as a bare code is a support ticket. */
+  error?: VideoJobError;
+  /** What is holdable of the result. Absent until the job completes, and its `available` goes false once the retention window has passed. */
+  artifact?: VideoJobArtifact;
+  created_at: string;
+  /**
+   * When the upstream accepted it. Null while the hold exists but nothing has been sent.
+   * @nullable
+   */
+  submitted_at?: string | null;
+  /** @nullable */
+  terminal_at?: string | null;
+  /** When this row and its video are removed. It is a retention setting of the deployment, not a property of the vendor's link. */
+  expires_at: string;
 }
 
 /**
@@ -424,4 +636,46 @@ export type CreateOrgProviderKeyBody = {
 export type TestOrgProviderKeyBody = {
   /** The model name as the upstream knows it */
   upstream_model: string;
+};
+
+export type ListVideoJobsParams = {
+  status?: ListVideoJobsStatus;
+  model?: string;
+  from?: string;
+  to?: string;
+  /**
+   * Where to resume from — the previous response's `next_cursor`
+   */
+  cursor?: CursorParameter;
+  /**
+   * Rows per page
+   * @minimum 1
+   * @maximum 100
+   */
+  limit?: LimitParameter;
+};
+
+export type ListVideoJobsStatus = (typeof ListVideoJobsStatus)[keyof typeof ListVideoJobsStatus];
+
+export const ListVideoJobsStatus = {
+  queued: "queued",
+  in_progress: "in_progress",
+  completed: "completed",
+  failed: "failed",
+  canceled: "canceled",
+  expired: "expired",
+} as const;
+
+export type ListVideoJobs200 = {
+  items: VideoJob[];
+  /**
+   * Null when there are no more pages
+   * @nullable
+   */
+  next_cursor?: string | null;
+};
+
+export type DeleteVideoJob200 = {
+  id: string;
+  deleted: boolean;
 };

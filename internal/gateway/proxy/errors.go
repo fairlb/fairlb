@@ -70,7 +70,22 @@ var shapes = map[string]errShape{
 	// Unpriced means incomplete configuration and answers 503. It is kept apart
 	// from model_disabled, which is a deliberate operator action: the first
 	// tells the operator to go and add a price, the second needs nothing done.
-	errcode.GatewayModelUnpriced:         {openAIType: "api_error", anthropicType: "api_error", geminiStatus: "FAILED_PRECONDITION"},
+	errcode.GatewayModelUnpriced: {openAIType: "api_error", anthropicType: "api_error", geminiStatus: "FAILED_PRECONDITION"},
+	// The video plane's two refusals. Both are the caller's to fix -- a
+	// parameter outside the normalised set, or a value the model's declared
+	// envelope does not cover -- so both file as invalid requests rather than
+	// as anything the operator has to act on.
+	errcode.GatewayVideoParamsUnsupported: {openAIType: "invalid_request_error", anthropicType: "invalid_request_error", geminiStatus: "INVALID_ARGUMENT"},
+	errcode.GatewayJobNotCancelable:       {openAIType: "invalid_request_error", anthropicType: "invalid_request_error", geminiStatus: "FAILED_PRECONDITION"},
+	errcode.GatewayJobNotReady:            {openAIType: "invalid_request_error", anthropicType: "invalid_request_error", geminiStatus: "FAILED_PRECONDITION"},
+	errcode.GatewayArtifactGone:           {openAIType: "invalid_request_error", anthropicType: "not_found_error", geminiStatus: "NOT_FOUND"},
+	// A job outcome rather than a response: it is written onto the job row and
+	// read back from the job body. It is in this table anyway because the table
+	// is exhaustive over the registry, and an exhaustive table is the only kind
+	// that catches the next code somebody forgets. Filed as the caller's to fix
+	// -- the prompt asked for something the upstream will not make -- which is
+	// what it would be if it ever were rendered.
+	errcode.GatewayVideoContentRejected:  {openAIType: "invalid_request_error", anthropicType: "invalid_request_error", geminiStatus: "INVALID_ARGUMENT"},
 	errcode.GatewayRequestTooLarge:       {openAIType: "invalid_request_error", anthropicType: "invalid_request_error", geminiStatus: "INVALID_ARGUMENT"},
 	errcode.GatewayInvalidRequest:        {openAIType: "invalid_request_error", anthropicType: "invalid_request_error", geminiStatus: "INVALID_ARGUMENT"},
 	errcode.GatewayUpstreamTimeout:       {openAIType: "api_error", anthropicType: "api_error", geminiStatus: "DEADLINE_EXCEEDED"},

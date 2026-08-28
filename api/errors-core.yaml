@@ -159,6 +159,48 @@ codes:
     status: 404
     title: Model not found
     zh: 模型不存在或不可用
+  # The video plane refuses rather than approximates. A parameter outside the
+  # normalised set, or a value outside the model's declared capability envelope,
+  # is a 400 taken before any hold -- never a clip quietly produced at a
+  # different length and billed at the requested one (ADR-0218, ADR-0221).
+  - code: gateway.video_params_unsupported
+    status: 400
+    title: Video parameters are not supported by this model
+    zh: 该模型不支持所请求的视频参数
+  # Cancel is a declared per-model capability, not a universal verb: vendors
+  # range from a real cancel, through cancel-while-queued-only, to none at all.
+  # Saying so is the alternative to a cancel that silently does nothing
+  # (ADR-0221).
+  - code: gateway.job_not_cancelable
+    status: 409
+    title: This job cannot be cancelled
+    zh: 该任务不可取消
+  - code: gateway.job_not_ready
+    status: 409
+    title: This job has not finished
+    zh: 该任务尚未完成
+  # A job outcome, not an HTTP response. The upstream refused to generate this
+  # clip on content-policy grounds; the code lands in gateway_async_jobs.error_code
+  # and in the job body's `error.code`, and the job settles as failed with the
+  # hold voided -- the caller pays nothing.
+  #
+  # It is registered here anyway, and that is the point: content refusal is the
+  # ordinary failure on the video plane rather than an edge case, so it needs
+  # the same bilingual title and generated browser constant every other code
+  # gets. Left as a bare string in three vendor files it reached the console
+  # untranslated, which is the answer to "why did my video fail" being a wire
+  # identifier. `status` is the one an equivalent synchronous refusal would
+  # carry; nothing ever reads it for this code.
+  - code: gateway.video_content_rejected
+    status: 422
+    title: The upstream refused to generate this content
+    zh: 上游拒绝生成该内容
+  # An artifact past its retention is a normal outcome, not a fault, so it is
+  # stated as gone rather than rendered as a server error (ADR-0222).
+  - code: gateway.artifact_gone
+    status: 410
+    title: This video is no longer available
+    zh: 该视频已不再保存
   - code: gateway.resource_not_found
     status: 404
     title: Resource not found

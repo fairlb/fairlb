@@ -268,7 +268,9 @@ function ProviderWiringTable({
           <DataTable.Cell>
             {/* **Editable in place**: on this side the upstream name is guessed
                   from the slug rather than enumerated. To find out what a given
-                  provider actually calls it, fetch from that provider's own page. */}
+                  provider actually calls it, open that provider's own page — its
+                  fetched catalogue is stored now, so the answer is there on arrival
+                  rather than only for as long as somebody keeps the tab open. */}
             <Input
               aria-label={t("gwColUpstreamModel")}
               value={r.upstream}

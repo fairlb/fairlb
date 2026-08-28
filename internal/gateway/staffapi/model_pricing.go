@@ -19,7 +19,7 @@ func (s *Server) GetGatewayModelPricing(ctx context.Context, req GetGatewayModel
 }
 
 func (s *Server) SaveGatewayModelPricing(ctx context.Context, req SaveGatewayModelPricingRequestObject) (SaveGatewayModelPricingResponseObject, error) {
-	if err := validateIfMatch(req.Params.IfMatch); err != nil {
+	if err := validateIfMatch(&req.Params.IfMatch); err != nil {
 		return nil, err
 	}
 	if req.Body == nil {

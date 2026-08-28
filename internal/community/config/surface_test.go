@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 
@@ -30,7 +29,7 @@ func TestEnvSurfaceMatchesMetadata(t *testing.T) {
 	for name := range seen {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	metadata, err := foundation.ExpandedDescriptors(foundation.SharedDescriptors, communityconfig.Descriptors)
 	if err != nil {
 		t.Fatal(err)

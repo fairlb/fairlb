@@ -552,6 +552,229 @@ paths:
                 $ref: '#/components/schemas/OrgProviderKeyTestResult'
         default:
           $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/videos:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    get:
+      operationId: listVideoJobs
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: Video jobs, filterable and cursor-paginated
+      description: |
+        The organization's own video jobs, newest first. Every member can see the
+        operational facts — what was asked for, what came back, why it failed; for
+        a caller without the financial read capability `charged_nano` is 0 and
+        `charged_currency` is omitted, the same rule the request log applies.
+
+        Failed jobs are listed, not hidden. A content refusal is the ordinary
+        outcome on this plane rather than an edge case, and "why did my video
+        fail" has to have an answer somewhere.
+      parameters:
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - queued
+          - in_progress
+          - completed
+          - failed
+          - canceled
+          - expired
+      - name: model
+        in: query
+        schema:
+          type: string
+      - name: from
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VideoJob'
+                  next_cursor:
+                    type:
+                    - string
+                    - 'null'
+                    description: Null when there are no more pages
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/videos/{video_id}:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    - name: video_id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: The job's `vid_` id
+    get:
+      operationId: getVideoJob
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: One video job
+      description: |
+        A pure read. It never asks the upstream anything: letting a console page
+        drive polling would make an open browser tab an amplifier pointed at the
+        vendor. The reconciler is what advances a job.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoJob'
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteVideoJob
+      security:
+      - session: []
+      # Session only. A management key has three scopes and none of them is a
+      # write over usage, and inventing a fourth here would widen an externally
+      # reachable authentication surface as a side effect of adding a screen.
+      # Nothing is out of reach: a person cancels from the console, and a
+      # program cancels through the data plane with its ordinary key.
+      tags:
+      - usage
+      summary: Delete a finished job and the video it holds
+      description: |
+        Deletes what this deployment holds. It does not promise the upstream also
+        forgets, and claiming that would be a promise it cannot keep.
+
+        Refused while the job is still running: removing the row would strand the
+        reservation until a sweeper reached it hours later, and no usage row would
+        ever be written while the upstream carried on generating a clip this
+        deployment is billed for. Cancel it first.
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - id
+                - deleted
+                properties:
+                  id:
+                    type: string
+                  deleted:
+                    type: boolean
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/videos/{video_id}/cancel:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    - name: video_id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: cancelVideoJob
+      security:
+      - session: []
+      # Session only. A management key has three scopes and none of them is a
+      # write over usage, and inventing a fourth here would widen an externally
+      # reachable authentication surface as a side effect of adding a screen.
+      # Nothing is out of reach: a person cancels from the console, and a
+      # program cancels through the data plane with its ordinary key.
+      tags:
+      - usage
+      summary: Stop a running job; nothing is charged for it
+      description: |
+        A cancelled job is never charged. That is a commercial commitment rather
+        than a technical consequence, and a commitment nobody can reach is worth
+        less than none — which is why this is here and not only on the data plane.
+
+        How far a job can be stopped is a declared per-model capability, not a
+        universal verb: the vendors range from a real cancel, through
+        cancel-while-queued-only, to none at all. A model that cannot be stopped
+        answers `gateway.job_not_cancelable` and says so, rather than reporting a
+        success that did nothing. Read `cancel` on the job to know before asking.
+
+        The upstream's own verdict decides. A vendor refusing because generation
+        has already begun answers over a perfectly healthy connection, and calling
+        the job cancelled anyway would void the hold while the clip is still being
+        made and billed to this deployment.
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoJob'
+        default:
+          $ref: '#/components/responses/Problem'
+  /orgs/{org_id}/videos/{video_id}/content:
+    parameters:
+    - $ref: '#/components/parameters/OrgID'
+    - name: video_id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: getVideoJobContent
+      security:
+      - session: []
+      - managementKey:
+        - management:usage:read
+      tags:
+      - usage
+      summary: The video itself
+      description: |
+        The bytes come from this deployment, never as a redirect. An upstream URL
+        names the vendor, often carries its credential, and is one this deployment
+        can neither renew nor revoke.
+
+        Past its retention window a video is gone, and that is a normal ending
+        rather than a fault: it answers 410, which the console shows as "no longer
+        kept" instead of an error.
+      responses:
+        '200':
+          description: The video
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        '410':
+          description: The video is past its retention window
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
 components:
   headers:
     XRequestId:
@@ -598,11 +821,30 @@ components:
       - slug
       - protocols
       - endpoints
+      - output_modalities
       properties:
         slug:
           type: string
         display_name:
           type: string
+        output_modalities:
+          type: array
+          minItems: 1
+          description: >-
+            What this model produces. Declared on the model rather than derived from `endpoints`:
+            the two do not line up, because Gemini serves its image models on the same
+            `generate_content` endpoint as its text models. It is what the catalogue's modality
+            filter reads.
+          items:
+            type: string
+            enum:
+            - text
+            - image
+            - video
+            x-enum-varnames:
+            - AvailableModalityText
+            - AvailableModalityImage
+            - AvailableModalityVideo
         protocols:
           type: array
           items:
@@ -637,6 +879,30 @@ components:
           type: integer
         max_output_tokens:
           type: integer
+        billing_unit:
+          type: string
+          enum:
+          - token
+          - second
+          - call
+          - image
+          description: >-
+            What this model is charged by. `token` is the four-bucket family the
+            price fields below describe; `second`, `call` and `image` are charged
+            from `unit_rates` instead, and the token fields are then absent.
+
+
+            It exists because "priced by the second" and "not priced" used to be
+            indistinguishable here: a per-second model stores explicit zeros in
+            the token columns, and a catalogue reading those zeros showed a
+            priced model as unpriced. Omitted for a caller without the financial
+            read capability, along with everything else about price.
+        unit_rates:
+          type: array
+          description: The rate card for a model not billed by token. Omitted for a
+            caller without the financial read capability.
+          items:
+            $ref: '#/components/schemas/AvailableModelUnitRate'
         price_in_nano_per_mtok:
           type: integer
           format: int64
@@ -656,6 +922,49 @@ components:
         is_free:
           type: boolean
           description: Omitted for a caller without the financial read capability
+    AvailableModelUnitRate:
+      type: object
+      required:
+      - unit
+      - nano_per_unit
+      description: One line of a per-unit rate card, at this organization's own
+        multipliers. An empty axis means the rate does not vary on it and applies to
+        every value.
+      properties:
+        unit:
+          type: string
+          enum:
+          - second
+          - call
+          - image
+          x-enum-varnames:
+          - AvailableUnitSecond
+          - AvailableUnitCall
+          - AvailableUnitImage
+        resolution:
+          type: string
+          description: The output size this rate applies to; empty applies to every
+            resolution
+        audio:
+          type: string
+          enum:
+          - ''
+          - 'on'
+          - 'off'
+          x-enum-varnames:
+          - AvailableAudioAny
+          - AvailableAudioOn
+          - AvailableAudioOff
+          description: Video only; an image rate leaves it empty
+        variant:
+          type: string
+          description: >-
+            A subdivision within the unit, such as the quality tier an image model sells.
+            Empty applies to every variant. Without it a model priced at two quality tiers
+            renders two identical-looking lines carrying different numbers.
+        nano_per_unit:
+          type: integer
+          format: int64
     OrgProviderVendor:
       type: object
       required:
@@ -794,6 +1103,15 @@ components:
         tokens_out:
           type: integer
           format: int64
+        billed_units:
+          type: integer
+          format: int64
+          description: >-
+            Billable units for surfaces not billed by token — seconds of video, or generations.
+            0 where nothing on this row was billed that way; the token columns are 0 for a row that was.
+        billed_unit:
+          type: string
+          description: Which unit `billed_units` counts, when it counts anything. Empty for token-billed rows.
         charged_nano:
           type: integer
           format: int64
@@ -840,6 +1158,9 @@ components:
       - requests
       - tokens_in
       - tokens_out
+      - billed_seconds
+      - billed_calls
+      - billed_images
       - charged_nano
       properties:
         key:
@@ -857,6 +1178,32 @@ components:
         tokens_out:
           type: integer
           format: int64
+        billed_seconds:
+          type: integer
+          format: int64
+          description: >-
+            Seconds of video billed in this bucket. 0 where nothing here was billed by the second.
+        billed_calls:
+          type: integer
+          format: int64
+          description: >-
+            Generations billed per call, for upstreams that sell prepaid packs rather than time.
+            0 where nothing here was billed that way.
+
+
+            A column of its own rather than a share of one `billed_units` total: a second of
+            video and a generation are different dimensions, and adding them yields a number that
+            denotes nothing — the same reason neither is summed into the token counters beside them.
+            Named columns rather than a map keyed by unit, because the unit set is closed and
+            adding one should be a contract change somebody has to make, not a key that appears.
+            `billed_images` is that change having been made.
+        billed_images:
+          type: integer
+          format: int64
+          description: >-
+            Images billed per produced image. 0 where nothing here was billed that way.
+            A column of its own for the same reason billed_calls is: a request for four
+            images is four units here and one there, so the two cannot share a total.
         charged_nano:
           type: integer
           format: int64
@@ -889,6 +1236,9 @@ components:
       - requests
       - tokens_in
       - tokens_out
+      - billed_seconds
+      - billed_calls
+      - billed_images
       - charged_nano
       properties:
         bucket_start:
@@ -903,6 +1253,32 @@ components:
         tokens_out:
           type: integer
           format: int64
+        billed_seconds:
+          type: integer
+          format: int64
+          description: >-
+            Seconds of video billed in this bucket. 0 where nothing here was billed by the second.
+        billed_calls:
+          type: integer
+          format: int64
+          description: >-
+            Generations billed per call, for upstreams that sell prepaid packs rather than time.
+            0 where nothing here was billed that way.
+
+
+            A column of its own rather than a share of one `billed_units` total: a second of
+            video and a generation are different dimensions, and adding them yields a number that
+            denotes nothing — the same reason neither is summed into the token counters beside them.
+            Named columns rather than a map keyed by unit, because the unit set is closed and
+            adding one should be a contract change somebody has to make, not a key that appears.
+            `billed_images` is that change having been made.
+        billed_images:
+          type: integer
+          format: int64
+          description: >-
+            Images billed per produced image. 0 where nothing here was billed that way.
+            A column of its own for the same reason billed_calls is: a request for four
+            images is four units here and one there, so the two cannot share a total.
         charged_nano:
           type: integer
           format: int64
@@ -937,6 +1313,9 @@ components:
       - requests
       - tokens_in
       - tokens_out
+      - billed_seconds
+      - billed_calls
+      - billed_images
       - charged_nano
       - currency
       properties:
@@ -949,6 +1328,32 @@ components:
         tokens_out:
           type: integer
           format: int64
+        billed_seconds:
+          type: integer
+          format: int64
+          description: >-
+            Seconds of video billed in this bucket. 0 where nothing here was billed by the second.
+        billed_calls:
+          type: integer
+          format: int64
+          description: >-
+            Generations billed per call, for upstreams that sell prepaid packs rather than time.
+            0 where nothing here was billed that way.
+
+
+            A column of its own rather than a share of one `billed_units` total: a second of
+            video and a generation are different dimensions, and adding them yields a number that
+            denotes nothing — the same reason neither is summed into the token counters beside them.
+            Named columns rather than a map keyed by unit, because the unit set is closed and
+            adding one should be a contract change somebody has to make, not a key that appears.
+            `billed_images` is that change having been made.
+        billed_images:
+          type: integer
+          format: int64
+          description: >-
+            Images billed per produced image. 0 where nothing here was billed that way.
+            A column of its own for the same reason billed_calls is: a request for four
+            images is four units here and one there, so the two cannot share a total.
         charged_nano:
           type: integer
           format: int64
@@ -961,6 +1366,159 @@ components:
           description: The currency amounts are in; empty for a caller without the financial read capability
         latency:
           $ref: '#/components/schemas/UsageLatency'
+    VideoJob:
+      type: object
+      required:
+      - id
+      - model
+      - status
+      - created_at
+      - expires_at
+      - deletable
+      description: >-
+        One video job as its owner sees it. The upstream's own job id and the
+        upstream download URL are absent by design and not by omission: upstream
+        anonymity is a property of this gateway, and that URL is one it can
+        neither renew nor revoke.
+
+
+        So is `settlement_state`. What the money did is a separate column from
+        what the caller sees, deliberately — the two really do come apart — but it
+        is bookkeeping for whoever runs the deployment, not an answer this
+        organization asked for. `charged_nano` is.
+      properties:
+        id:
+          type: string
+          description: The job's id, prefixed `vid_`
+        model:
+          type: string
+          description: The catalog slug as it was at submission, snapshotted — the row
+            stays readable after the model is renamed or removed
+        status:
+          type: string
+          enum:
+          - queued
+          - in_progress
+          - completed
+          - failed
+          - canceled
+          - expired
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        prompt:
+          type: string
+          description: What was asked for
+        negative_prompt:
+          type: string
+        duration_seconds:
+          type: integer
+        resolution:
+          type: string
+        aspect_ratio:
+          type: string
+        audio:
+          type: boolean
+        n:
+          type: integer
+        cancel:
+          type: string
+          enum:
+          - never
+          - queued_only
+          - anytime
+          description: >-
+            How far this job can still be stopped, carried on the row so that the
+            interface can decide whether to offer a stop button rather than
+            offering one that fails. It is the model's declared capability, not a
+            promise about this instant — a `queued_only` job that has started
+            generating still refuses.
+        deletable:
+          type: boolean
+          description: >-
+            Whether this job can be deleted right now, carried for the same
+            reason `cancel` is: so the interface can offer the control only where
+            it works. False while the job is still running, and false while it is
+            still holding a reservation — a job whose charge has not been settled
+            or voided is the only row that points at that hold, and deleting it
+            would strand the money.
+
+
+            It is a capability rather than the settlement state itself. That is
+            not a redaction: on a terminal job a false here does mean the charge
+            is still held or protected, so this much of the settlement state is
+            derivable by anyone who can list jobs. What the contract withholds is
+            the amount, which `charged_nano` gates on the financial read
+            capability.
+        billed_units:
+          type: integer
+          format: int64
+          description: How many units this job was charged for — seconds of output, or
+            generations
+        billed_unit:
+          type: string
+          enum:
+          - ''
+          - second
+          - call
+          description: Which unit `billed_units` counts. Empty before the job reaches
+            a terminal state.
+        charged_nano:
+          type: integer
+          format: int64
+          description: >-
+            0 for a caller without the financial read capability, and 0 for a job
+            that produced nothing: a failed or cancelled job is never charged, and
+            its row is kept rather than hidden so that the zero is visible.
+        charged_currency:
+          type: string
+          description: Omitted for a caller without the financial read capability
+        error:
+          type: object
+          description: Present on a failed job. The upstream's own words are kept
+            verbatim — a content refusal rendered as a bare code is a support ticket.
+          required:
+          - code
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+        artifact:
+          type: object
+          description: What is holdable of the result. Absent until the job completes,
+            and its `available` goes false once the retention window has passed.
+          required:
+          - available
+          properties:
+            available:
+              type: boolean
+            bytes:
+              type: integer
+              format: int64
+            content_type:
+              type: string
+        created_at:
+          type: string
+          format: date-time
+        submitted_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: When the upstream accepted it. Null while the hold exists but
+            nothing has been sent.
+        terminal_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          description: When this row and its video are removed. It is a retention
+            setting of the deployment, not a property of the vendor's link.
   securitySchemes:
     session:
       type: apiKey

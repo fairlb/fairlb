@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -112,6 +111,12 @@ const (
 	// within the hour, so something has to refresh it; that is the whole reason
 	// this is a mode rather than "paste the token in as the key".
 	AuthGCPServiceAccount = "gcp_service_account"
+	// AuthKlingJWT signs a short-lived JWT from an access-key pair and sends it
+	// as a bearer token. The token this vendor accepts expires in half an hour,
+	// so a stored one works for half an hour and then every request to that
+	// provider answers 401 -- the same reason the service-account mode exists
+	// rather than "paste the token in as the key".
+	AuthKlingJWT = "kling_jwt"
 )
 
 // Envelope names a body framing some hosted platforms require. Empty -- the
@@ -208,7 +213,7 @@ type Transport struct {
 func (t Transport) AuthMode(protocol string) string {
 	switch {
 	case t.Auth == AuthBearer, t.Auth == AuthAPIKey, t.Auth == AuthGoogAPIKey,
-		t.Auth == AuthAWSSigV4, t.Auth == AuthGCPServiceAccount:
+		t.Auth == AuthAWSSigV4, t.Auth == AuthGCPServiceAccount, t.Auth == AuthKlingJWT:
 		return t.Auth
 	case strings.HasPrefix(t.Auth, AuthHeaderPrefix) &&
 		strings.TrimPrefix(t.Auth, AuthHeaderPrefix) != "":
@@ -280,6 +285,16 @@ const (
 	ProtocolOpenAI    = "openai"
 	ProtocolAnthropic = "anthropic"
 	ProtocolGemini    = "gemini"
+	// ProtocolVideo is not a wire dialect like the other three. It names the
+	// video job plane, whose contract is this gateway's own because no video
+	// vendor publishes one the others speak (ADR-0218). It sits in this list
+	// because candidate resolution filters routes by the protocols a provider
+	// declares, and a surface that names no protocol has nothing to filter on.
+	//
+	// On this plane, and only on this plane, the provider's `vendor` selects
+	// the parameter mapper (ADR-0219). On the inference data plane vendor stays
+	// inert and RewriteRequest remains the only function that edits a body.
+	ProtocolVideo = "video"
 )
 
 // PathFor returns the path to request, given the one the gateway would use on
@@ -355,7 +370,7 @@ func ValidateTransport(raw []byte) (Transport, error) {
 		}
 	}
 	if len(unknown) > 0 {
-		sort.Strings(unknown)
+		slices.Sort(unknown)
 		return Transport{}, fmt.Errorf(
 			"unknown transport setting %s; this version understands %s",
 			strings.Join(unknown, ", "), strings.Join(known, ", "))
@@ -388,6 +403,7 @@ func ValidateTransport(raw []byte) (Transport, error) {
 				`auth %q needs a signing region: "sigv4": {"region": "us-east-1"}`, t.Auth)
 		}
 	case t.Auth == AuthGCPServiceAccount:
+	case t.Auth == AuthKlingJWT:
 	case strings.HasPrefix(t.Auth, AuthHeaderPrefix):
 		name := strings.TrimPrefix(t.Auth, AuthHeaderPrefix)
 		// A header name is a token, and the standard library refuses to send a
@@ -418,8 +434,9 @@ func ValidateTransport(raw []byte) (Transport, error) {
 		}
 	default:
 		return Transport{}, fmt.Errorf(
-			"unknown auth %q; use %s, %s, %s, %s, %s, or header:<name>",
-			t.Auth, AuthBearer, AuthAPIKey, AuthGoogAPIKey, AuthAWSSigV4, AuthGCPServiceAccount)
+			"unknown auth %q; use %s, %s, %s, %s, %s, %s, or header:<name>",
+			t.Auth, AuthBearer, AuthAPIKey, AuthGoogAPIKey, AuthAWSSigV4,
+			AuthGCPServiceAccount, AuthKlingJWT)
 	}
 
 	// A signing region on a provider that does not sign is exactly the shape
@@ -511,7 +528,7 @@ func checkSigV4Keys(raw json.RawMessage) error {
 		}
 	}
 	if len(unknown) > 0 {
-		sort.Strings(unknown)
+		slices.Sort(unknown)
 		return fmt.Errorf("unknown sigv4 setting %s; this version understands %s",
 			strings.Join(unknown, ", "), strings.Join(known, ", "))
 	}

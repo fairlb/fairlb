@@ -67,6 +67,18 @@ services:
       RATE_LIMIT_PER_IP_RPM: ${RATE_LIMIT_PER_IP_RPM:-}
       AUTH_RATE_LIMIT_PER_IP_RPM: ${AUTH_RATE_LIMIT_PER_IP_RPM:-}
       RATE_LIMIT_DISABLED: ${RATE_LIMIT_DISABLED:-}
+
+      # Run this instance under your own name and colours. Point it at a brand
+      # bundle -- the path *inside* the container -- and mount the bundle there
+      # yourself; the commented line under `volumes` below is the whole of it.
+      # Blank serves the brand built into the image.
+      #
+      # Build a bundle from a profile with:
+      #   node web/scripts/pack-brand-profile.mjs /path/to/profile.json ./brand
+      #
+      # A path that names no readable bundle stops the container rather than
+      # quietly serving the default brand.
+      BRAND_PROFILE_DIR: ${BRAND_PROFILE_DIR:-}
     ports:
       - "${PORT:-8080}:8080"
     # Long enough for the drain window plus the shutdown window (0s + 320s by
@@ -78,6 +90,8 @@ services:
     stop_grace_period: 330s
     volumes:
       - fairlb-data:/data
+      # Uncomment together with BRAND_PROFILE_DIR=/etc/fairlb/brand above:
+      # - ./brand:/etc/fairlb/brand:ro
     depends_on:
       db:
         condition: service_healthy

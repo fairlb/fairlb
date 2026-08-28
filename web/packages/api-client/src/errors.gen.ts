@@ -20,11 +20,14 @@ export const ErrorCodes = {
   CommonUnprocessable: "common.unprocessable",
   CommonValidation: "common.validation",
   GatewayAllProvidersFailed: "gateway.all_providers_failed",
+  GatewayArtifactGone: "gateway.artifact_gone",
   GatewayInsufficientCredits: "gateway.insufficient_credits",
   GatewayInsufficientScope: "gateway.insufficient_scope",
   GatewayInternal: "gateway.internal",
   GatewayInvalidApiKey: "gateway.invalid_api_key",
   GatewayInvalidRequest: "gateway.invalid_request",
+  GatewayJobNotCancelable: "gateway.job_not_cancelable",
+  GatewayJobNotReady: "gateway.job_not_ready",
   GatewayKeyBudgetExceeded: "gateway.key_budget_exceeded",
   GatewayKeyExpired: "gateway.key_expired",
   GatewayKeyRevoked: "gateway.key_revoked",
@@ -39,6 +42,8 @@ export const ErrorCodes = {
   GatewaySaturated: "gateway.saturated",
   GatewayStateRouteUnavailable: "gateway.state_route_unavailable",
   GatewayUpstreamTimeout: "gateway.upstream_timeout",
+  GatewayVideoContentRejected: "gateway.video_content_rejected",
+  GatewayVideoParamsUnsupported: "gateway.video_params_unsupported",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
@@ -109,6 +114,11 @@ export const errorCodeDefs: Record<ErrorCode, ErrorCodeDef> = {
     title: "All upstream providers failed",
     titleZh: "所有上游渠道均失败",
   },
+  "gateway.artifact_gone": {
+    status: 410,
+    title: "This video is no longer available",
+    titleZh: "该视频已不再保存",
+  },
   "gateway.insufficient_credits": {
     status: 402,
     title: "Insufficient credits",
@@ -122,6 +132,16 @@ export const errorCodeDefs: Record<ErrorCode, ErrorCodeDef> = {
   "gateway.internal": { status: 500, title: "Internal error", titleZh: "服务内部错误" },
   "gateway.invalid_api_key": { status: 401, title: "Invalid API key", titleZh: "API Key 无效" },
   "gateway.invalid_request": { status: 400, title: "Invalid request", titleZh: "请求无效" },
+  "gateway.job_not_cancelable": {
+    status: 409,
+    title: "This job cannot be cancelled",
+    titleZh: "该任务不可取消",
+  },
+  "gateway.job_not_ready": {
+    status: 409,
+    title: "This job has not finished",
+    titleZh: "该任务尚未完成",
+  },
   "gateway.key_budget_exceeded": {
     status: 402,
     title: "API key budget exceeded",
@@ -176,4 +196,14 @@ export const errorCodeDefs: Record<ErrorCode, ErrorCodeDef> = {
     titleZh: "有状态资源的原始渠道或凭证暂不可用",
   },
   "gateway.upstream_timeout": { status: 502, title: "Upstream timeout", titleZh: "上游超时" },
+  "gateway.video_content_rejected": {
+    status: 422,
+    title: "The upstream refused to generate this content",
+    titleZh: "上游拒绝生成该内容",
+  },
+  "gateway.video_params_unsupported": {
+    status: 400,
+    title: "Video parameters are not supported by this model",
+    titleZh: "该模型不支持所请求的视频参数",
+  },
 };

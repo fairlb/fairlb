@@ -2,7 +2,7 @@ import { useI18n } from "@fairlb/i18n";
 import { Card, SectionHeading } from "@fairlb/ui";
 import type { ReactNode } from "react";
 
-export type ReadinessStep = {
+type ReadinessStep = {
   /** The step's text. A step you can act on is given as a real link by the caller. */
   label: ReactNode;
   key: string;

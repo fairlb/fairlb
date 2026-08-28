@@ -24,7 +24,7 @@ func (s *Server) AssignGatewayOrgPricingPlan(ctx context.Context, req AssignGate
 	if _, err := orgUUIDOf(req.OrgId); err != nil {
 		return nil, err
 	}
-	if err := validateIfMatch(req.Params.IfMatch); err != nil {
+	if err := validateIfMatch(&req.Params.IfMatch); err != nil {
 		return nil, err
 	}
 	if req.Body == nil {

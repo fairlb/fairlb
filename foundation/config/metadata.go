@@ -1,9 +1,10 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -47,7 +48,7 @@ func (c Config) EffectiveValues() map[string]string {
 // loader must have succeeded before this is called.
 func WriteCheck(w io.Writer, src Source, descriptors []Descriptor, values map[string]string, features map[string]bool) error {
 	descriptors = append([]Descriptor(nil), descriptors...)
-	sort.Slice(descriptors, func(i, j int) bool { return descriptors[i].Name < descriptors[j].Name })
+	slices.SortFunc(descriptors, func(a, b Descriptor) int { return cmp.Compare(a.Name, b.Name) })
 	if _, err := fmt.Fprintln(w, "configuration: valid"); err != nil {
 		return err
 	}
@@ -88,7 +89,7 @@ func WriteCheck(w io.Writer, src Source, descriptors []Descriptor, values map[st
 		for name := range features {
 			names = append(names, name)
 		}
-		sort.Strings(names)
+		slices.Sort(names)
 		for _, name := range names {
 			if _, err := fmt.Fprintf(w, "%s=%t\n", name, features[name]); err != nil {
 				return err
@@ -115,7 +116,8 @@ var SharedDescriptors = []Descriptor{
 	{Name: "RATE_LIMIT_DISABLED", Product: "shared", Type: "bool", Default: "false", Description: "Explicitly disable all rate limiting."},
 	{Name: "DRAIN_GRACE_SECONDS", Product: "shared", Type: "seconds", Default: "product-specific", CommunityDefault: "0", CloudDefault: "0 (dev), 3 (staging/production)", Description: "Delay between readiness failure and server shutdown."},
 	{Name: "SHUTDOWN_TIMEOUT_SECONDS", Product: "shared", Type: "seconds", Default: "320", Description: "Total graceful server shutdown budget."},
-	{Name: "DB_POOL_MAX_CONNS", Product: "shared", Type: "int32", Default: "pgx default", Description: "Maximum PostgreSQL pool size; unset delegates to pgx."},
+	{Name: "DB_POOL_MAX_CONNS", Product: "shared", Type: "int32", Default: "product-specific", CommunityDefault: "pgx default", CloudDefault: "10", Description: "Maximum PostgreSQL pool size; unset delegates to the product default."},
+	{Name: "BRAND_PROFILE_DIR", Product: "shared", Type: "path", Description: "Directory holding the brand bundle to serve; empty serves the brand built into the image. A named directory that cannot be loaded stops startup."},
 }
 
 // ExpandedDescriptors adds the conventional NAME_FILE contract for every
@@ -149,6 +151,6 @@ func ExpandedDescriptors(groups ...[]Descriptor) ([]Descriptor, error) {
 	for _, d := range byName {
 		out = append(out, d)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b Descriptor) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }

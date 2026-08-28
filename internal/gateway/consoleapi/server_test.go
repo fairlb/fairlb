@@ -19,6 +19,7 @@ import (
 	gwconsoleapi "github.com/fairlb/fairlb/internal/gateway/consoleapi"
 	gwdb "github.com/fairlb/fairlb/internal/gateway/db"
 	"github.com/fairlb/fairlb/internal/gateway/orgscope"
+	"github.com/fairlb/fairlb/internal/gateway/proxy"
 	"github.com/fairlb/fairlb/settings"
 )
 
@@ -661,8 +662,17 @@ func testCatalog(pool *pgxpool.Pool) *catalog.Service {
 }
 
 func newConsoleServer(pool *pgxpool.Pool, authz orgscope.Authorizer) *gwconsoleapi.Server {
+	// The video plane comes from the pipeline's own job surface, as it does at
+	// the assembly point: the console and the data plane must reach the same
+	// answers about a job, and two implementations of "what does cancelling
+	// mean" is how two surfaces come to disagree about whether a customer was
+	// charged. Only the pool and the query set are wired here -- reading a job
+	// list needs nothing else, and a test that stood up an upstream to read a
+	// table would be testing the fixture.
+	video := proxy.NewPipeline(proxy.PipelineConfig{Pool: pool, Gateway: gwdb.New(pool)})
 	return gwconsoleapi.NewServer(gwconsoleapi.ServerConfig{
 		Pool: pool, OrganizationAccess: authz, Catalog: testCatalog(pool),
+		VideoJobs: video.VideoJobs(),
 	})
 }
 

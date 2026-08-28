@@ -30,10 +30,10 @@ func newProviderWithKeys(t *testing.T, s *gwstaffapi.Server, slug string, names 
 	ctx := context.Background()
 	created, err := s.CreateGatewayProvider(ctx, gwstaffapi.CreateGatewayProviderRequestObject{
 		Body: &gwstaffapi.GatewayProviderInput{
-			Slug:      ptr(slug),
+			Slug:      new(slug),
 			Vendor:    &vendorCustom,
 			Protocols: &[]gwstaffapi.GatewayProviderInputProtocols{"openai"},
-			BaseUrl:   ptr("https://upstream.test/"),
+			BaseUrl:   new("https://upstream.test/"),
 		},
 	})
 	if err != nil {
@@ -53,7 +53,7 @@ func newProviderWithKeys(t *testing.T, s *gwstaffapi.Server, slug string, names 
 		out, keyErr := s.CreateGatewayProviderKey(ctx, gwstaffapi.CreateGatewayProviderKeyRequestObject{
 			ProviderId: providerID,
 			Body: &gwstaffapi.CreateGatewayProviderKeyJSONRequestBody{
-				Name: ptr(name), Secret: "sk-test-" + name,
+				Name: new(name), Secret: "sk-test-" + name,
 			},
 		})
 		if keyErr != nil {
@@ -63,8 +63,6 @@ func newProviderWithKeys(t *testing.T, s *gwstaffapi.Server, slug string, names 
 	}
 	return providerID, keys
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func listKeys(t *testing.T, s *gwstaffapi.Server, providerID uuid.UUID) []gwstaffapi.GatewayProviderKey {
 	t.Helper()

@@ -13,7 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -479,7 +479,7 @@ func (s *Store) loadValues(ctx context.Context, d dbtx, sections []string) (Valu
 	if len(keys) == 0 {
 		return values, nil
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	rows, err := d.Query(ctx, `SELECT key, value, secret_enc FROM settings WHERE key = ANY($1)`, keys)
 	if err != nil {
 		return nil, err

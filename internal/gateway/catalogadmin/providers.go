@@ -204,16 +204,21 @@ func (s *Service) UpdateProvider(ctx context.Context, id uuid.UUID, in ProviderP
 			return Provider{}, err
 		}
 	}
+	// The stored row, read once. Three separate questions below need it -- what
+	// the other half of the vendor/protocol pair currently is, which protocols
+	// a transport profile is being checked against, and whether this update
+	// makes the record point at a different upstream -- and each used to fetch
+	// it for itself, so an update could read the same row twice or not at all.
+	cur, err := s.q.GetProviderForAdmin(ctx, pgID(id))
+	if err != nil {
+		return Provider{}, ErrNotFound
+	}
 	// The vendor and the dialects constrain each other, so a partial update of
 	// either has to be checked against the stored value of the other -- moving a
 	// provider to a vendor that does not speak its current dialects is the same
 	// mistake as declaring those dialects at creation, and it arrives by a route
 	// that touches neither field the check is named after.
 	if in.Vendor != nil || in.Protocols != nil {
-		cur, err := s.q.GetProviderForAdmin(ctx, pgID(id))
-		if err != nil {
-			return Provider{}, ErrNotFound
-		}
 		vendor := cur.Vendor
 		if in.Vendor != nil {
 			vendor = *in.Vendor
@@ -241,16 +246,19 @@ func (s *Service) UpdateProvider(ctx context.Context, id uuid.UUID, in ProviderP
 		// which is the stored set unless this same request replaces it.
 		declared := protocols
 		if declared == nil {
-			cur, cErr := s.q.GetProviderForAdmin(ctx, pgID(id))
-			if cErr != nil {
-				return Provider{}, ErrNotFound
-			}
 			declared = cur.Protocols
 		}
 		if err := checkTransportRules(transport, declared); err != nil {
 			return Provider{}, err
 		}
 	}
+	// Whether this update makes the record describe a different upstream. A new
+	// address or a new platform means the stored catalogue is an answer from
+	// somewhere else -- worse than having none, because it still reads as an
+	// answer. The probe rows make the same judgement when an upstream model
+	// name changes.
+	upstreamMoved := (in.BaseURL != nil && *in.BaseURL != cur.BaseUrl) ||
+		(in.Vendor != nil && *in.Vendor != cur.Vendor)
 	if err := CheckMultiplierBps(in.CostMultiplierBps); err != nil {
 		return Provider{}, err
 	}
@@ -286,6 +294,11 @@ func (s *Service) UpdateProvider(ctx context.Context, id uuid.UUID, in ProviderP
 	if protocolsChanged {
 		if err := s.probes.ReseedProvider(ctx, tx, pgID(id), protocols); err != nil {
 			return Provider{}, err
+		}
+	}
+	if upstreamMoved {
+		if err := s.q.WithTx(tx).DeleteProviderDiscovery(ctx, pgID(id)); err != nil {
+			return Provider{}, fmt.Errorf("catalogadmin: forget the stored catalogue: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

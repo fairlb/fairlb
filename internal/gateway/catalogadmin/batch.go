@@ -62,6 +62,18 @@ const (
 type NewModel struct {
 	Slug        string
 	DisplayName string
+	// ContextWindow and MaxOutputTokens are what the row's suggestion carried,
+	// zero when nothing supplied them. They are here so that a model created
+	// from the wiring editor is as complete as one created from the catalog
+	// page: without them every discovered model arrived with a zero window and
+	// had to be finished one at a time on its own page.
+	ContextWindow   int32
+	MaxOutputTokens *int32
+	// OutputModalities is what the row's suggestion said this model produces,
+	// empty when nothing did. Empty means text, the column's own default: only
+	// the seeded catalog knows this, and an upstream name says nothing about
+	// whether the bytes coming back are words or pixels (ADR-0226).
+	OutputModalities []string
 }
 
 // BatchCreate is one row to wire. Exactly one of ModelID and NewModel is set:
@@ -192,8 +204,9 @@ func (s *Service) batchCreateOne(
 		// not attributes. Priority, weight, headers and limits are changed
 		// afterwards through inline editing.
 		Priority: 100, Weight: 1, Enabled: true,
-		Headers: encodeMap[string](nil),
-		Quirks:  encodeMap[any](nil),
+		Headers:       encodeMap[string](nil),
+		Quirks:        encodeMap[any](nil),
+		VideoEnvelope: encodeMap[any](nil),
 	})
 	if err != nil {
 		if db.IsUniqueViolation(err) {
@@ -282,12 +295,23 @@ func createModelForBatch(ctx context.Context, q *gwdb.Queries, in NewModel) (uui
 	if slug == "" {
 		return uuid.UUID{}, invalid("new_model.slug is required")
 	}
+	maxOut := int32(defaultMaxOutputTokens)
+	if in.MaxOutputTokens != nil {
+		maxOut = *in.MaxOutputTokens
+	}
+	if err := checkModalities(in.OutputModalities); err != nil {
+		return uuid.UUID{}, err
+	}
 	row, err := q.CreateModel(ctx, gwdb.CreateModelParams{
 		Slug: slug, DisplayName: in.DisplayName,
 		Enabled: false, Visibility: "public",
-		ContextWindow: 0, MaxOutputTokens: defaultMaxOutputTokens,
+		ContextWindow: in.ContextWindow, MaxOutputTokens: maxOut,
+		OutputModalities: in.OutputModalities,
 	})
 	if err != nil {
+		if err := slugShapeRefusal(err); err != nil {
+			return uuid.UUID{}, err
+		}
 		if db.IsUniqueViolation(err) {
 			return uuid.UUID{}, ConflictError{Message: "The slug \"" + slug +
 				"\" is already taken. Choose a different name, or select the existing " +

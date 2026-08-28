@@ -112,6 +112,19 @@ func (f *Fake) Protected(requestID string) bool {
 // LastSettle returns the most recent settlement, or false if there was none.
 // It exists for the "one request settles exactly once" cases, where the
 // requestID is generated inside the pipeline and the test never sees it.
+// LastHold is the reservation this request took, so a test can hold it against
+// what was finally charged. On the unit families the two must be equal: the
+// amount is a function of the request's own parameters, so a hold that differs
+// from the charge means one of them was computed from something else.
+func (f *Fake) LastHold() (settle.HoldInput, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.Holds) == 0 {
+		return settle.HoldInput{}, false
+	}
+	return f.Holds[len(f.Holds)-1], true
+}
+
 func (f *Fake) LastSettle() (settle.SettleInput, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

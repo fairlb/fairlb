@@ -64,8 +64,12 @@ type Pipeline struct {
 	auth    *Authenticator
 	guard   *Guard
 	billing settle.Settler
-	box     *crypto.Box
-	client  *http.Client
+	// artifacts is where finished video output lives. Never nil: the assembly
+	// point binds NoCustody when the deployment has no object store, so the
+	// call sites do not each have to remember to check.
+	artifacts Artifacts
+	box       *crypto.Box
+	client    *http.Client
 	// streamHTTP is the streaming-only client (see newStreamClient). It is
 	// built once and held because its Transport carries a connection pool.
 	streamHTTP *http.Client
@@ -122,12 +126,15 @@ type Alerter = alert.Sink
 // PipelineConfig is the complete, immutable construction input for a data
 // plane pipeline. A usable Pipeline is created in one operation.
 type PipelineConfig struct {
-	Pool                *pgxpool.Pool
-	Gateway             *gwdb.Queries
-	Catalog             *catalog.Service
-	Authenticator       *Authenticator
-	Guard               *Guard
-	Settlement          settle.Settler
+	Pool          *pgxpool.Pool
+	Gateway       *gwdb.Queries
+	Catalog       *catalog.Service
+	Authenticator *Authenticator
+	Guard         *Guard
+	Settlement    settle.Settler
+	// Artifacts may be nil, which binds NoCustody: a deployment without an
+	// object store still serves video, it just proxies the bytes on read.
+	Artifacts           Artifacts
 	Cipher              *crypto.Box
 	HTTPClient          *http.Client
 	BreakerStore        breaker.Store
@@ -181,6 +188,7 @@ func NewPipeline(cfg PipelineConfig) *Pipeline {
 	p := &Pipeline{
 		pool: cfg.Pool, gw: cfg.Gateway, catalog: cfg.Catalog, auth: cfg.Authenticator,
 		guard: cfg.Guard, billing: cfg.Settlement, box: cfg.Cipher, client: client,
+		artifacts:              orNoCustody(cfg.Artifacts),
 		streamHTTP:             newStreamClient(client.Transport),
 		strategy:               NewPriorityWeighted(),
 		breaker:                NewBreaker(brk, cfg.Gateway),
@@ -365,6 +373,43 @@ type prepared struct {
 	// the tool prices. The customer side uses it as is; the cost side only
 	// swaps in the route's four base buckets.
 	priceTable catalog.PriceTable
+	// unitPriceTable is the per-unit rate card, locked in the same transaction,
+	// and populated when the *price row* says this model is billed by unit --
+	// not when the surface says so (ADR-0227). The images surface carries both
+	// families at once, so keying this off the surface loaded the card for
+	// every image request or for none of them, and neither is right.
+	//
+	// Stored unswitched, exactly as priceTable is. The customer-side view is
+	// derived at the point of billing via ForBilling; keeping only that view
+	// here would hand the same zeroed table to the cost side and make every
+	// free job look like it cost nothing to serve.
+	unitPriceTable catalog.UnitPriceTable
+	// units is the billable quantity vector of a unit-priced *synchronous*
+	// request, computed during admission and settled unchanged.
+	//
+	// The job plane leaves it empty and computes its own after validating
+	// against the capability envelope, because a job outlives the request that
+	// started it. A synchronous one has no such gap: the charge is a pure
+	// function of parameters already in hand, so the hold below is the exact
+	// amount rather than an estimate, and settlement reuses this vector rather
+	// than deriving a second one that could disagree with what was reserved.
+	units catalog.Units
+}
+
+// unitBilled reports whether this request is charged from the per-unit card.
+// The answer is on the price row, never on the surface.
+func (p prepared) unitBilled() bool {
+	return p.res.ModelPricing.Family == catalog.FamilyUnits
+}
+
+// billingUnitPrices returns the pair of tables the unit-priced charge is
+// computed from: what the customer is charged against, and what it cost us.
+//
+// They are the same rate card viewed two ways, and the split is the whole
+// point -- `free` stops the charge, never the cost, or margin reporting
+// silently loses every free request.
+func (p prepared) billingUnitPrices() (list, cost catalog.UnitPriceTable) {
+	return p.unitPriceTable.ForBilling(p.res.ModelPricing.IsFree()), p.unitPriceTable
 }
 
 // prepare runs the first half of the pipeline: authentication, kill switch,
@@ -478,6 +523,24 @@ func (a *Admission) Prepare(ctx context.Context, in Request) (prepared, *Error) 
 		return out, NewError(errcode.GatewayInternal, "Billing configuration is incomplete")
 	}
 	out.priceTable = priceTable
+	if out.unitBilled() {
+		unitTable, uErr := requestCatalog.LockedUnitPriceTable(ctx, res.Model.ID)
+		if uErr != nil {
+			slog.ErrorContext(ctx, "dataplane: locking the unit price table failed", "error", uErr, "model", modelSlug)
+			return out, NewError(errcode.GatewayInternal, "Billing configuration is incomplete")
+		}
+		if unitTable.Empty() {
+			// A model on the unit plane with no unit rate is unpriced, and it
+			// reaches here only because model_pricing said `units` while the
+			// rate rows are missing -- an invariant no CHECK can hold, so this
+			// is where it is caught. Same treatment as an unpriced token model:
+			// a 503 the operator gets told about, never a request served free.
+			slog.ErrorContext(ctx, "dataplane: unit-priced model has no unit rates; refusing to serve", "model", modelSlug)
+			p.alertUnpriced(ctx, modelSlug)
+			return out, NewError(errcode.GatewayModelUnpriced, "Model is temporarily unavailable")
+		}
+		out.unitPriceTable = unitTable
+	}
 	if err := pricingTx.Commit(ctx); err != nil {
 		slog.ErrorContext(ctx, "dataplane: committing the request pricing snapshot failed", "error", err, "model", modelSlug)
 		return out, NewError(errcode.GatewayInternal, "Billing configuration is incomplete")
@@ -489,6 +552,66 @@ func (a *Admission) Prepare(ctx context.Context, in Request) (prepared, *Error) 
 	// reason to keep a PostgreSQL MVCC snapshot alive across a network call.
 	if gerr := p.guard.CheckBudget(ctx, id); gerr != nil {
 		return out, gerr
+	}
+	// A unit-priced request has no tokens to estimate, and inventing a token
+	// equivalence for its TPM cost would let one organization's video traffic
+	// evict another's text traffic in a ratio nobody chose. It is bounded by
+	// RPM instead, and that limitation is documented rather than papered over.
+	if out.unitBilled() {
+		if gerr := p.guard.CheckRate(ctx, id, 0); gerr != nil {
+			return out, gerr
+		}
+		// The job plane stops here with estNano at zero: a job outlives the
+		// request that started it, so the exact charge is computed by the
+		// caller once the parameters have been validated against the model's
+		// capability envelope, and the hold is taken there (ADR-0220).
+		if in.Surface == catalog.SurfaceVideo {
+			return out, nil
+		}
+		// A per-image model cannot be streamed, and this is the only place that
+		// can say so before money moves.
+		//
+		// The charge on this family is the number of images produced, and a
+		// stream has no place that number can be read from. In a buffered
+		// response `data` is one array and every vendor on this surface fills
+		// it the same way. In a stream they do not agree at all: this vendor
+		// emits one `image_generation.partial_succeeded` per finished image and
+		// a terminal `completed`, that one emits `completed` per image and up
+		// to three `partial_image` renders before each -- and both spell the
+		// payload `b64_json`, so the frames cannot be told apart by shape
+		// either. Counting would overcharge on one vendor and undercharge on
+		// the other.
+		//
+		// So it is refused, in the caller's dialect, before a hold is taken.
+		// Not serving it unmetered and not guessing: the same answer the Gemini
+		// array-streaming form gets, and for the same reason -- this gateway
+		// does not serve a shape it cannot meter. Dropping `stream` returns the
+		// identical images.
+		if in.Stream && isImageSurface(in.Surface) {
+			return out, NewError(errcode.GatewayInvalidRequest,
+				"This model is billed per image, and the number of images produced "+
+					"cannot be counted from a stream. Retry without \"stream\".")
+		}
+		// A synchronous unit-priced request has no such gap. The rate row is a
+		// pure function of parameters already in hand and the hold is taken
+		// against the most images this model can return in one response, rather
+		// than an estimate -- which is why it does not go through
+		// catalog.Estimate below. Settlement then replaces the count with what
+		// the response actually carried.
+		units, gerr := p.syncUnits(ctx, out, in)
+		if gerr != nil {
+			return out, gerr
+		}
+		list, cost := out.billingUnitPrices()
+		quote, gerr := p.quoteOrRefuse(ctx, out, func() (catalog.Quote, error) {
+			return catalog.ComputeUnits(list, cost, units, out.pricing.rates)
+		})
+		if gerr != nil {
+			return out, gerr
+		}
+		out.units = units
+		out.estNano = quote.ChargedNano
+		return out, nil
 	}
 	out.inputTokens = EstimateRequestTokens(in.Body)
 	if gerr := p.guard.CheckRate(ctx, id, out.inputTokens); gerr != nil {
@@ -515,6 +638,15 @@ func (a *Admission) Prepare(ctx context.Context, in Request) (prepared, *Error) 
 	out.estNano = estNano
 
 	return out, nil
+}
+
+// orNoCustody binds the no-custody store when the deployment has none, so no
+// call site has to remember that the field can be empty.
+func orNoCustody(a Artifacts) Artifacts {
+	if a == nil {
+		return NoCustody{}
+	}
+	return a
 }
 
 // recordRejection records a request refused before it ever reached an upstream.
@@ -596,7 +728,7 @@ func (p *Pipeline) Run(ctx context.Context, in Request) (Result, *Error) {
 		p.settlementRecorder.RecordRejection(ctx, prep, in, requestID, gerr, started)
 		return Result{}, gerr
 	}
-	holdID, gerr := p.settlementRecorder.Reserve(ctx, prep.id, requestID, prep.estNano)
+	holdID, gerr := p.settlementRecorder.ReserveFor(ctx, prep.id, requestID, prep.estNano, holdTTLFor(in.Surface))
 	if gerr != nil {
 		p.settlementRecorder.RecordHoldRejection(ctx, in, gerr, started)
 		return Result{}, gerr
@@ -762,6 +894,12 @@ type settleArgs struct {
 	requestID string
 	quote     catalog.Quote
 	usage     Usage
+	// units is the billable quantity vector of a unit-priced synchronous
+	// request, empty for a token-billed one. It is what makes "how many images
+	// did this organization generate" a column that can be summed rather than a
+	// document that has to be parsed -- the same reason the job plane records
+	// it, arriving on this path for the first time.
+	units     catalog.Units
 	estimated bool
 	model     gwdb.Model
 	// modelPricing is the price row locked for this request. It is the *only*
@@ -909,6 +1047,11 @@ func (r *SettlementRecorder) SettleAndLog(ctx context.Context, a settleArgs) err
 	})
 }
 
+// usagePricingSchemaVersion is the one snapshot shape the unsettled-replay
+// decoder accepts. Every writer of a price snapshot has to stamp it, or that
+// row can never be replayed.
+const usagePricingSchemaVersion = 1
+
 // usageLogParams turns the snapshot of one successful call into insert
 // parameters.
 func usageLogParams(a settleArgs) gwdb.InsertUsageLogParams {
@@ -949,10 +1092,42 @@ func usageLogParams(a settleArgs) gwdb.InsertUsageLogParams {
 		ServiceTier:        pgtype.Text{String: a.usage.ServiceTier, Valid: true},
 		TokensAudioIn:      snapshotInt4(a.usage.AudioIn),
 		TokensAudioOut:     snapshotInt4(a.usage.AudioOut),
+		TokensImageIn:      snapshotInt4(a.usage.ImageIn),
+		TokensImageOut:     snapshotInt4(a.usage.ImageOut),
 		TokensCacheWrite5m: snapshotInt4(a.usage.CacheWrite5m),
 		TokensCacheWrite1h: snapshotInt4(a.usage.CacheWrite1h),
+		BilledUnits:        billedUnitsOfVector(a.units),
+		BilledUnit:         billedUnitOfVector(a.units),
 		PricingSnapshot:    encodePricingSnapshot(a),
 	}
+}
+
+// billedUnitsOfVector and billedUnitOfVector render a synchronous request's
+// quantity vector into the two columns.
+//
+// Absent rather than zero for a token-billed request: NULL in this column means
+// "not billed by unit", and a zero would claim a unit-billed request that
+// produced nothing. The job plane says the same thing about its own vector, in
+// billedUnitsOf.
+func billedUnitsOfVector(u catalog.Units) pgtype.Int4 {
+	if len(u.Quantities) == 0 {
+		return pgtype.Int4{}
+	}
+	var total int64
+	for _, q := range u.Quantities {
+		total += q
+	}
+	return pgtype.Int4{Int32: clampInt32(total), Valid: true}
+}
+
+func billedUnitOfVector(u catalog.Units) string {
+	for k := range u.Quantities {
+		// One request names one unit: the vector is built from a single rate
+		// key, and a mixed one would have no single answer to put in this
+		// column.
+		return string(k.Unit)
+	}
+	return ""
 }
 
 type usagePricingSnapshot struct {
@@ -996,7 +1171,7 @@ func encodePricingSnapshot(a settleArgs) []byte {
 	billingMode := map[bool]string{true: "free", false: "paid"}[a.modelPricing.IsFree()]
 	effectiveRates := versionedEffectiveRates(a)
 	snapshot := usagePricingSnapshot{
-		SchemaVersion:            1,
+		SchemaVersion:            usagePricingSchemaVersion,
 		BillingMode:              billingMode,
 		BYOK:                     a.byok,
 		BYOKFeeBps:               map[bool]int64{true: a.pricing.byokFeeBps}[a.byok],

@@ -31,6 +31,30 @@ func (s *Server) DiscoverProviderModels(
 		}
 		return nil, err
 	}
+	return DiscoverProviderModels200JSONResponse(discoverResult(res)), nil
+}
+
+// GetProviderDiscoveredModels answers from the stored catalogue, without
+// calling upstream.
+//
+// Same body as the POST, deliberately: the reader's question is the same one,
+// and the only difference is who paid for the answer. A provider nobody has
+// asked yet comes back with a zero checked_at and no models, which the client
+// already has to distinguish from a fetch that succeeded and found nothing.
+func (s *Server) GetProviderDiscoveredModels(
+	ctx context.Context, req GetProviderDiscoveredModelsRequestObject,
+) (GetProviderDiscoveredModelsResponseObject, error) {
+	res, err := s.discovery.Snapshot(ctx, req.ProviderId)
+	if err != nil {
+		if err == discovery.ErrProviderNotFound {
+			return nil, httpx.ErrCodeDetail(errcode.CommonNotFound, "Provider not found")
+		}
+		return nil, err
+	}
+	return GetProviderDiscoveredModels200JSONResponse(discoverResult(res)), nil
+}
+
+func discoverResult(res discovery.Result) DiscoverModelsResult {
 	out := DiscoverModelsResult{
 		CheckedAt: res.CheckedAt, Ok: res.Ok, Complete: res.Complete,
 		StatusCode: res.StatusCode, Message: strutil.Ptr(res.Message),
@@ -49,7 +73,38 @@ func (s *Server) DiscoverProviderModels(
 			id := model.ModelID
 			item.ModelId = &id
 		}
+		// Absent rather than blank when nothing could name the model: an empty
+		// suggestion and no suggestion read the same to a person, but only one
+		// of them says so to a client.
+		if sg := model.Suggestion; sg != nil {
+			item.Suggestion = &ModelSuggestion{
+				Slug:            sg.Slug,
+				DisplayName:     strutil.Ptr(sg.DisplayName),
+				ContextWindow:   intPtr(int(sg.ContextWindow)),
+				MaxOutputTokens: intPtr(int(sg.MaxOutputTokens)),
+				ManualProbe:     boolPtr(sg.ManualProbe),
+				// Only the seed knows this, and only for the models it names.
+				// Absent everywhere else, which is what lets the create dialog
+				// leave the field at its default rather than pre-filling a
+				// guess (ADR-0226).
+				OutputModalities: modalitiesPtr(sg.OutputModalities),
+				Source:           ModelSuggestionSource(sg.Source),
+			}
+		}
 		out.Models = append(out.Models, item)
 	}
-	return DiscoverProviderModels200JSONResponse(out), nil
+	return out
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+// modalitiesPtr wraps a suggestion's modalities, or nil when the source did not
+// know them. Absent and empty read the same to a person; only one of them says
+// so to a client.
+func modalitiesPtr(v []string) *OutputModalities {
+	if len(v) == 0 {
+		return nil
+	}
+	out := OutputModalities(v)
+	return &out
 }

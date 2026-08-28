@@ -25,7 +25,6 @@ export const ORG_CAPABILITIES = {
   financeDetailsRead: "finance.details.read",
   financeManage: "finance.manage",
   keysManage: "keys.manage",
-  playgroundUse: "playground.use",
   webhooksManage: "webhooks.manage",
   membersManage: "members.manage",
 } as const;

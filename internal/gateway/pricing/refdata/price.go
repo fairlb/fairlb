@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/fairlb/fairlb/foundation/money"
 	"math/big"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -16,15 +16,30 @@ import (
 // is reported rather than performed quietly.
 const storedFractionDigits = 9
 
-// The bucket names the dataset uses for the four rates the gateway stores. The
-// dataset prices further dimensions -- audio, images, web searches -- which
-// have their own home and are deliberately not read here.
+// The bucket names the dataset uses for the four base rates the gateway
+// stores, plus the two image rates it can store as dimensions.
+//
+// The dataset prices further dimensions -- audio, cached image reads, web
+// searches -- which have no home here yet and are deliberately not read. The
+// two image rates are read because there is somewhere to put them: an image
+// model charges image input well above its text input rate, and a model that
+// *generates* images reports the pixels as output tokens priced far above text
+// output -- the dataset states 30 USD/Mtok against 2.5 for one Gemini image
+// model, and 32 against 10 for gpt-image. Without these buckets both were
+// billed at the text rate.
 const (
-	bucketInput      = "input_mtok"
-	bucketOutput     = "output_mtok"
-	bucketCacheRead  = "cache_read_mtok"
-	bucketCacheWrite = "cache_write_mtok"
+	bucketInput       = "input_mtok"
+	bucketOutput      = "output_mtok"
+	bucketCacheRead   = "cache_read_mtok"
+	bucketCacheWrite  = "cache_write_mtok"
+	bucketInputImage  = "input_image_mtok"
+	bucketOutputImage = "output_image_mtok"
 )
+
+// baseBuckets are the four a stored price must be complete in. Image input is
+// not among them on purpose: a missing base bucket becomes an explicit zero,
+// and an image rate of zero would be a claim the dataset never made.
+var baseBuckets = [...]string{bucketInput, bucketOutput, bucketCacheRead, bucketCacheWrite}
 
 // conditionalPrice is one link of the dataset's price chain: a set of rates,
 // and the condition under which it applies.
@@ -111,8 +126,11 @@ func parseConstraint(raw json.RawMessage) (conditionalPrice, error) {
 }
 
 func parseRateSet(in map[string]json.RawMessage) (map[string]priceValue, error) {
-	out := make(map[string]priceValue, 4)
-	for _, bucket := range [...]string{bucketInput, bucketOutput, bucketCacheRead, bucketCacheWrite} {
+	out := make(map[string]priceValue, len(baseBuckets)+1)
+	for _, bucket := range [...]string{
+		bucketInput, bucketOutput, bucketCacheRead, bucketCacheWrite,
+		bucketInputImage, bucketOutputImage,
+	} {
 		raw, ok := in[bucket]
 		if !ok {
 			continue
@@ -192,7 +210,7 @@ func referenceFrom(providerID string, m modelEntry, on time.Time, matchedBy stri
 		bucketCacheRead:  &ref.Rates.CacheRead,
 		bucketCacheWrite: &ref.Rates.CacheWrite,
 	}
-	for _, bucket := range [...]string{bucketInput, bucketOutput, bucketCacheRead, bucketCacheWrite} {
+	for _, bucket := range baseBuckets {
 		v, ok := chosen.rates[bucket]
 		if !ok {
 			// An explicit zero, because a stored price is complete in all four
@@ -218,8 +236,38 @@ func referenceFrom(providerID string, m modelEntry, on time.Time, matchedBy stri
 		}
 		*dst[bucket] = lit
 	}
-	sort.Strings(ref.Defaulted)
-	sort.Strings(ref.Rounded)
+	// The two image rates, when the dataset states them. Absent leaves the
+	// field empty rather than zero: empty means "no separate image rate", and
+	// billing falls back to the text rate on that side. Zero would mean "image
+	// tokens are free", which no entry says.
+	for _, im := range []struct {
+		bucket string
+		dst    *string
+	}{
+		{bucketInputImage, &ref.Rates.InputImage},
+		{bucketOutputImage, &ref.Rates.OutputImage},
+	} {
+		v, ok := chosen.rates[im.bucket]
+		if !ok {
+			continue
+		}
+		lit, rounded, err := quantize(v.literal)
+		if err != nil {
+			return Result{
+				Outcome: Unusable,
+				Detail:  fmt.Sprintf("%s/%s: %s %v", providerID, m.id, im.bucket, err),
+			}
+		}
+		if rounded {
+			ref.Rounded = append(ref.Rounded, im.bucket)
+		}
+		if v.tiered {
+			ref.ContextTiered = true
+		}
+		*im.dst = lit
+	}
+	slices.Sort(ref.Defaulted)
+	slices.Sort(ref.Rounded)
 	return Result{Outcome: Matched, Ref: &ref}
 }
 

@@ -52,7 +52,11 @@ type TokenRates struct {
 	CacheWrite int64
 }
 
-// Bucket names a rate dimension. The six values match the column's CHECK.
+// Bucket names a rate dimension. The values match the column's CHECK, and that
+// they still do is asserted rather than assumed: this list stood at six while
+// the column allowed seven, so a saved image-input rate -- including every one
+// the reference-price import produced -- was refused as an unknown bucket by
+// the map below, on a path no test covered.
 type Bucket string
 
 const (
@@ -62,7 +66,25 @@ const (
 	BucketCacheWrite Bucket = "cache_write"
 	BucketAudioIn    Bucket = "audio_in"
 	BucketAudioOut   Bucket = "audio_out"
+	BucketImageIn    Bucket = "image_in"
+	BucketImageOut   Bucket = "image_out"
 )
+
+// KnownBuckets is every dimension bucket that may be written, in a stable
+// order.
+//
+// It is the single list: the two round-trip maps are built from it rather than
+// written out beside it, so they cannot be missing an entry, and a test holds
+// it against the column's CHECK in the migration. That arrangement is the whole
+// fix -- this list stood at six while the column allowed seven, and the maps
+// stood at six too, so nothing in Go disagreed with anything else in Go and the
+// only symptom was a save refused as "unknown pricing bucket".
+func KnownBuckets() []Bucket {
+	return []Bucket{
+		BucketIn, BucketOut, BucketCacheRead, BucketCacheWrite,
+		BucketAudioIn, BucketAudioOut, BucketImageIn, BucketImageOut,
+	}
+}
 
 // DimensionRate is one advanced rate row: a bucket, optionally narrowed by
 // service tier, variant, or a minimum input size.
@@ -78,6 +100,22 @@ type DimensionRate struct {
 type ToolRate struct {
 	Tool        string
 	NanoPerCall int64
+}
+
+// UnitRate is one price in the per-unit family: a second of produced output, or
+// a generation.
+//
+// Resolution and Audio are the axes such a rate varies on, and an empty value
+// there means "does not vary on that axis" and matches anything -- the opposite
+// direction from the token rates, which walk down to a base rate. A model with
+// one flat per-second price is a single row with both empty.
+type UnitRate struct {
+	Unit        string
+	Resolution  string
+	Audio       string
+	Variant     string
+	ServiceTier string
+	NanoPerUnit int64
 }
 
 // ModelPricing is the whole of what this domain knows about one model's price.
@@ -108,8 +146,17 @@ type ModelPricing struct {
 	UpdatedAt time.Time
 	Reason    string
 
+	// Family decides which of the rates below actually charge this model.
+	// Empty reads as tokens, so a row written before the column existed keeps
+	// its meaning.
+	Family PricingFamily
+
 	DimensionRates []DimensionRate
 	ToolRates      []ToolRate
+	// UnitRates is the whole rate card of the per-unit family. It never falls
+	// back to a token rate: a lookup that finds nothing here fails, because
+	// falling back would charge a clip at the price of a paragraph.
+	UnitRates []UnitRate
 
 	// Version changes on every save (a trigger moves updated_at). The handler
 	// turns it into an ETag; the service compares it against a caller's

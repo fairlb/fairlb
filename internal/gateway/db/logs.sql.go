@@ -13,7 +13,8 @@ import (
 
 const getRequestLog = `-- name: GetRequestLog :one
 SELECT l.id::text AS id, l.request_id, l.created_at, l.model_slug, l.surface, l.status,
-       l.http_status, l.error_code, l.stream, l.tokens_in, l.tokens_out, l.charged_nano,
+       l.http_status, l.error_code, l.stream, l.tokens_in, l.tokens_out,
+       l.billed_units, l.billed_unit, l.charged_nano,
        l.duration_ms, l.api_key_id, l.end_user_id, l.route_attempts, l.ttft_ms,
        l.tokens_cached_read, l.tokens_cache_write, l.tokens_reasoning,
        l.usage_estimated, l.charged_currency, l.byok,
@@ -42,6 +43,8 @@ type GetRequestLogRow struct {
 	Stream           bool
 	TokensIn         int32
 	TokensOut        int32
+	BilledUnits      pgtype.Int4
+	BilledUnit       string
 	ChargedNano      int64
 	DurationMs       int32
 	ApiKeyID         pgtype.UUID
@@ -76,6 +79,8 @@ func (q *Queries) GetRequestLog(ctx context.Context, arg GetRequestLogParams) (G
 		&i.Stream,
 		&i.TokensIn,
 		&i.TokensOut,
+		&i.BilledUnits,
+		&i.BilledUnit,
 		&i.ChargedNano,
 		&i.DurationMs,
 		&i.ApiKeyID,
@@ -96,7 +101,7 @@ func (q *Queries) GetRequestLog(ctx context.Context, arg GetRequestLogParams) (G
 const listRequestLogs = `-- name: ListRequestLogs :many
 
 SELECT id::text AS id, request_id, created_at, model_slug, surface, status,
-       http_status, error_code, stream, tokens_in, tokens_out, charged_nano,
+       http_status, error_code, stream, tokens_in, tokens_out, billed_units, billed_unit, charged_nano,
        duration_ms, api_key_id, end_user_id
 FROM usage_logs
 WHERE org_id = $1
@@ -141,6 +146,8 @@ type ListRequestLogsRow struct {
 	Stream      bool
 	TokensIn    int32
 	TokensOut   int32
+	BilledUnits pgtype.Int4
+	BilledUnit  string
 	ChargedNano int64
 	DurationMs  int32
 	ApiKeyID    pgtype.UUID
@@ -195,6 +202,8 @@ func (q *Queries) ListRequestLogs(ctx context.Context, arg ListRequestLogsParams
 			&i.Stream,
 			&i.TokensIn,
 			&i.TokensOut,
+			&i.BilledUnits,
+			&i.BilledUnit,
 			&i.ChargedNano,
 			&i.DurationMs,
 			&i.ApiKeyID,

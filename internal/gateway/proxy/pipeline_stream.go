@@ -45,7 +45,7 @@ func (p *Pipeline) RunStream(ctx context.Context, w http.ResponseWriter, in Requ
 		return gerr
 	}
 
-	holdID, gerr := p.settlementRecorder.Reserve(ctx, prep.id, requestID, prep.estNano)
+	holdID, gerr := p.settlementRecorder.ReserveFor(ctx, prep.id, requestID, prep.estNano, holdTTLFor(in.Surface))
 	if gerr != nil {
 		p.settlementRecorder.RecordHoldRejection(ctx, in, gerr, started)
 		return gerr
@@ -113,8 +113,9 @@ func (p *Pipeline) RunStream(ctx context.Context, w http.ResponseWriter, in Requ
 		}
 
 		// The remaining budget, not a fresh one. Two attempts each waiting a
-		// full minute is the failure this arithmetic exists to prevent.
-		remaining := firstByteTimeout - time.Since(streamStart)
+		// full minute is the failure this arithmetic exists to prevent. The
+		// budget itself is per surface: see firstByteBudgetFor.
+		remaining := firstByteBudgetFor(in.Surface) - time.Since(streamStart)
 		if remaining <= 0 {
 			return attemptOutcome{
 				cls:         Classification{Class: ClassProvider, CountsTowardHealth: true},
@@ -187,7 +188,7 @@ func (p *Pipeline) RunStream(ctx context.Context, w http.ResponseWriter, in Requ
 		}
 
 		out, perr := NewStreamer().
-			WithFirstByteBudget(firstByteTimeout-time.Since(streamStart)).
+			WithFirstByteBudget(firstByteBudgetFor(in.Surface)-time.Since(streamStart)).
 			Pump(attemptCtx, w, upstreamStreamBody(route.Transport, resp.Body), in.Surface)
 		timer.Stop()
 		cancel(nil)
@@ -264,21 +265,53 @@ func (p *Pipeline) RunStream(ctx context.Context, w http.ResponseWriter, in Requ
 		usage = Usage{
 			In:  prep.inputTokens,
 			Out: EstimateTokens(outcome.Text),
+			// Observed, not guessed, and priced per call -- see the same line
+			// on the buffered path.
+			ToolCalls: usage.ToolCalls,
 		}
 	}
-	quote, cErr := p.quoteFor(
-		prep.priceTable.ForBilling(prep.res.ModelPricing.IsFree()),
-		prep.priceTable,
-		usage.BillingTokens(),
-		byokKeyID.Valid, prep.pricing.ratesForRoute(route), prep.pricing.byokFeeBps,
-	)
-	if cErr != nil {
-		slog.ErrorContext(settleCtx, "dataplane: streaming billing failed; settling at the held amount", "error", cErr, "request_id", requestID)
+	// Computed here and consumed in the token branch below. The unit-billed
+	// branch never estimates, so it is not a condition there.
+	holdIsBill := holdIsTheBill(in.Surface, estimated)
+	// No unit-billed request reaches this path any more, and this branch is
+	// what keeps that true rather than what handles it.
+	//
+	// Video never streams, and admission refuses `stream` on a per-image model
+	// because no count both vendors agree on can be read out of a stream. If
+	// that refusal is ever lifted, the failure has to be *this* -- a hold left
+	// standing in front of an operator -- rather than the token arithmetic
+	// below, which would settle a per-image model against the four explicit
+	// zeros its price row stores and charge nothing for the whole generation.
+	var quote catalog.Quote
+	var cErr error
+	if prep.unitBilled() {
+		usage, estimated = unitUsage(), false
+		cErr = errors.New("a unit-billed request reached the streaming path, " +
+			"where the number of units it produced cannot be counted")
+		slog.ErrorContext(settleCtx, "dataplane: unit-billed request reached the streaming path",
+			"request_id", requestID, "model", prep.modelSlug, "surface", string(in.Surface))
+		p.alertUnpriced(settleCtx, prep.modelSlug)
+	} else if holdIsBill {
+		// The upstream reported nothing and an image stream leaves nothing to
+		// estimate from, so the hold is the bill (see holdIsTheBill). The usage
+		// row still records the input side; only the charge follows the hold.
 		quote = fallbackQuote(prep.estNano, prep.pricing.ratesForRoute(route))
+	} else {
+		quote, cErr = p.quoteFor(
+			prep.priceTable.ForBilling(prep.res.ModelPricing.IsFree()),
+			prep.priceTable,
+			usage.BillingTokens(),
+			byokKeyID.Valid, prep.pricing.ratesForRoute(route), prep.pricing.byokFeeBps,
+		)
+		if cErr != nil {
+			slog.ErrorContext(settleCtx, "dataplane: streaming billing failed; settling at the held amount", "error", cErr, "request_id", requestID)
+			quote = fallbackQuote(prep.estNano, prep.pricing.ratesForRoute(route))
+		}
 	}
 
 	args := settleArgs{
 		id: prep.id, requestID: requestID, quote: quote, usage: usage,
+		units:     prep.units,
 		estimated: estimated, model: prep.res.Model, route: route, in: in,
 		pricing: prep.pricing, priceTable: prep.priceTable,
 		pricingFallback: cErr != nil,
@@ -298,14 +331,23 @@ func (p *Pipeline) RunStream(ctx context.Context, w http.ResponseWriter, in Requ
 		time.Duration(args.durationMs)*time.Millisecond)
 	recordStreamTTFB(settleCtx, string(in.Surface), outcome.TTFB)
 	pricingErr := cErr
-	if errors.Is(pricingErr, catalog.ErrAdvancedPriceMissing) {
+	switch {
+	case prep.unitBilled() && pricingErr != nil:
+		// Nothing this side can price: the amount stays unsettled and the hold
+		// stays held, which is what puts it in front of an operator instead of
+		// charging a number no rate card produced.
+		args.quote = catalog.Quote{}
+		p.settlementRecorder.RecordUnsettled(settleCtx, requestID, prep.id, args.quote, usageLogParams(args), pricingErr)
+	case errors.Is(pricingErr, catalog.ErrAdvancedPriceMissing):
 		args.pricingIssue = pricingErr.Error()
 		p.settlementRecorder.RecordPricingMissing(settleCtx, requestID, prep.id, prep.estNano, usageLogParams(args), pricingErr)
-	} else if err := p.settlementRecorder.SettleAndLog(settleCtx, args); err != nil {
-		// Streaming needs the fallback ledger most of all: on this path the
-		// client is usually already gone, so when something goes wrong there is
-		// nobody left who could notice.
-		p.settlementRecorder.RecordUnsettled(settleCtx, requestID, prep.id, args.quote, usageLogParams(args), err)
+	default:
+		if err := p.settlementRecorder.SettleAndLog(settleCtx, args); err != nil {
+			// Streaming needs the fallback ledger most of all: on this path the
+			// client is usually already gone, so when something goes wrong there is
+			// nobody left who could notice.
+			p.settlementRecorder.RecordUnsettled(settleCtx, requestID, prep.id, args.quote, usageLogParams(args), err)
+		}
 	}
 
 	// A broken stream: the HTTP status has long been 200, so the error can only
@@ -358,7 +400,12 @@ func newStreamClient(base http.RoundTripper) *http.Client {
 		// Cloning is required -- mutating in place would poison the
 		// process-wide http.DefaultTransport.
 		cloned := t.Clone()
-		cloned.ResponseHeaderTimeout = firstByteTimeout
+		// The widest surface's budget, because this client is built once and
+		// shared by all of them. It is a backstop, not the bound: every attempt
+		// arms a context cancel at its own surface's remaining budget before
+		// Do, and that cancel bounds the header wait too. So a chat stream
+		// still gives up after the minute this constant used to name.
+		cloned.ResponseHeaderTimeout = imageTimeout
 		base = cloned
 	}
 	// A custom RoundTripper, which is what tests inject, is left alone: it has

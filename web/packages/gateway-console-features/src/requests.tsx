@@ -8,24 +8,24 @@ import {
 } from "@fairlb/api-client";
 import { browserTZ, type MessageKey, useI18n } from "@fairlb/i18n";
 import {
-  PageHeader,
   Alert,
   Button,
-  Card,
   DataTable,
   DetailDrawer,
   Field,
   FormRow,
   InlineEmpty,
   Input,
+  ListPage,
   LoadingState,
+  PageHeader,
+  RANGES,
   Select,
   StatusBadge as SharedStatusBadge,
   formatNano,
-  RANGES,
   pickRange,
-  useQuantizedRange,
   useCursorStack,
+  useQuantizedRange,
 } from "@fairlb/ui";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -212,87 +212,98 @@ function LogsDetail({
   // bar — so it degrades to an empty, settled state rather than throwing.
   const keys = apiKeys ?? { isPending: false, isError: false, error: null, items: [] };
   return (
-    <div className="space-y-6">
-      <PageHeader title={t("logsTitle")} description={t("logsDesc")} />
-
-      {/* 筛选行直接是 FormRow，不再套一层 Toolbar：Kumo 的 Toolbar 根是
-          `inline-flex w-fit`，按内容收缩，于是这一块的右边缘停在半路，而下面的
-          表格卡是满宽的——同一列里两个块对不齐，窗口越宽差得越多。 */}
-      <FormRow
-        className={
-          canFilterKeys
-            ? "w-full sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-[10rem_10rem_11rem_minmax(10rem,1fr)_minmax(10rem,1fr)_auto]"
-            : "w-full sm:grid-cols-2 lg:grid-cols-4"
-        }
-      >
-        <FormRow.Item>
-          <Field label={t("commonTimeRange")}>
-            <Select
-              value={rangeKey}
-              onValueChange={(v) => setFilter({ range: v ?? undefined })}
-              items={RANGES.map((r) => ({ value: r.key as string, label: t(r.label) }))}
-            />
-          </Field>
-        </FormRow.Item>
-        <FormRow.Item>
-          <Field label={t("logsStatus")}>
-            <Select
-              value={status}
-              onValueChange={(v) => setFilter({ status: v || undefined })}
-              items={STATUSES.map((x) => ({ value: x.value, label: t(x.label) }))}
-            />
-          </Field>
-        </FormRow.Item>
-        {canFilterKeys && (
+    <ListPage
+      header={<PageHeader title={t("logsTitle")} description={t("logsDesc")} />}
+      filters={
+        /* 筛选行直接是 FormRow，不再套一层 Toolbar：Kumo 的 Toolbar 根是
+         `inline-flex w-fit`，按内容收缩，于是这一块的右边缘停在半路，而它所在的
+         卡是满宽的——同一列里两个块对不齐，窗口越宽差得越多。 */
+        <FormRow
+          className={
+            canFilterKeys
+              ? "w-full sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-[10rem_10rem_11rem_minmax(10rem,1fr)_minmax(10rem,1fr)_auto]"
+              : "w-full sm:grid-cols-2 lg:grid-cols-4"
+          }
+        >
           <FormRow.Item>
-            <Field label={t("playApiKey")}>
+            <Field label={t("commonTimeRange")}>
               <Select
-                value={apiKeyId}
-                disabled={keys.isPending}
-                onValueChange={(v) => setFilter({ key: v || undefined })}
-                items={[
-                  { value: "", label: t("logsAllKeys") },
-                  ...keys.items.map((k) => ({ value: k.id, label: k.name })),
-                ]}
+                value={rangeKey}
+                onValueChange={(v) => setFilter({ range: v ?? undefined })}
+                items={RANGES.map((r) => ({ value: r.key as string, label: t(r.label) }))}
               />
             </Field>
           </FormRow.Item>
-        )}
-        <FormRow.Item>
-          <Field label={t("logsModel")} htmlFor="model">
-            <Input
-              id="model"
-              value={modelDraft}
-              placeholder={t("logsModelPlaceholder")}
-              onChange={(e) => setModelDraft(e.target.value)}
-            />
-          </Field>
-        </FormRow.Item>
-        <FormRow.Item>
-          <Field label={t("logsEndUser")} htmlFor="enduser">
-            <Input
-              id="enduser"
-              value={endUserDraft}
-              placeholder={t("logsEndUserPlaceholder")}
-              onChange={(e) => setEndUserDraft(e.target.value)}
-            />
-          </Field>
-        </FormRow.Item>
-        {canExport && (
-          <FormRow.Actions>
-            {/* Export is a link, not a button, because it is a browser download —
+          <FormRow.Item>
+            <Field label={t("logsStatus")}>
+              <Select
+                value={status}
+                onValueChange={(v) => setFilter({ status: v || undefined })}
+                items={STATUSES.map((x) => ({ value: x.value, label: t(x.label) }))}
+              />
+            </Field>
+          </FormRow.Item>
+          {canFilterKeys && (
+            <FormRow.Item>
+              <Field label={t("apiKey")}>
+                <Select
+                  value={apiKeyId}
+                  disabled={keys.isPending}
+                  onValueChange={(v) => setFilter({ key: v || undefined })}
+                  items={[
+                    { value: "", label: t("logsAllKeys") },
+                    ...keys.items.map((k) => ({ value: k.id, label: k.name })),
+                  ]}
+                />
+              </Field>
+            </FormRow.Item>
+          )}
+          <FormRow.Item>
+            <Field label={t("logsModel")} htmlFor="model">
+              <Input
+                id="model"
+                value={modelDraft}
+                placeholder={t("logsModelPlaceholder")}
+                onChange={(e) => setModelDraft(e.target.value)}
+              />
+            </Field>
+          </FormRow.Item>
+          <FormRow.Item>
+            <Field label={t("logsEndUser")} htmlFor="enduser">
+              <Input
+                id="enduser"
+                value={endUserDraft}
+                placeholder={t("logsEndUserPlaceholder")}
+                onChange={(e) => setEndUserDraft(e.target.value)}
+              />
+            </Field>
+          </FormRow.Item>
+          {canExport && (
+            <FormRow.Actions>
+              {/* Export is a link, not a button, because it is a browser download —
             but it should stand the same height as the controls beside it, which
             is exactly what a link-styled button is for. */}
-            <LinkButton
-              href={gatewayConsoleApi.getExportLogsCSVUrl(orgId, filters)}
-              variant="outline"
-            >
-              {t("commonExportCsv")}
-            </LinkButton>
-          </FormRow.Actions>
-        )}
-      </FormRow>
-
+              <LinkButton
+                href={gatewayConsoleApi.getExportLogsCSVUrl(orgId, filters)}
+                variant="outline"
+              >
+                {t("commonExportCsv")}
+              </LinkButton>
+            </FormRow.Actions>
+          )}
+        </FormRow>
+      }
+      overlays={
+        /* Mounted unconditionally and driven by its open state: conditional rendering
+         takes the open and close animations away with it. */
+        <LogDrawer
+          orgId={orgId}
+          requestId={openId}
+          showSpend={canReadFinance}
+          onClose={() => setOpen(null)}
+        />
+      }
+    >
       {/* Active filters must be visible at a glance and clearable in one press. With
           five controls spread across a row, "why does this find nothing" is usually
           a filter still set and forgotten about. The time range does not count
@@ -319,14 +330,12 @@ function LogsDetail({
       {logs.isError && <Alert>{apiErrorMessage(logs.error)}</Alert>}
       {canFilterKeys && keys.isError && <Alert>{apiErrorMessage(keys.error)}</Alert>}
 
-      <Card>
-        <LogTable
-          items={logs.data?.items ?? []}
-          loading={logs.isPending}
-          filtered={activeFilterCount > 0}
-          showSpend={canReadFinance}
-        />
-      </Card>
+      <LogTable
+        items={logs.data?.items ?? []}
+        loading={logs.isPending}
+        filtered={activeFilterCount > 0}
+        showSpend={canReadFinance}
+      />
 
       {/* 空集时整行收起。两个按钮都 disabled、读数是「第 1 页 · 显示 0 条 · 已到末尾」，
           在一页都没有的时候，这一行没有回答任何问题。只要还在某一页上（不在首页）
@@ -370,16 +379,7 @@ function LogsDetail({
           {t("usageTimezoneNote", { tz: browserTZ() || "UTC" })}
         </p>
       )}
-
-      {/* Mounted unconditionally and driven by its open state: conditional rendering
-          takes the open and close animations away with it. */}
-      <LogDrawer
-        orgId={orgId}
-        requestId={openId}
-        showSpend={canReadFinance}
-        onClose={() => setOpen(null)}
-      />
-    </div>
+    </ListPage>
   );
 }
 

@@ -31,8 +31,12 @@ import (
 // because part of the service really was delivered.
 
 const (
-	// firstByteTimeout is the deadline for the upstream's first SSE event. It
-	// shares one budget with the stream client's ResponseHeaderTimeout.
+	// firstByteTimeout is the deadline for the upstream's first SSE event on
+	// every surface but images, which waits far longer for a reason of its own
+	// -- see firstByteBudgetFor. The stream client's ResponseHeaderTimeout is
+	// set to the widest of those budgets and is only a backstop: each attempt
+	// arms a context cancel at its own remaining budget, and that is what
+	// actually bounds the wait here.
 	firstByteTimeout = 60 * time.Second
 	// idleTimeout bounds a gap between events inside a stream.
 	idleTimeout = 30 * time.Second

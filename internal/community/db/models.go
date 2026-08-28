@@ -74,6 +74,56 @@ type Cooldown struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type GatewayAsyncJob struct {
+	ID                        pgtype.UUID
+	OrgID                     pgtype.UUID
+	ApiKeyID                  pgtype.UUID
+	Kind                      string
+	RequestID                 string
+	IdempotencyKey            string
+	RequestFingerprint        string
+	ModelID                   pgtype.UUID
+	ModelSlug                 string
+	RouteID                   pgtype.UUID
+	ProviderID                pgtype.UUID
+	ProviderKeyID             pgtype.UUID
+	OrgProviderKeyID          pgtype.UUID
+	Byok                      bool
+	UpstreamID                string
+	Status                    string
+	SettlementState           string
+	UpstreamStatus            string
+	Progress                  int16
+	ErrorCode                 string
+	ErrorMessage              string
+	Params                    []byte
+	BillingUnits              []byte
+	HoldID                    pgtype.UUID
+	HoldNano                  int64
+	HoldExpiresAt             pgtype.Timestamptz
+	ChargedNano               int64
+	ChargedCurrency           string
+	PricingSnapshot           []byte
+	MaxJobSeconds             int32
+	PollAttempts              int32
+	NotFoundCount             int16
+	NextPollAt                pgtype.Timestamptz
+	LastPolledAt              pgtype.Timestamptz
+	ArtifactKey               string
+	ArtifactBytes             int64
+	ArtifactContentType       string
+	ArtifactFetchedAt         pgtype.Timestamptz
+	UpstreamArtifactRef       string
+	UpstreamArtifactExpiresAt pgtype.Timestamptz
+	NativeAlias               int64
+	EndUserID                 string
+	ExpiresAt                 pgtype.Timestamptz
+	CreatedAt                 pgtype.Timestamptz
+	UpdatedAt                 pgtype.Timestamptz
+	SubmittedAt               pgtype.Timestamptz
+	TerminalAt                pgtype.Timestamptz
+}
+
 // Requests held back because a price was missing. reserved_nano is what was set aside up front, not a final charge, so the generic retry worker must never settle these rows automatically
 type GatewayPricingUnsettled struct {
 	RequestID     string
@@ -118,6 +168,11 @@ type GatewayUsageRollup struct {
 	TokensReasoning     int64
 	TokensAudioIn       int64
 	TokensAudioOut      int64
+	TokensImageIn       int64
+	TokensImageOut      int64
+	BilledSeconds       int64
+	BilledCalls         int64
+	BilledImages        int64
 	TokensCacheWrite5m  int64
 	TokensCacheWrite1h  int64
 	ChargedNano         int64
@@ -154,6 +209,11 @@ type GatewayUsageRollupsDefault struct {
 	TokensReasoning     int64
 	TokensAudioIn       int64
 	TokensAudioOut      int64
+	TokensImageIn       int64
+	TokensImageOut      int64
+	BilledSeconds       int64
+	BilledCalls         int64
+	BilledImages        int64
 	TokensCacheWrite5m  int64
 	TokensCacheWrite1h  int64
 	ChargedNano         int64
@@ -191,17 +251,18 @@ type IdempotencyKey struct {
 }
 
 type Model struct {
-	ID              pgtype.UUID
-	Slug            string
-	DisplayName     string
-	ContextWindow   int32
-	MaxOutputTokens int32
-	Capabilities    []byte
-	Visibility      string
-	Enabled         bool
-	Metadata        []byte
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
+	ID               pgtype.UUID
+	Slug             string
+	DisplayName      string
+	ContextWindow    int32
+	MaxOutputTokens  int32
+	Capabilities     []byte
+	OutputModalities []string
+	Visibility       string
+	Enabled          bool
+	Metadata         []byte
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
 }
 
 type ModelPriceDimensionRate struct {
@@ -219,9 +280,20 @@ type ModelPriceToolRate struct {
 	NanoPerCall int64
 }
 
+type ModelPriceUnitRate struct {
+	ModelID     pgtype.UUID
+	Unit        string
+	Resolution  string
+	Audio       string
+	Variant     string
+	ServiceTier string
+	NanoPerUnit int64
+}
+
 type ModelPricing struct {
 	ModelID                       pgtype.UUID
 	BillingMode                   string
+	PricingFamily                 string
 	UpstreamInNanoPerMtok         pgtype.Int8
 	UpstreamOutNanoPerMtok        pgtype.Int8
 	UpstreamCacheReadNanoPerMtok  pgtype.Int8
@@ -258,20 +330,23 @@ type ModelRoute struct {
 	ContextWindow   pgtype.Int4
 	MaxOutputTokens pgtype.Int4
 	Quirks          []byte
+	VideoEnvelope   []byte
+	MaxImages       pgtype.Int4
 }
 
 type ModelRouteProbe struct {
-	RouteID    pgtype.UUID
-	Endpoint   string
-	Protocol   string
-	ProbeMode  string
-	Status     string
-	Source     string
-	CheckedAt  pgtype.Timestamptz
-	LatencyMs  pgtype.Int4
-	StatusCode pgtype.Int4
-	Error      string
-	UpdatedAt  pgtype.Timestamptz
+	RouteID         pgtype.UUID
+	Endpoint        string
+	Protocol        string
+	ProbeMode       string
+	Status          string
+	Source          string
+	ProbeEnqueuedAt pgtype.Timestamptz
+	CheckedAt       pgtype.Timestamptz
+	LatencyMs       pgtype.Int4
+	StatusCode      pgtype.Int4
+	Error           string
+	UpdatedAt       pgtype.Timestamptz
 }
 
 type ModelTier struct {
@@ -379,6 +454,16 @@ type Provider struct {
 	MaxConcurrency    int32
 }
 
+type ProviderDiscovery struct {
+	ProviderID pgtype.UUID
+	CheckedAt  pgtype.Timestamptz
+	Ok         bool
+	Complete   bool
+	StatusCode pgtype.Int4
+	Message    string
+	Models     []byte
+}
+
 type ProviderKey struct {
 	ID             pgtype.UUID
 	ProviderID     pgtype.UUID
@@ -475,6 +560,10 @@ type UsageLog struct {
 	ServiceTier         string
 	TokensAudioIn       pgtype.Int4
 	TokensAudioOut      pgtype.Int4
+	TokensImageIn       pgtype.Int4
+	TokensImageOut      pgtype.Int4
+	BilledUnits         pgtype.Int4
+	BilledUnit          string
 	TokensCacheWrite5m  pgtype.Int4
 	TokensCacheWrite1h  pgtype.Int4
 	PricingSnapshot     []byte
@@ -517,6 +606,10 @@ type UsageLogsDefault struct {
 	ServiceTier         string
 	TokensAudioIn       pgtype.Int4
 	TokensAudioOut      pgtype.Int4
+	TokensImageIn       pgtype.Int4
+	TokensImageOut      pgtype.Int4
+	BilledUnits         pgtype.Int4
+	BilledUnit          string
 	TokensCacheWrite5m  pgtype.Int4
 	TokensCacheWrite1h  pgtype.Int4
 	PricingSnapshot     []byte

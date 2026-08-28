@@ -75,28 +75,70 @@ export function SectionHeading({
 }
 
 /**
- * SettingsSection is one block of a settings sub-page: a heading and description
- * outside the card, then the content.
+ * SettingsSection is one block of a settings sub-page: a heading, a description
+ * and the section's own action outside the card, then the content.
  *
  * It moved up into the shared package rather than into the host contract because
  * it is pure typography with no coupling to the shell, and pages in the shared
  * feature packages need it too.
+ *
+ * `title` is a string and the heading is emitted here, rather than the caller
+ * passing a `SectionHeading` node. Every call site passed exactly that node, and
+ * the one section that needed an action beside its heading had to hand-write a
+ * `flex … justify-between` *inside* the title slot to get it — which is the
+ * caller reconstructing this component's own layout because the component
+ * refused to have an opinion about it. The action now has a slot, and the
+ * heading row's geometry belongs here, where it is the same on every page.
+ *
+ * `actions` is the section's own control — "Add", "Enable", "Rotate". It is not
+ * a place for the page's actions; those belong in `PageHeader.actions`. On a
+ * narrow viewport it wraps below the description rather than squeezing it.
+ *
+ * `title` is optional, and the case it is optional for is narrow: a sub-page
+ * whose single section *is* the page. Its area rail has already named it one
+ * column to the left, so a heading here would repeat that name verbatim one line
+ * below it — which is the defect ADR-0150 §三.2 names. The section still needs
+ * its description and its action, so it stays a section and loses only the
+ * heading. A page with more than one section gives every one of them a title.
  */
 export function SettingsSection({
   title,
+  as,
   description,
+  actions,
   children,
 }: {
-  title: ReactNode;
+  /** Omitted only when this section is the whole sub-page; see above. */
+  title?: string;
+  /** Position in the document outline; see `SectionHeading`. */
+  as?: "h2" | "h3" | "h4";
   description?: ReactNode;
+  /** The section's own control, at the right of the heading row. */
+  actions?: ReactNode;
   children: ReactNode;
 }) {
+  // With nothing to put in it the heading row is not rendered at all: an empty
+  // flex box still takes the section's row gap, which reads as a stray blank
+  // band above the content.
+  const heading = title || description || actions;
   return (
     <section className="grid gap-3">
-      <div className="grid gap-1.5">
-        {title}
-        {description && <p className="text-base text-kumo-subtle">{description}</p>}
-      </div>
+      {heading && (
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="grid min-w-0 gap-1.5">
+            {title && <SectionHeading as={as}>{title}</SectionHeading>}
+            {description && <p className="text-base text-kumo-subtle">{description}</p>}
+          </div>
+          {actions && (
+            <div
+              data-slot="settings-section-actions"
+              className="flex shrink-0 flex-wrap items-center gap-2"
+            >
+              {actions}
+            </div>
+          )}
+        </div>
+      )}
       {children}
     </section>
   );

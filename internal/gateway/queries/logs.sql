@@ -17,7 +17,7 @@
 -- comparison (created_at, id) < (a, b) would instead lose the index -- there is
 -- no index in that column order.
 SELECT id::text AS id, request_id, created_at, model_slug, surface, status,
-       http_status, error_code, stream, tokens_in, tokens_out, charged_nano,
+       http_status, error_code, stream, tokens_in, tokens_out, billed_units, billed_unit, charged_nano,
        duration_ms, api_key_id, end_user_id
 FROM usage_logs
 WHERE org_id = @org_id
@@ -42,7 +42,8 @@ LIMIT @lim;
 -- uniqueness is enforced by credit_holds instead. This returns the newest row,
 -- which is also the one you want to look at when a request was replayed.
 SELECT l.id::text AS id, l.request_id, l.created_at, l.model_slug, l.surface, l.status,
-       l.http_status, l.error_code, l.stream, l.tokens_in, l.tokens_out, l.charged_nano,
+       l.http_status, l.error_code, l.stream, l.tokens_in, l.tokens_out,
+       l.billed_units, l.billed_unit, l.charged_nano,
        l.duration_ms, l.api_key_id, l.end_user_id, l.route_attempts, l.ttft_ms,
        l.tokens_cached_read, l.tokens_cache_write, l.tokens_reasoning,
        l.usage_estimated, l.charged_currency, l.byok,

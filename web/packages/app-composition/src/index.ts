@@ -157,7 +157,7 @@ function adminPathMatcher(path: string): RegExp {
 }
 
 /** Resolve a child descriptor into the full path it represents. */
-export function adminChildPath(parentPath: string, childPath: string): string {
+function adminChildPath(parentPath: string, childPath: string): string {
   if (childPath === "/" || childPath === "") return parentPath;
   return `${parentPath.replace(/\/$/, "")}/${childPath.replace(/^\//, "")}`;
 }

@@ -27,6 +27,15 @@ export type LocalFont = {
   sources: LocalFontSource[];
 };
 
+/**
+ * The id of the JSON island a served page carries its profile in.
+ *
+ * It lives here rather than next to either user because both the browser entry
+ * and the build plugin need it and neither may import the other: `build.ts`
+ * pulls in `node:fs`.
+ */
+export const RUNTIME_PROFILE_ELEMENT_ID = "brand-profile";
+
 export interface BrandProfileV1 {
   profileVersion: 1;
   identity: {
@@ -82,8 +91,18 @@ export interface BrandProfileV1 {
        * A switch rather than a name substitution: those documents name the
        * `fairlb` binary, `FAIRLB_API_KEY`, the database role. Projecting the
        * display name onto their prose would leave every command still saying
-       * `fairlb`, which is documentation that does not work. A deployment under
-       * another name writes its own.
+       * `fairlb`, which is documentation that does not work.
+       *
+       * **That argument justifies not substituting, not withholding.** Read
+       * through, every one of those occurrences is a machine interface — the
+       * binary's own name, an environment variable it reads, an image or
+       * repository address, the database role, or a provider key the reader
+       * chooses in their own Codex/OpenCode config. ADR-0147 decision 6 already
+       * rules that class stable across brands. A deployment under another name
+       * runs the same binary with the same variables, so the guides are correct
+       * for it verbatim; what it needs is one sentence saying so, which the
+       * docs pages render (`docsIdentifierNote`). Publishing them is the
+       * default. Turn this off only for a deployment that has written its own.
        */
       guides: boolean;
     };
@@ -202,9 +221,14 @@ export const DEFAULT_BRAND_PROFILE_SOURCE = {
     deploymentDocs: "https://github.com/fairlb/fairlb/tree/main/docs",
   },
   marketing: {
+    // The Chinese hero heading is `word-break: keep-all` (Base.astro), so it
+    // only breaks at punctuation -- a Chinese tagline has to keep each run
+    // between commas short or it overflows a 320px viewport. The narrow-geometry
+    // test is what catches it; the English line wraps at spaces and does not
+    // have this constraint.
     tagline: {
-      en: "One gateway. Native APIs. Automatic failover.",
-      zh: "一个网关，原生协议，自动故障转移。",
+      en: "Native where there is a protocol. One API where there isn't.",
+      zh: "有原生协议，就原样直通；没有的，我们自己定一套。",
     },
     primaryCta: {
       label: { en: "Start building", zh: "开始接入" },
@@ -219,8 +243,8 @@ export const DEFAULT_BRAND_PROFILE_SOURCE = {
     seo: {
       siteName: { en: "FairLB", zh: "FairLB" },
       defaultDescription: {
-        en: "Route production LLM traffic through native OpenAI, Anthropic, and Gemini APIs with automatic failover and request-level accounting.",
-        zh: "通过原生 OpenAI、Anthropic 与 Gemini API 路由生产级 LLM 流量，并获得自动故障转移与请求级账本。",
+        en: "Native OpenAI, Anthropic and Gemini APIs for text and images; one asynchronous job API for video. Automatic failover, and every charge attached to the record that produced it.",
+        zh: "文本与图像走原生 OpenAI、Anthropic 与 Gemini API，视频走一套统一的异步任务 API。自动故障转移，每一笔费用都记在产生它的那条记录上。",
       },
     },
   },

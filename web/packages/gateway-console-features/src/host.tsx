@@ -51,16 +51,6 @@ export interface GatewayConsoleHost {
    */
   useTitle(title: string | undefined): void;
   /**
-   * Whether a destination is reachable (organization-relative paths such as
-   * `/playground` or `/keys`).
-   *
-   * The decision lives in the **shell's destination registry**, because only that
-   * table knows which pages this shell mounted. That is also why it is not a plain
-   * capability read: `canAccess` also covers "this shell never mounted that page",
-   * while a capability only answers "does this person have the right".
-   */
-  canAccess(org: HostOrg, path: string): boolean;
-  /**
    * Whether the current session is impersonating someone. Export actions switch
    * themselves off when it is — **data must not be carried away as a file while
    * acting as another user**. A shell without impersonation returns false.
@@ -109,8 +99,8 @@ export function GatewayConsoleHostProvider({
 function useHost(): GatewayConsoleHost {
   const host = useContext(HostContext);
   // Nothing here means the shell forgot the provider. **No default implementation
-  // on purpose**: a fallback `canAccess` that always returned true would silently
-  // open every capability gate the day a provider goes missing.
+  // on purpose**: a fallback that quietly answered for the shell would turn a
+  // missing provider into wrong pages rather than a loud failure.
   if (!host) {
     throw new Error(
       "gateway console features must be rendered inside <GatewayConsoleHostProvider>",
@@ -129,10 +119,6 @@ export function useConsoleTitle(title: string | undefined): void {
 
 export function useImpersonating(): boolean {
   return useHost().useImpersonating();
-}
-
-export function useCanAccess(): (org: HostOrg, path: string) => boolean {
-  return useHost().canAccess;
 }
 
 export function OrgNotFound() {

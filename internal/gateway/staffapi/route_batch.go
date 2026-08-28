@@ -65,8 +65,19 @@ func (s *Server) BatchWireProviderRoutes(
 		}
 		if c.NewModel != nil {
 			item.NewModel = &catalogadmin.NewModel{
-				Slug:        c.NewModel.Slug,
-				DisplayName: derefOr(c.NewModel.DisplayName, ""),
+				Slug:             c.NewModel.Slug,
+				DisplayName:      derefOr(c.NewModel.DisplayName, ""),
+				ContextWindow:    contextWindowOf(c.NewModel.ContextWindow),
+				OutputModalities: derefModalities(c.NewModel.OutputModalities),
+			}
+			// Absent and zero are the same answer for the window, and different
+			// answers for the output cap: zero there would quietly turn every
+			// pre-authorization estimate for a request without max_tokens into
+			// an input-only one, so an absent value takes the same conservative
+			// default the catalog page applies rather than being passed on.
+			if c.NewModel.MaxOutputTokens != nil {
+				v := int32(*c.NewModel.MaxOutputTokens)
+				item.NewModel.MaxOutputTokens = &v
 			}
 		}
 		creates = append(creates, item)
@@ -88,4 +99,14 @@ func (s *Server) BatchWireProviderRoutes(
 		out = append(out, batchItemDTO(r))
 	}
 	return BatchWireProviderRoutes200JSONResponse{Results: out}, nil
+}
+
+// contextWindowOf narrows the optional context window, treating absent as zero.
+// Absent and zero mean the same thing for this field -- unset -- which is why
+// it is the one of the two windows that can be flattened this way.
+func contextWindowOf(p *int) int32 {
+	if p == nil {
+		return 0
+	}
+	return int32(*p)
 }

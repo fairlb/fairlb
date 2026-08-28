@@ -1,7 +1,7 @@
 package main
 
 import (
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -45,6 +45,8 @@ func TestCommunitySettingsRegistryInventory(t *testing.T) {
 		"gateway.anomaly_multiplier":         {settings.GroupOperations, settings.ImpactNormal},
 		"gateway.anomaly_floor":              {settings.GroupOperations, settings.ImpactNormal},
 		"gateway.resource_affinity_ttl_days": {settings.GroupRetention, settings.ImpactHigh},
+		// 生成的视频是客户内容，调小这个就是把它删掉（ADR-0222）。
+		"gateway.video_retention_hours": {settings.GroupRetention, settings.ImpactHigh},
 	}
 
 	// 与 main.go 同源：入口建 Store 时交进去的就是这一份。
@@ -79,7 +81,7 @@ func TestCommunitySettingsRegistryInventory(t *testing.T) {
 			missing = append(missing, k)
 		}
 	}
-	sort.Strings(missing)
+	slices.Sort(missing)
 	if len(missing) > 0 {
 		t.Errorf("清单里有 %d 个键在 Community 二进制里没被注册：%v——"+
 			"多半是某一层不再把它交给 SettingSpecs 了，而那不会有任何编译错误",

@@ -1,13 +1,13 @@
 package proxy
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -117,7 +117,7 @@ func (p *Pipeline) geminiModelsForRequest(r *http.Request) ([]geminiModel, *Erro
 			OutputTokenLimit: model.MaxOutputTokens, SupportedGenerationMethods: methods,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b geminiModel) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 

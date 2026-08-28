@@ -48,17 +48,22 @@ type LogFilter struct {
 type LogEntry struct {
 	// ID is the row id as text: the cursor encodes it, and the query already
 	// returns it that way.
-	ID          string
-	RequestID   string
-	CreatedAt   time.Time
-	ModelSlug   string
-	Surface     string
-	Status      string
-	HTTPStatus  int32
-	ErrorCode   string
-	Stream      bool
-	TokensIn    int64
-	TokensOut   int64
+	ID         string
+	RequestID  string
+	CreatedAt  time.Time
+	ModelSlug  string
+	Surface    string
+	Status     string
+	HTTPStatus int32
+	ErrorCode  string
+	Stream     bool
+	TokensIn   int64
+	TokensOut  int64
+	// BilledUnits and BilledUnit describe a request billed by unit rather than
+	// by token -- seconds of video, or generations. Zero and empty for a
+	// token-billed request, whose token columns carry the quantity instead.
+	BilledUnits int64
+	BilledUnit  string
 	ChargedNano int64
 	DurationMs  int32
 	APIKeyID    pgtype.UUID
@@ -91,6 +96,7 @@ func entryFrom(r gwdb.ListRequestLogsRow) LogEntry {
 		ModelSlug: r.ModelSlug, Surface: r.Surface, Status: r.Status,
 		HTTPStatus: r.HttpStatus, ErrorCode: r.ErrorCode, Stream: r.Stream,
 		TokensIn: int64(r.TokensIn), TokensOut: int64(r.TokensOut),
+		BilledUnits: int64(r.BilledUnits.Int32), BilledUnit: r.BilledUnit,
 		ChargedNano: r.ChargedNano, DurationMs: r.DurationMs,
 		APIKeyID: r.ApiKeyID, EndUserID: r.EndUserID,
 	}
@@ -149,6 +155,7 @@ func (r *LogReader) Log(ctx context.Context, orgID pgtype.UUID, requestID string
 			ModelSlug: row.ModelSlug, Surface: row.Surface, Status: row.Status,
 			HttpStatus: row.HttpStatus, ErrorCode: row.ErrorCode, Stream: row.Stream,
 			TokensIn: row.TokensIn, TokensOut: row.TokensOut,
+			BilledUnits: row.BilledUnits, BilledUnit: row.BilledUnit,
 			ChargedNano: row.ChargedNano, DurationMs: row.DurationMs,
 			ApiKeyID: row.ApiKeyID, EndUserID: row.EndUserID,
 		}),

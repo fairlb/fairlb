@@ -46,7 +46,7 @@ func (q *Queries) CatalogSwitchCounts(ctx context.Context) (CatalogSwitchCountsR
 
 const classifyUpstreamModels = `-- name: ClassifyUpstreamModels :many
 
-WITH ids AS (SELECT DISTINCT unnest($2::text[])::text AS upstream_id)
+WITH ids AS (SELECT DISTINCT unnest($3::text[])::text AS upstream_id)
 SELECT i.upstream_id::text                AS upstream_id,
        m.id                               AS model_id,
        COALESCE(m.slug, '')::text         AS model_slug,
@@ -97,8 +97,26 @@ LEFT JOIN LATERAL (
     SELECT mm.id, mm.slug FROM models mm
     -- No protocol predicate: a model owns none, and any provider can carry any
     -- model on the protocols it speaks.
+    --
+    -- The equality arm only ever fires for an upstream that reports two-part
+    -- names of its own -- an aggregator saying "openai/gpt-5.4" -- because a
+    -- slug is two segments and a plain upstream name is one. The suffix arm is
+    -- what matches the ordinary case.
     WHERE mm.slug = i.upstream_id OR mm.slug LIKE '%/' || i.upstream_id
-    ORDER BY (mm.slug = i.upstream_id) DESC, mm.slug
+    -- Exact first, then the model whose creator segment is the one this
+    -- provider's vendor publishes as a first party.
+    --
+    -- Without that middle term two catalog entries ending in the same name are
+    -- separated by alphabetical order, which is not a reason -- it is the
+    -- absence of one. The argument is the vendor's *creator*, not its own slug:
+    -- the two differ often enough (xAI publishes "x-ai", Alibaba publishes
+    -- "qwen") that using the slug would rank by a name no slug contains. It is
+    -- empty for a vendor that creates nothing -- a platform or an aggregator --
+    -- and an empty creator matches no slug, so the term drops out rather than
+    -- ranking anything by accident.
+    ORDER BY (mm.slug = i.upstream_id) DESC,
+             (split_part(mm.slug, '/', 1) = $2::text) DESC,
+             mm.slug
     LIMIT 1
 ) m ON true
 ORDER BY i.upstream_id
@@ -106,6 +124,7 @@ ORDER BY i.upstream_id
 
 type ClassifyUpstreamModelsParams struct {
 	ProviderID  pgtype.UUID
+	Creator     string
 	UpstreamIds []string
 }
 
@@ -137,7 +156,7 @@ type ClassifyUpstreamModelsRow struct {
 // The former would generate interface{}, and the latter would generate the
 // nullable slug as a non-nullable string, which panics on scan.
 func (q *Queries) ClassifyUpstreamModels(ctx context.Context, arg ClassifyUpstreamModelsParams) ([]ClassifyUpstreamModelsRow, error) {
-	rows, err := q.db.Query(ctx, classifyUpstreamModels, arg.ProviderID, arg.UpstreamIds)
+	rows, err := q.db.Query(ctx, classifyUpstreamModels, arg.ProviderID, arg.Creator, arg.UpstreamIds)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +184,7 @@ func (q *Queries) ClassifyUpstreamModels(ctx context.Context, arg ClassifyUpstre
 const clearRouteProbeOverride = `-- name: ClearRouteProbeOverride :exec
 UPDATE model_route_probes
 SET status = 'unverified', source = 'probe', checked_at = NULL, latency_ms = NULL,
-    status_code = NULL, error = '', updated_at = now()
+    status_code = NULL, error = '', probe_enqueued_at = NULL, updated_at = now()
 WHERE route_id = $1 AND endpoint = $2
 `
 
@@ -178,6 +197,21 @@ type ClearRouteProbeOverrideParams struct {
 // next probe decides.
 func (q *Queries) ClearRouteProbeOverride(ctx context.Context, arg ClearRouteProbeOverrideParams) error {
 	_, err := q.db.Exec(ctx, clearRouteProbeOverride, arg.RouteID, arg.Endpoint)
+	return err
+}
+
+const clearRouteProbesEnqueued = `-- name: ClearRouteProbesEnqueued :exec
+UPDATE model_route_probes SET probe_enqueued_at = NULL, updated_at = now()
+ WHERE route_id = $1 AND probe_enqueued_at IS NOT NULL
+`
+
+// The worker's own cleanup, run however its pass ends. Verdicts clear their own
+// row as they land, which is what makes each badge stop one at a time; this
+// catches what is left -- an operator's row the upsert refused to touch, an
+// endpoint skipped because the provider has no credential yet, a route deleted
+// under the job.
+func (q *Queries) ClearRouteProbesEnqueued(ctx context.Context, routeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearRouteProbesEnqueued, routeID)
 	return err
 }
 
@@ -218,26 +252,42 @@ func (q *Queries) CountVerifiedProviderKeys(ctx context.Context, providerID pgty
 const createModel = `-- name: CreateModel :one
 INSERT INTO models (
     slug, display_name, enabled, visibility,
-    context_window, max_output_tokens
-) VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, slug, display_name, enabled, visibility
+    context_window, max_output_tokens, output_modalities
+) VALUES ($1, $2, $3, $4, $5, $6,
+          -- Unset means text, the column's own default. Passing the argument
+          -- through raw would send NULL for every caller that says nothing and
+          -- fail the NOT NULL -- which is most of them, since only an image or
+          -- video model has anything to say here.
+          --
+          -- nullif before the coalesce, because a caller can send ` + "`" + `[]` + "`" + ` and the
+          -- driver encodes a non-nil empty slice as ` + "`" + `{}` + "`" + ` rather than as NULL:
+          -- without it that array reaches the column and fails the cardinality
+          -- CHECK, so "I said nothing about modalities" answers with a
+          -- constraint violation instead of with the default.
+          COALESCE(
+              nullif($7::text[], '{}'::text[]),
+              ARRAY['text']::text[]
+          ))
+RETURNING id, slug, display_name, enabled, visibility, output_modalities
 `
 
 type CreateModelParams struct {
-	Slug            string
-	DisplayName     string
-	Enabled         bool
-	Visibility      string
-	ContextWindow   int32
-	MaxOutputTokens int32
+	Slug             string
+	DisplayName      string
+	Enabled          bool
+	Visibility       string
+	ContextWindow    int32
+	MaxOutputTokens  int32
+	OutputModalities []string
 }
 
 type CreateModelRow struct {
-	ID          pgtype.UUID
-	Slug        string
-	DisplayName string
-	Enabled     bool
-	Visibility  string
+	ID               pgtype.UUID
+	Slug             string
+	DisplayName      string
+	Enabled          bool
+	Visibility       string
+	OutputModalities []string
 }
 
 // Pricing does not live in this table: the model_pricing row is the price.
@@ -251,6 +301,7 @@ func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Creat
 		arg.Visibility,
 		arg.ContextWindow,
 		arg.MaxOutputTokens,
+		arg.OutputModalities,
 	)
 	var i CreateModelRow
 	err := row.Scan(
@@ -259,6 +310,7 @@ func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Creat
 		&i.DisplayName,
 		&i.Enabled,
 		&i.Visibility,
+		&i.OutputModalities,
 	)
 	return i, err
 }
@@ -394,10 +446,10 @@ func (q *Queries) CreateProviderKey(ctx context.Context, arg CreateProviderKeyPa
 const createRoute = `-- name: CreateRoute :one
 INSERT INTO model_routes (
     model_id, provider_id, provider_model_id, priority, weight, enabled, headers,
-    context_window, max_output_tokens, quirks
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    context_window, max_output_tokens, quirks, video_envelope, max_images
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, model_id, provider_id, provider_model_id, priority, weight, enabled, headers,
-          context_window, max_output_tokens, quirks
+          context_window, max_output_tokens, quirks, video_envelope, max_images
 `
 
 type CreateRouteParams struct {
@@ -411,6 +463,8 @@ type CreateRouteParams struct {
 	ContextWindow   pgtype.Int4
 	MaxOutputTokens pgtype.Int4
 	Quirks          []byte
+	VideoEnvelope   []byte
+	MaxImages       pgtype.Int4
 }
 
 type CreateRouteRow struct {
@@ -425,6 +479,8 @@ type CreateRouteRow struct {
 	ContextWindow   pgtype.Int4
 	MaxOutputTokens pgtype.Int4
 	Quirks          []byte
+	VideoEnvelope   []byte
+	MaxImages       pgtype.Int4
 }
 
 func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (CreateRouteRow, error) {
@@ -439,6 +495,8 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Creat
 		arg.ContextWindow,
 		arg.MaxOutputTokens,
 		arg.Quirks,
+		arg.VideoEnvelope,
+		arg.MaxImages,
 	)
 	var i CreateRouteRow
 	err := row.Scan(
@@ -453,6 +511,8 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Creat
 		&i.ContextWindow,
 		&i.MaxOutputTokens,
 		&i.Quirks,
+		&i.VideoEnvelope,
+		&i.MaxImages,
 	)
 	return i, err
 }
@@ -468,6 +528,21 @@ type DeleteCooldownParams struct {
 
 func (q *Queries) DeleteCooldown(ctx context.Context, arg DeleteCooldownParams) error {
 	_, err := q.db.Exec(ctx, deleteCooldown, arg.Scope, arg.RefID)
+	return err
+}
+
+const deleteProviderDiscovery = `-- name: DeleteProviderDiscovery :exec
+DELETE FROM provider_discoveries WHERE provider_id = $1
+`
+
+// Forget the snapshot when the provider stops being the same upstream.
+//
+// A base URL or vendor change points the record at a different service, and the
+// stored catalogue then describes something nobody is talking to any more --
+// which is worse than having no snapshot, because it still reads as an answer.
+// The same judgement the probe rows make when an upstream model name changes.
+func (q *Queries) DeleteProviderDiscovery(ctx context.Context, providerID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteProviderDiscovery, providerID)
 	return err
 }
 
@@ -528,7 +603,7 @@ func (q *Queries) DeleteRouteProbesOutsideProtocols(ctx context.Context, arg Del
 }
 
 const getModelBySlug = `-- name: GetModelBySlug :one
-SELECT id, slug, display_name, context_window, max_output_tokens, capabilities, visibility, enabled, metadata, created_at, updated_at FROM models WHERE slug = $1 AND enabled
+SELECT id, slug, display_name, context_window, max_output_tokens, capabilities, output_modalities, visibility, enabled, metadata, created_at, updated_at FROM models WHERE slug = $1 AND enabled
 `
 
 func (q *Queries) GetModelBySlug(ctx context.Context, slug string) (Model, error) {
@@ -541,6 +616,7 @@ func (q *Queries) GetModelBySlug(ctx context.Context, slug string) (Model, error
 		&i.ContextWindow,
 		&i.MaxOutputTokens,
 		&i.Capabilities,
+		&i.OutputModalities,
 		&i.Visibility,
 		&i.Enabled,
 		&i.Metadata,
@@ -553,6 +629,7 @@ func (q *Queries) GetModelBySlug(ctx context.Context, slug string) (Model, error
 const getModelForAdmin = `-- name: GetModelForAdmin :one
 SELECT m.id, m.slug, m.display_name, m.enabled, m.visibility,
        m.context_window, m.max_output_tokens,
+       m.output_modalities,
        m.metadata,
        COALESCE((SELECT array_agg(DISTINCT v.endpoint ORDER BY v.endpoint)
                  FROM model_published_endpoints v WHERE v.model_id = m.id), '{}')::text[] AS endpoints,
@@ -564,17 +641,18 @@ FROM models m WHERE m.id = $1
 `
 
 type GetModelForAdminRow struct {
-	ID              pgtype.UUID
-	Slug            string
-	DisplayName     string
-	Enabled         bool
-	Visibility      string
-	ContextWindow   int32
-	MaxOutputTokens int32
-	Metadata        []byte
-	Endpoints       []string
-	Protocols       []string
-	RouteCount      int64
+	ID               pgtype.UUID
+	Slug             string
+	DisplayName      string
+	Enabled          bool
+	Visibility       string
+	ContextWindow    int32
+	MaxOutputTokens  int32
+	OutputModalities []string
+	Metadata         []byte
+	Endpoints        []string
+	Protocols        []string
+	RouteCount       int64
 }
 
 // Single-row read for the detail page; the column list is a literal copy of
@@ -593,6 +671,7 @@ func (q *Queries) GetModelForAdmin(ctx context.Context, id pgtype.UUID) (GetMode
 		&i.Visibility,
 		&i.ContextWindow,
 		&i.MaxOutputTokens,
+		&i.OutputModalities,
 		&i.Metadata,
 		&i.Endpoints,
 		&i.Protocols,
@@ -654,6 +733,26 @@ func (q *Queries) GetProviderDetailForAdmin(ctx context.Context, id pgtype.UUID)
 		&i.MaxConcurrency,
 		&i.KeyCount,
 		&i.RouteCount,
+	)
+	return i, err
+}
+
+const getProviderDiscovery = `-- name: GetProviderDiscovery :one
+SELECT provider_id, checked_at, ok, complete, status_code, message, models
+FROM provider_discoveries WHERE provider_id = $1
+`
+
+func (q *Queries) GetProviderDiscovery(ctx context.Context, providerID pgtype.UUID) (ProviderDiscovery, error) {
+	row := q.db.QueryRow(ctx, getProviderDiscovery, providerID)
+	var i ProviderDiscovery
+	err := row.Scan(
+		&i.ProviderID,
+		&i.CheckedAt,
+		&i.Ok,
+		&i.Complete,
+		&i.StatusCode,
+		&i.Message,
+		&i.Models,
 	)
 	return i, err
 }
@@ -776,7 +875,7 @@ func (q *Queries) GetProviderKeysForProvider(ctx context.Context, providerID pgt
 }
 
 const getRouteProbe = `-- name: GetRouteProbe :one
-SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error
+SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error, pr.probe_enqueued_at
 FROM model_route_probes pr
 WHERE pr.route_id = $1 AND pr.endpoint = $2
 `
@@ -787,15 +886,16 @@ type GetRouteProbeParams struct {
 }
 
 type GetRouteProbeRow struct {
-	RouteID    pgtype.UUID
-	Endpoint   string
-	ProbeMode  string
-	Status     string
-	Source     string
-	CheckedAt  pgtype.Timestamptz
-	LatencyMs  pgtype.Int4
-	StatusCode pgtype.Int4
-	Error      string
+	RouteID         pgtype.UUID
+	Endpoint        string
+	ProbeMode       string
+	Status          string
+	Source          string
+	CheckedAt       pgtype.Timestamptz
+	LatencyMs       pgtype.Int4
+	StatusCode      pgtype.Int4
+	Error           string
+	ProbeEnqueuedAt pgtype.Timestamptz
 }
 
 func (q *Queries) GetRouteProbe(ctx context.Context, arg GetRouteProbeParams) (GetRouteProbeRow, error) {
@@ -811,6 +911,7 @@ func (q *Queries) GetRouteProbe(ctx context.Context, arg GetRouteProbeParams) (G
 		&i.LatencyMs,
 		&i.StatusCode,
 		&i.Error,
+		&i.ProbeEnqueuedAt,
 	)
 	return i, err
 }
@@ -860,6 +961,11 @@ SELECT m.id, m.slug, m.display_name, m.enabled, m.visibility,
        -- once write-only, which meant "settable at creation, unchangeable
        -- afterwards" -- changing a display name took a hand-written API call.
        m.context_window, m.max_output_tokens,
+       -- What the model produces (ADR-0226). Declared, so the catalog filter
+       -- and the edit dialog both read it from here rather than guessing from
+       -- the endpoint set -- an endpoint says how a model is called, not what
+       -- comes back.
+       m.output_modalities,
        -- metadata comes along with the list for the same reason: the mapping
        -- editor prefills from it, and without it every open would need a second
        -- single-model query.
@@ -884,17 +990,18 @@ LIMIT 500
 `
 
 type ListModelsForAdminRow struct {
-	ID              pgtype.UUID
-	Slug            string
-	DisplayName     string
-	Enabled         bool
-	Visibility      string
-	ContextWindow   int32
-	MaxOutputTokens int32
-	Metadata        []byte
-	Endpoints       []string
-	Protocols       []string
-	RouteCount      int64
+	ID               pgtype.UUID
+	Slug             string
+	DisplayName      string
+	Enabled          bool
+	Visibility       string
+	ContextWindow    int32
+	MaxOutputTokens  int32
+	OutputModalities []string
+	Metadata         []byte
+	Endpoints        []string
+	Protocols        []string
+	RouteCount       int64
 }
 
 // Still capped rather than paginated, and the order is deliberate (ADR-0187):
@@ -921,6 +1028,7 @@ func (q *Queries) ListModelsForAdmin(ctx context.Context, search string) ([]List
 			&i.Visibility,
 			&i.ContextWindow,
 			&i.MaxOutputTokens,
+			&i.OutputModalities,
 			&i.Metadata,
 			&i.Endpoints,
 			&i.Protocols,
@@ -1179,7 +1287,7 @@ WITH selected_plan AS (
        )
     LIMIT 1
 )
-SELECT m.id, m.slug, m.display_name, m.context_window, m.max_output_tokens, m.capabilities, m.visibility, m.enabled, m.metadata, m.created_at, m.updated_at,
+SELECT m.id, m.slug, m.display_name, m.context_window, m.max_output_tokens, m.capabilities, m.output_modalities, m.visibility, m.enabled, m.metadata, m.created_at, m.updated_at,
        -- What the catalog publishes is stated once, in the
        -- model_published_endpoints view: what a probe has seen working, plus
        -- what the platform has no credential to look at. Unverified endpoints
@@ -1205,6 +1313,24 @@ SELECT m.id, m.slug, m.display_name, m.context_window, m.max_output_tokens, m.ca
        mp.upstream_cache_write_nano_per_mtok AS current_upstream_cache_write_nano_per_mtok,
        mp.multiplier_bps AS current_model_multiplier_bps,
        mp.updated_at AS current_model_price_effective_at,
+       -- Which family charges this model. Without it a per-second model is
+       -- indistinguishable here from an unpriced one: its four token columns
+       -- are explicit zeros, which every reader of this row would otherwise
+       -- have to guess the meaning of.
+       COALESCE(mp.pricing_family, 'tokens')::text AS current_pricing_family,
+       -- The per-unit rate card, carried with the row rather than fetched per
+       -- model: this query already answers "what does it cost" for every other
+       -- family, and a second round trip per row is how a catalogue page turns
+       -- into N+1 queries.
+       COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+                      'unit', u.unit, 'resolution', u.resolution,
+                      'audio', u.audio, 'variant', u.variant,
+                      'service_tier', u.service_tier,
+                      'nano_per_unit', u.nano_per_unit)
+                  ORDER BY u.unit, u.resolution, u.audio, u.variant, u.service_tier)
+             FROM model_price_unit_rates u WHERE u.model_id = mp.model_id
+       ), '[]'::jsonb)::jsonb AS current_unit_rates,
        -- Where the upstream rate came from and whether a person confirmed it.
        -- verified_at NULL means "a reference dataset suggested this, nobody
        -- checked it" -- see docs/design/reference-prices.md. A catalog that
@@ -1254,6 +1380,7 @@ type ListPublicModelsRow struct {
 	ContextWindow                        int32
 	MaxOutputTokens                      int32
 	Capabilities                         []byte
+	OutputModalities                     []string
 	Visibility                           string
 	Enabled                              bool
 	Metadata                             []byte
@@ -1270,6 +1397,8 @@ type ListPublicModelsRow struct {
 	CurrentUpstreamCacheWriteNanoPerMtok pgtype.Int8
 	CurrentModelMultiplierBps            pgtype.Int4
 	CurrentModelPriceEffectiveAt         pgtype.Timestamptz
+	CurrentPricingFamily                 string
+	CurrentUnitRates                     []byte
 	CurrentPriceSourceName               pgtype.Text
 	CurrentPriceSourceUrl                pgtype.Text
 	CurrentPriceVerifiedAt               pgtype.Timestamptz
@@ -1314,6 +1443,7 @@ func (q *Queries) ListPublicModels(ctx context.Context, arg ListPublicModelsPara
 			&i.ContextWindow,
 			&i.MaxOutputTokens,
 			&i.Capabilities,
+			&i.OutputModalities,
 			&i.Visibility,
 			&i.Enabled,
 			&i.Metadata,
@@ -1330,6 +1460,8 @@ func (q *Queries) ListPublicModels(ctx context.Context, arg ListPublicModelsPara
 			&i.CurrentUpstreamCacheWriteNanoPerMtok,
 			&i.CurrentModelMultiplierBps,
 			&i.CurrentModelPriceEffectiveAt,
+			&i.CurrentPricingFamily,
+			&i.CurrentUnitRates,
 			&i.CurrentPriceSourceName,
 			&i.CurrentPriceSourceUrl,
 			&i.CurrentPriceVerifiedAt,
@@ -1374,7 +1506,7 @@ func (q *Queries) ListRouteIDsForProvider(ctx context.Context, providerID pgtype
 }
 
 const listRouteProbes = `-- name: ListRouteProbes :many
-SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error
+SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error, pr.probe_enqueued_at
 FROM model_route_probes pr
 JOIN model_routes r ON r.id = pr.route_id
 JOIN providers p ON p.id = r.provider_id
@@ -1383,15 +1515,16 @@ ORDER BY pr.route_id, pr.endpoint
 `
 
 type ListRouteProbesRow struct {
-	RouteID    pgtype.UUID
-	Endpoint   string
-	ProbeMode  string
-	Status     string
-	Source     string
-	CheckedAt  pgtype.Timestamptz
-	LatencyMs  pgtype.Int4
-	StatusCode pgtype.Int4
-	Error      string
+	RouteID         pgtype.UUID
+	Endpoint        string
+	ProbeMode       string
+	Status          string
+	Source          string
+	CheckedAt       pgtype.Timestamptz
+	LatencyMs       pgtype.Int4
+	StatusCode      pgtype.Int4
+	Error           string
+	ProbeEnqueuedAt pgtype.Timestamptz
 }
 
 // Only endpoints of a protocol the provider still speaks: rows are deleted when
@@ -1416,6 +1549,7 @@ func (q *Queries) ListRouteProbes(ctx context.Context, modelID pgtype.UUID) ([]L
 			&i.LatencyMs,
 			&i.StatusCode,
 			&i.Error,
+			&i.ProbeEnqueuedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1487,7 +1621,7 @@ func (q *Queries) ListRouteProbesDueForReprobe(ctx context.Context, arg ListRout
 }
 
 const listRouteProbesForProvider = `-- name: ListRouteProbesForProvider :many
-SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error
+SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error, pr.probe_enqueued_at
 FROM model_route_probes pr
 JOIN model_routes r ON r.id = pr.route_id
 JOIN providers p ON p.id = r.provider_id
@@ -1496,15 +1630,16 @@ ORDER BY pr.route_id, pr.endpoint
 `
 
 type ListRouteProbesForProviderRow struct {
-	RouteID    pgtype.UUID
-	Endpoint   string
-	ProbeMode  string
-	Status     string
-	Source     string
-	CheckedAt  pgtype.Timestamptz
-	LatencyMs  pgtype.Int4
-	StatusCode pgtype.Int4
-	Error      string
+	RouteID         pgtype.UUID
+	Endpoint        string
+	ProbeMode       string
+	Status          string
+	Source          string
+	CheckedAt       pgtype.Timestamptz
+	LatencyMs       pgtype.Int4
+	StatusCode      pgtype.Int4
+	Error           string
+	ProbeEnqueuedAt pgtype.Timestamptz
 }
 
 // Probe results read from the provider side; same as ListRouteProbes with the
@@ -1528,6 +1663,7 @@ func (q *Queries) ListRouteProbesForProvider(ctx context.Context, providerID pgt
 			&i.LatencyMs,
 			&i.StatusCode,
 			&i.Error,
+			&i.ProbeEnqueuedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1543,7 +1679,7 @@ const listRoutesForAdmin = `-- name: ListRoutesForAdmin :many
 SELECT r.id, r.model_id, m.slug AS model_slug,
        r.provider_id, p.slug AS provider_slug, p.protocols AS provider_protocols,
        r.provider_model_id, r.priority, r.weight, r.enabled, r.headers,
-       r.context_window, r.max_output_tokens, r.quirks
+       r.context_window, r.max_output_tokens, r.quirks, r.video_envelope, r.max_images
 FROM model_routes r
 JOIN providers p ON p.id = r.provider_id
 JOIN models m ON m.id = r.model_id
@@ -1567,6 +1703,8 @@ type ListRoutesForAdminRow struct {
 	ContextWindow     pgtype.Int4
 	MaxOutputTokens   pgtype.Int4
 	Quirks            []byte
+	VideoEnvelope     []byte
+	MaxImages         pgtype.Int4
 }
 
 // 有界而不是分页，且这是**整集编辑面的前提**：模型侧的接线弹窗按这份清单算出
@@ -1598,6 +1736,8 @@ func (q *Queries) ListRoutesForAdmin(ctx context.Context, modelID pgtype.UUID) (
 			&i.ContextWindow,
 			&i.MaxOutputTokens,
 			&i.Quirks,
+			&i.VideoEnvelope,
+			&i.MaxImages,
 		); err != nil {
 			return nil, err
 		}
@@ -1613,7 +1753,7 @@ const listRoutesForModel = `-- name: ListRoutesForModel :many
 
 SELECT r.id, r.model_id, r.provider_id, r.provider_model_id,
        r.priority, r.weight, r.headers,
-       r.context_window, r.max_output_tokens, r.quirks,
+       r.context_window, r.max_output_tokens, r.quirks, r.video_envelope, r.max_images,
        p.slug AS provider_slug, p.vendor AS provider_vendor,
        $2::text AS protocol, p.base_url,
        p.headers AS provider_headers, p.transport AS provider_transport,
@@ -1661,6 +1801,8 @@ type ListRoutesForModelRow struct {
 	ContextWindow          pgtype.Int4
 	MaxOutputTokens        pgtype.Int4
 	Quirks                 []byte
+	VideoEnvelope          []byte
+	MaxImages              pgtype.Int4
 	ProviderSlug           string
 	ProviderVendor         string
 	Protocol               string
@@ -1737,6 +1879,8 @@ func (q *Queries) ListRoutesForModel(ctx context.Context, arg ListRoutesForModel
 			&i.ContextWindow,
 			&i.MaxOutputTokens,
 			&i.Quirks,
+			&i.VideoEnvelope,
+			&i.MaxImages,
 			&i.ProviderSlug,
 			&i.ProviderVendor,
 			&i.Protocol,
@@ -1761,7 +1905,7 @@ const listRoutesForProviderAdmin = `-- name: ListRoutesForProviderAdmin :many
 SELECT r.id, r.model_id, m.slug AS model_slug,
        r.provider_id, p.slug AS provider_slug, p.protocols AS provider_protocols,
        r.provider_model_id, r.priority, r.weight, r.enabled, r.headers,
-       r.context_window, r.max_output_tokens, r.quirks
+       r.context_window, r.max_output_tokens, r.quirks, r.video_envelope, r.max_images
 FROM model_routes r
 JOIN providers p ON p.id = r.provider_id
 JOIN models m ON m.id = r.model_id
@@ -1785,6 +1929,8 @@ type ListRoutesForProviderAdminRow struct {
 	ContextWindow     pgtype.Int4
 	MaxOutputTokens   pgtype.Int4
 	Quirks            []byte
+	VideoEnvelope     []byte
+	MaxImages         pgtype.Int4
 }
 
 // The same rows read from the provider side, for the Models panel on a provider's
@@ -1817,6 +1963,8 @@ func (q *Queries) ListRoutesForProviderAdmin(ctx context.Context, providerID pgt
 			&i.ContextWindow,
 			&i.MaxOutputTokens,
 			&i.Quirks,
+			&i.VideoEnvelope,
+			&i.MaxImages,
 		); err != nil {
 			return nil, err
 		}
@@ -1842,6 +1990,38 @@ type MarkProviderKeyVerifiedParams struct {
 // failed manual test may just mean the upstream model name was typed wrong.
 func (q *Queries) MarkProviderKeyVerified(ctx context.Context, arg MarkProviderKeyVerifiedParams) error {
 	_, err := q.db.Exec(ctx, markProviderKeyVerified, arg.ID, arg.LastError)
+	return err
+}
+
+const markRouteProbesEnqueued = `-- name: MarkRouteProbesEnqueued :exec
+UPDATE model_route_probes
+   SET probe_enqueued_at = now(), updated_at = now()
+ WHERE route_id = $1
+   AND CASE WHEN cardinality($2::text[]) = 0
+            THEN probe_mode = 'auto'
+            ELSE endpoint = ANY ($2::text[])
+       END
+`
+
+type MarkRouteProbesEnqueuedParams struct {
+	RouteID   pgtype.UUID
+	Endpoints []string
+}
+
+// Mark the rows a probe job is about to answer as in flight.
+//
+// The endpoint selection is the worker's own rule, written once here rather
+// than recomputed by each caller: the endpoints named, or every automatically
+// probed one when none is. `probe_mode` is a stored column precisely so SQL can
+// express that without spelling any endpoint's name.
+//
+// Marking at enqueue rather than when the worker picks the job up, because the
+// question the marker answers -- "is one already running, or may I ask for
+// one?" -- is asked by an interface a moment after somebody clicked, and on the
+// endpoints that are never probed automatically the answer decides whether they
+// pay for a second generation.
+func (q *Queries) MarkRouteProbesEnqueued(ctx context.Context, arg MarkRouteProbesEnqueuedParams) error {
+	_, err := q.db.Exec(ctx, markRouteProbesEnqueued, arg.RouteID, arg.Endpoints)
 	return err
 }
 
@@ -1995,9 +2175,62 @@ func (q *Queries) ResetRouteProbes(ctx context.Context, routeID pgtype.UUID) err
 	return err
 }
 
+const resolveModelsByUpstreamID = `-- name: ResolveModelsByUpstreamID :many
+SELECT DISTINCT m.slug
+FROM model_routes r
+JOIN providers p ON p.id = r.provider_id
+JOIN models m ON m.id = r.model_id
+WHERE p.vendor = $1
+  AND r.provider_model_id = $2
+  AND r.enabled AND p.enabled AND m.enabled
+  AND $3::text = ANY (p.protocols)
+ORDER BY m.slug
+`
+
+type ResolveModelsByUpstreamIDParams struct {
+	Vendor          string
+	ProviderModelID string
+	Protocol        string
+}
+
+// The reverse of the usual direction, and it exists for exactly one caller: a
+// vendor compatibility surface, where the caller sends that vendor's own model
+// name because that is what their existing code sends. Admission resolves by
+// catalog slug, so the two have to be joined somewhere, and the join is here
+// rather than in a map somebody maintains.
+//
+// Deployment-wide rather than scoped to the caller's organization, deliberately.
+// What is being answered is "does this deployment wire that upstream name at
+// all", which is a fact about the catalogue; whether this caller may use the
+// model is admission's question and is asked next, so a model they cannot reach
+// still refuses. Answering it here as well would make the two disagree.
+//
+// Several rows is not an error to resolve here: two catalog models wired to the
+// same upstream name on the same vendor have different rate cards, and picking
+// one would charge against a card nobody chose. The caller reports it.
+func (q *Queries) ResolveModelsByUpstreamID(ctx context.Context, arg ResolveModelsByUpstreamIDParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, resolveModelsByUpstreamID, arg.Vendor, arg.ProviderModelID, arg.Protocol)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, err
+		}
+		items = append(items, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const routeForProbe = `-- name: RouteForProbe :one
 SELECT r.id, r.provider_model_id,
-       p.id AS provider_id, p.protocols, p.base_url, p.headers AS provider_headers,
+       p.id AS provider_id, p.protocols, p.vendor, p.base_url, p.headers AS provider_headers,
        p.transport AS provider_transport,
        r.headers AS route_headers
 FROM model_routes r JOIN providers p ON p.id = r.provider_id
@@ -2009,6 +2242,7 @@ type RouteForProbeRow struct {
 	ProviderModelID   string
 	ProviderID        pgtype.UUID
 	Protocols         []string
+	Vendor            string
 	BaseUrl           string
 	ProviderHeaders   []byte
 	ProviderTransport []byte
@@ -2027,6 +2261,9 @@ type RouteForProbeRow struct {
 // while the operator's button probed with the provider's real one -- two greens
 // for the same route that could contradict each other, which is exactly what
 // sharing one probe implementation is supposed to prevent.
+// p.vendor is selected for the same reason p.transport is: on the video plane
+// the request shape comes from the vendor's mapper, so a probe that did not
+// know the vendor could not build the request the data plane would send.
 func (q *Queries) RouteForProbe(ctx context.Context, id pgtype.UUID) (RouteForProbeRow, error) {
 	row := q.db.QueryRow(ctx, routeForProbe, id)
 	var i RouteForProbeRow
@@ -2035,6 +2272,7 @@ func (q *Queries) RouteForProbe(ctx context.Context, id pgtype.UUID) (RouteForPr
 		&i.ProviderModelID,
 		&i.ProviderID,
 		&i.Protocols,
+		&i.Vendor,
 		&i.BaseUrl,
 		&i.ProviderHeaders,
 		&i.ProviderTransport,
@@ -2110,7 +2348,11 @@ ON CONFLICT (route_id, endpoint) DO UPDATE SET
     END,
     checked_at = excluded.checked_at,
     latency_ms = excluded.latency_ms, status_code = excluded.status_code,
-    error = excluded.error, updated_at = now()
+    -- The verdict has landed, so the row is no longer in flight. Cleared here
+    -- rather than by the caller because every writer of a verdict has to do it:
+    -- a marker left set is an endpoint the interface will never let anybody
+    -- probe again.
+    error = excluded.error, probe_enqueued_at = NULL, updated_at = now()
 WHERE model_route_probes.source <> 'operator'
 RETURNING status
 `
@@ -2231,7 +2473,10 @@ INSERT INTO model_route_probes (route_id, endpoint, protocol, probe_mode, status
 VALUES ($1, $2, $3, $4, $5, 'operator', now(), '')
 ON CONFLICT (route_id, endpoint) DO UPDATE SET
     status = excluded.status, source = 'operator', checked_at = now(),
-    latency_ms = NULL, status_code = NULL, error = '', updated_at = now()
+    latency_ms = NULL, status_code = NULL, error = '',
+    -- An operator answering by hand ends whatever was in flight: the row has a
+    -- verdict now, and it is theirs.
+    probe_enqueued_at = NULL, updated_at = now()
 `
 
 type SetRouteProbeOverrideParams struct {
@@ -2257,6 +2502,22 @@ func (q *Queries) SetRouteProbeOverride(ctx context.Context, arg SetRouteProbeOv
 	return err
 }
 
+const sweepStaleProbeEnqueued = `-- name: SweepStaleProbeEnqueued :execrows
+UPDATE model_route_probes SET probe_enqueued_at = NULL, updated_at = now()
+ WHERE probe_enqueued_at IS NOT NULL AND probe_enqueued_at < $1::timestamptz
+`
+
+// The backstop. A worker that died between marking and answering would leave a
+// row in flight forever, and forever is the one duration an operator cannot
+// wait out: the interface would never let them ask again.
+func (q *Queries) SweepStaleProbeEnqueued(ctx context.Context, olderThan pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepStaleProbeEnqueued, olderThan)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateModel = `-- name: UpdateModel :one
 UPDATE models SET
     display_name = coalesce($1, display_name),
@@ -2264,26 +2525,32 @@ UPDATE models SET
     visibility   = coalesce($3, visibility),
     context_window    = coalesce($4, context_window),
     max_output_tokens = coalesce($5, max_output_tokens),
+    -- nullif for the same reason as at creation: ` + "`" + `[]` + "`" + ` is "leave it alone", not
+    -- an empty modality set the column would refuse.
+    output_modalities = coalesce(
+        nullif($6::text[], '{}'::text[]), output_modalities),
     updated_at = now()
-WHERE id = $6
-RETURNING id, slug, display_name, enabled, visibility
+WHERE id = $7
+RETURNING id, slug, display_name, enabled, visibility, output_modalities
 `
 
 type UpdateModelParams struct {
-	DisplayName     pgtype.Text
-	Enabled         pgtype.Bool
-	Visibility      pgtype.Text
-	ContextWindow   pgtype.Int4
-	MaxOutputTokens pgtype.Int4
-	ID              pgtype.UUID
+	DisplayName      pgtype.Text
+	Enabled          pgtype.Bool
+	Visibility       pgtype.Text
+	ContextWindow    pgtype.Int4
+	MaxOutputTokens  pgtype.Int4
+	OutputModalities []string
+	ID               pgtype.UUID
 }
 
 type UpdateModelRow struct {
-	ID          pgtype.UUID
-	Slug        string
-	DisplayName string
-	Enabled     bool
-	Visibility  string
+	ID               pgtype.UUID
+	Slug             string
+	DisplayName      string
+	Enabled          bool
+	Visibility       string
+	OutputModalities []string
 }
 
 // Partial update: NULL means the field is unchanged (an unset pgtype value is
@@ -2295,6 +2562,7 @@ func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Updat
 		arg.Visibility,
 		arg.ContextWindow,
 		arg.MaxOutputTokens,
+		arg.OutputModalities,
 		arg.ID,
 	)
 	var i UpdateModelRow
@@ -2304,6 +2572,7 @@ func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Updat
 		&i.DisplayName,
 		&i.Enabled,
 		&i.Visibility,
+		&i.OutputModalities,
 	)
 	return i, err
 }
@@ -2473,10 +2742,12 @@ UPDATE model_routes SET
     context_window    = coalesce($6, context_window),
     max_output_tokens = coalesce($7, max_output_tokens),
     quirks            = coalesce($8, quirks),
+    video_envelope    = coalesce($9, video_envelope),
+    max_images        = coalesce($10, max_images),
     updated_at = now()
-WHERE id = $9 AND model_id = $10
+WHERE id = $11 AND model_id = $12
 RETURNING id, model_id, provider_id, provider_model_id, priority, weight, enabled, headers,
-          context_window, max_output_tokens, quirks
+          context_window, max_output_tokens, quirks, video_envelope, max_images
 `
 
 type UpdateRouteParams struct {
@@ -2488,6 +2759,8 @@ type UpdateRouteParams struct {
 	ContextWindow   pgtype.Int4
 	MaxOutputTokens pgtype.Int4
 	Quirks          []byte
+	VideoEnvelope   []byte
+	MaxImages       pgtype.Int4
 	ID              pgtype.UUID
 	ModelID         pgtype.UUID
 }
@@ -2504,6 +2777,8 @@ type UpdateRouteRow struct {
 	ContextWindow   pgtype.Int4
 	MaxOutputTokens pgtype.Int4
 	Quirks          []byte
+	VideoEnvelope   []byte
+	MaxImages       pgtype.Int4
 }
 
 func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (UpdateRouteRow, error) {
@@ -2516,6 +2791,8 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Updat
 		arg.ContextWindow,
 		arg.MaxOutputTokens,
 		arg.Quirks,
+		arg.VideoEnvelope,
+		arg.MaxImages,
 		arg.ID,
 		arg.ModelID,
 	)
@@ -2532,6 +2809,8 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Updat
 		&i.ContextWindow,
 		&i.MaxOutputTokens,
 		&i.Quirks,
+		&i.VideoEnvelope,
+		&i.MaxImages,
 	)
 	return i, err
 }
@@ -2556,6 +2835,53 @@ func (q *Queries) UpsertCooldown(ctx context.Context, arg UpsertCooldownParams) 
 		arg.RefID,
 		arg.Until,
 		arg.Reason,
+	)
+	return err
+}
+
+const upsertProviderDiscovery = `-- name: UpsertProviderDiscovery :exec
+
+INSERT INTO provider_discoveries (provider_id, checked_at, ok, complete, status_code, message, models)
+VALUES ($1, $2, $3, $4, $5::integer, $6, $7)
+ON CONFLICT (provider_id) DO UPDATE SET
+    checked_at  = excluded.checked_at,
+    ok          = excluded.ok,
+    complete    = excluded.complete,
+    status_code = excluded.status_code,
+    message     = excluded.message,
+    models      = excluded.models
+`
+
+type UpsertProviderDiscoveryParams struct {
+	ProviderID pgtype.UUID
+	CheckedAt  pgtype.Timestamptz
+	Ok         bool
+	Complete   bool
+	StatusCode pgtype.Int4
+	Message    string
+	Models     []byte
+}
+
+// ===== The last catalogue a provider reported =====
+//
+// One row per provider, replaced wholesale on each successful fetch. Asking an
+// upstream what it serves costs real money, and the answer used to live only in
+// a screen's local state -- so reloading the page meant paying again to learn
+// the same thing, and the model side of the wiring editor had no way to know
+// the name a given provider uses.
+//
+// Nothing on the data plane reads any of this. It is what the upstream said
+// last time, with the time it said it, which is a different claim from what the
+// upstream serves now.
+func (q *Queries) UpsertProviderDiscovery(ctx context.Context, arg UpsertProviderDiscoveryParams) error {
+	_, err := q.db.Exec(ctx, upsertProviderDiscovery,
+		arg.ProviderID,
+		arg.CheckedAt,
+		arg.Ok,
+		arg.Complete,
+		arg.StatusCode,
+		arg.Message,
+		arg.Models,
 	)
 	return err
 }

@@ -65,7 +65,15 @@ func (s *Server) ImportGatewayReferencePrices(
 		return nil, fmt.Errorf("gwadmin: read the bundled reference prices: %w", err)
 	}
 
-	opts := ImportOptions{Data: data, Now: time.Now().UTC(), Actor: actor}
+	// The per-unit list is always the bundled one, even on a run that supplies
+	// its own token file: it is this repository's own list rather than a
+	// vendored snapshot, so there is no second copy for a caller to substitute.
+	unitData, err := refdata.BundledUnitRates()
+	if err != nil {
+		return nil, fmt.Errorf("gwadmin: read the bundled per-unit rates: %w", err)
+	}
+
+	opts := ImportOptions{Data: data, UnitData: unitData, Now: time.Now().UTC(), Actor: actor}
 	if b := req.Body; b != nil {
 		opts.Force = b.Force != nil && *b.Force
 		opts.DryRun = b.DryRun != nil && *b.DryRun

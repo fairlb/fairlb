@@ -67,12 +67,12 @@ SELECT * FROM model_pricing WHERE model_id = $1;
 -- endpoint, and written to the audit log: "who changed this, when, and why" is
 -- the audit log's job, not a publish workflow's.
 INSERT INTO model_pricing (
-    model_id, billing_mode,
+    model_id, billing_mode, pricing_family,
     upstream_in_nano_per_mtok, upstream_out_nano_per_mtok,
     upstream_cache_read_nano_per_mtok, upstream_cache_write_nano_per_mtok,
     multiplier_bps, source_name, source_url, verified_at, provenance, reason, updated_by
 ) VALUES (
-    sqlc.arg('model_id'), sqlc.arg('billing_mode'),
+    sqlc.arg('model_id'), sqlc.arg('billing_mode'), sqlc.arg('pricing_family'),
     sqlc.narg('upstream_in'), sqlc.narg('upstream_out'),
     sqlc.narg('upstream_cache_read'), sqlc.narg('upstream_cache_write'),
     sqlc.arg('multiplier_bps'), sqlc.arg('source_name'), sqlc.arg('source_url'),
@@ -81,6 +81,7 @@ INSERT INTO model_pricing (
 )
 ON CONFLICT (model_id) DO UPDATE SET
     billing_mode = EXCLUDED.billing_mode,
+    pricing_family = EXCLUDED.pricing_family,
     upstream_in_nano_per_mtok = EXCLUDED.upstream_in_nano_per_mtok,
     upstream_out_nano_per_mtok = EXCLUDED.upstream_out_nano_per_mtok,
     upstream_cache_read_nano_per_mtok = EXCLUDED.upstream_cache_read_nano_per_mtok,
@@ -101,6 +102,22 @@ RETURNING *;
 -- fixed order rather than whatever the heap returns.
 SELECT * FROM model_price_dimension_rates
 WHERE model_id = $1 ORDER BY bucket, service_tier, variant, min_input_tokens;
+
+-- name: UpsertModelPriceUnitRate :one
+INSERT INTO model_price_unit_rates (
+    model_id, unit, resolution, audio, variant, service_tier, nano_per_unit
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+-- The conflict target is the whole key: leaving an axis out would collapse two
+-- distinct rates onto one row.
+ON CONFLICT (model_id, unit, resolution, audio, variant, service_tier)
+DO UPDATE SET nano_per_unit = EXCLUDED.nano_per_unit
+RETURNING *;
+
+-- name: ListModelPriceUnitRates :many
+-- The per-unit family (ADR-0220). Ordered so a rate card arrives the same way
+-- every time, which is what makes a stored price snapshot comparable.
+SELECT * FROM model_price_unit_rates
+WHERE model_id = $1 ORDER BY unit, resolution, audio, service_tier, variant;
 
 -- name: UpsertModelPriceDimensionRate :one
 INSERT INTO model_price_dimension_rates (
@@ -261,9 +278,40 @@ SELECT m.id AS model_id, m.slug AS model_slug,
        coalesce(mp.billing_mode, '')::text        AS billing_mode,
        coalesce(mp.multiplier_bps, 10000)::integer AS multiplier_bps,
        mp.upstream_in_nano_per_mtok, mp.upstream_out_nano_per_mtok,
-       mp.upstream_cache_read_nano_per_mtok, mp.upstream_cache_write_nano_per_mtok
+       mp.upstream_cache_read_nano_per_mtok, mp.upstream_cache_write_nano_per_mtok,
+       -- The image-input dimension rate, when one is configured. It is read
+       -- for the same reason as the four base rates: "the reference already
+       -- says what is stored" is what makes the import idempotent, and a
+       -- comparison that ignores this rate would call a model unchanged while
+       -- the dataset has an image price the model does not carry -- so a
+       -- re-run would never put it there.
+       --
+       -- Joined rather than read as a scalar subquery so that its nullability
+       -- is visible: a model with no image rate has no row here, and generating
+       -- these columns as NOT NULL would panic on scan for every model that has
+       -- none -- which is nearly all of them. Both sides are read, because the
+       -- dataset states both and a model whose output rate is already stored
+       -- must not be reported as unchanged forever.
+       --
+       -- The join is pinned to the plain rate. The band, tier and variant axes
+       -- belong to the operator, and the import neither writes nor compares
+       -- them; the primary key makes that at most one row.
+       dr.nano_per_mtok AS upstream_image_in_nano_per_mtok,
+       dro.nano_per_mtok AS upstream_image_out_nano_per_mtok
 FROM models m
 LEFT JOIN model_pricing mp ON mp.model_id = m.id
+LEFT JOIN model_price_dimension_rates dr
+       ON dr.model_id = mp.model_id
+      AND dr.bucket = 'image_in'
+      AND dr.service_tier = 'standard'
+      AND dr.variant = ''
+      AND dr.min_input_tokens = 0
+LEFT JOIN model_price_dimension_rates dro
+       ON dro.model_id = mp.model_id
+      AND dro.bucket = 'image_out'
+      AND dro.service_tier = 'standard'
+      AND dro.variant = ''
+      AND dro.min_input_tokens = 0
 ORDER BY m.slug;
 
 -- name: ListUsableRoutesForPriceImport :many

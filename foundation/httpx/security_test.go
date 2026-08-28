@@ -85,11 +85,11 @@ func TestSPASecurityHeaders(t *testing.T) {
 		t.Fatalf("the CSP for a zero-value extra deviates from the baseline:\n got  %q\n want %q", got, baseline)
 	}
 
-	if got := get(httpx.CSPExtra{ConnectSrc: []string{"https://api.example.com", ""}}); !strings.Contains(got, "connect-src 'self' https://api.example.com;") {
-		t.Fatalf("the connect-src addition did not apply, or the empty string was not filtered: %q", got)
+	const ts = "https://challenges.cloudflare.com"
+	if got := get(httpx.CSPExtra{ScriptSrc: []string{ts, ""}}); !strings.Contains(got, "script-src 'self' "+ts+";") {
+		t.Fatalf("the empty string was not filtered out of the addition: %q", got)
 	}
 
-	const ts = "https://challenges.cloudflare.com"
 	got := get(httpx.CSPExtra{ScriptSrc: []string{ts}, FrameSrc: []string{ts}})
 	if !strings.Contains(got, "script-src 'self' "+ts+";") {
 		t.Fatalf("script-src did not allow the widget origin: %q", got)

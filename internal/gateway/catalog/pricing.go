@@ -52,6 +52,17 @@ type Tokens struct {
 	// text rate, and with it a separate audio rate can be configured.
 	AudioIn  int64
 	AudioOut int64
+	// ImageIn is image input tokens, a subset of In for the same reason and
+	// handled the same way: subtracted out of In so it can carry its own rate,
+	// and billed at the text input rate when no image rate is configured.
+	ImageIn int64
+	// ImageOut is image *output* tokens: what a model that generates images
+	// reports for the pixels it produced. A subset of Out, subtracted out of it
+	// the same way. It exists because both upstreams that generate images price
+	// this well above text output -- OpenAI lists its own image output token
+	// rate, Google charges a generated image as a fixed block of tokens -- so
+	// folding it into Out undercharges every image generated.
+	ImageOut int64
 	// CacheWrite5m and CacheWrite1h are Anthropic's two cache-write TTL tiers,
 	// priced differently. Their sum is at most CacheWrite; when the upstream
 	// does not break it down both are 0 and the whole amount is billed at the
@@ -74,8 +85,9 @@ type Tokens struct {
 //
 //   - The three are mutually disjoint by construction (see the type comment),
 //     so their sum is the prompt size the upstream itself bands on.
-//   - AudioIn is not added: it is a subset of In, and adding it would count
-//     audio tokens twice, pushing a request over a threshold it never crossed.
+//   - AudioIn and ImageIn are not added: each is a subset of In, and adding
+//     either would count those tokens twice, pushing a request over a
+//     threshold it never crossed.
 //   - Reasoning tokens play no part: they are on the output side, and the
 //     question here is how long the prompt was.
 func (t Tokens) ContextTokens() int64 { return t.In + t.CachedRead + t.CacheWrite }
@@ -227,12 +239,19 @@ func upstreamCostBuckets(pt PriceTable, t Tokens) (exactBuckets, error) {
 		parts[contributionBucket].Add(parts[contributionBucket], amount)
 	}
 
-	// The audio rate difference still lands in the input and output
+	// The dimension rate differences still land in the input and output
 	// contributions; there is no invented fifth token bucket.
-	add(nonNeg(t.In-t.AudioIn), BucketIn, VariantNone, exactInput)
-	add(nonNeg(t.Out-t.AudioOut), BucketOut, VariantNone, exactOutput)
+	//
+	// Audio and image input are each a subset of In and disjoint from each
+	// other -- one upstream report never counts the same token as both -- so
+	// both are subtracted before the remainder is billed at the text rate. Audio
+	// and image *output* are the same arrangement on the other side.
+	add(nonNeg(t.In-t.AudioIn-t.ImageIn), BucketIn, VariantNone, exactInput)
+	add(nonNeg(t.Out-t.AudioOut-t.ImageOut), BucketOut, VariantNone, exactOutput)
 	add(t.AudioIn, BucketAudioIn, VariantNone, exactInput)
+	add(t.ImageIn, BucketImageIn, VariantNone, exactInput)
 	add(t.AudioOut, BucketAudioOut, VariantNone, exactOutput)
+	add(t.ImageOut, BucketImageOut, VariantNone, exactOutput)
 	add(t.CachedRead, BucketCacheRead, VariantNone, exactCacheRead)
 
 	// The per-TTL rate difference still lands in the cache-write
@@ -335,17 +354,30 @@ func Compute(list, cost PriceTable, t Tokens, r Rates) (Quote, error) {
 	if err != nil {
 		return Quote{}, err
 	}
-	upstreamNano, err := ceilToInt64(upstream)
-	if err != nil {
-		return Quote{}, fmt.Errorf("catalog: upstream cost overflow: %w", err)
-	}
-
 	// The charge derives from the list price, computed independently of the
 	// cost above.
 	charged, err := upstreamCost(list, t)
 	if err != nil {
 		return Quote{}, err
 	}
+	return quoteFrom(upstream, charged, fx, r)
+}
+
+// quoteFrom applies the customer-side multipliers and the exchange rate to an
+// already-summed pair of amounts, rounds each up exactly once, and assembles
+// the snapshot.
+//
+// It is shared by the token path above and the per-unit path in
+// unit_price.go. Only "how many of what, at which rate" differs between the
+// two families; the multiplier chain, the single rounding point and the
+// overflow check must not, because the day they diverge is the day the same
+// discount means two things depending on the modality.
+func quoteFrom(upstream, charged *big.Rat, fx *big.Rat, r Rates) (Quote, error) {
+	upstreamNano, err := ceilToInt64(upstream)
+	if err != nil {
+		return Quote{}, fmt.Errorf("catalog: upstream cost overflow: %w", err)
+	}
+	charged = new(big.Rat).Set(charged)
 	charged.Mul(charged, new(big.Rat).SetFrac(
 		big.NewInt(r.ModelMultiplierBps), big.NewInt(noDiscountBps)))
 	charged.Mul(charged, new(big.Rat).SetFrac(
@@ -355,7 +387,6 @@ func Compute(list, cost PriceTable, t Tokens, r Rates) (Quote, error) {
 	if err != nil {
 		return Quote{}, fmt.Errorf("catalog: billed amount overflow: %w", err)
 	}
-
 	return Quote{
 		UpstreamUSDNano:          upstreamNano,
 		ChargedNano:              chargedNano,
@@ -444,9 +475,23 @@ type ExactBucketAmounts struct {
 	Tools      string `json:"tools"`
 }
 
-// ExactQuoteContributions is the exact per-bucket record used for shadow
-// reconciliation. The quote itself still rounds up exactly once, after
-// everything is summed; nothing here is rounded early.
+// ExactQuoteContributions is the exact per-bucket record. The quote itself
+// still rounds up exactly once, after everything is summed; nothing here is
+// rounded early.
+//
+// **This is a test oracle, not a production path.** The comment used to say it
+// was "used for shadow reconciliation", and there is no shadow reconciliation
+// anywhere in this repository -- the only callers of ComputeExactContributions
+// are image_tokens_test, price_table_test, pricing_test and context_bands_test.
+// It stays because that is a real job: recomputing the same price without
+// rounding is what lets those suites catch "input over-counted, output
+// under-counted, total happens to match", which comparing totals cannot. It is
+// the same kind of thing as proxy.OutboundAllowlist.
+//
+// It is not in a _test.go file because the callers are four suites in this
+// package plus the unexported helpers below; if a fifth package ever needs it,
+// that is the moment to move it to a catalogtest-style package rather than to
+// widen this one.
 type ExactQuoteContributions struct {
 	UpstreamCostUSDNano ExactBucketAmounts `json:"upstream_cost_usd_nano"`
 	ChargedNano         ExactBucketAmounts `json:"charged_nano"`
@@ -665,12 +710,12 @@ const maxSaneTokens = int64(math.MaxInt32)
 
 // ValidateTokens checks the base buckets, the advanced sub-buckets and the tool
 // counts. The advanced fields come from the upstream's response, so validating
-// only the four base buckets is not enough: a negative audio or TTL count
-// produces a negative amount as soon as those rates differ.
+// only the four base buckets is not enough: a negative audio, image or TTL
+// count produces a negative amount as soon as those rates differ.
 func ValidateTokens(t Tokens) error {
 	for _, v := range []int64{
 		t.In, t.Out, t.CachedRead, t.CacheWrite,
-		t.AudioIn, t.AudioOut, t.CacheWrite5m, t.CacheWrite1h,
+		t.AudioIn, t.AudioOut, t.ImageIn, t.CacheWrite5m, t.CacheWrite1h,
 	} {
 		if v < 0 || v > maxSaneTokens {
 			return fmt.Errorf("catalog: token count %d is outside the plausible range", v)
@@ -678,6 +723,9 @@ func ValidateTokens(t Tokens) error {
 	}
 	if t.AudioIn > t.In || t.AudioOut > t.Out {
 		return fmt.Errorf("catalog: audio tokens must be a subset of the input/output tokens")
+	}
+	if t.ImageIn > t.In {
+		return fmt.Errorf("catalog: image tokens must be a subset of the input tokens")
 	}
 	if t.CacheWrite5m+t.CacheWrite1h > t.CacheWrite {
 		return fmt.Errorf("catalog: the cache-write TTL buckets must not sum above the cache-write tokens")

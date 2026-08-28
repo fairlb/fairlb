@@ -1,9 +1,10 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -35,7 +36,20 @@ import (
 // backfilling data.
 
 // The pricing buckets. The first four map one to one onto the base rates; the
-// two audio buckets are the added dimension.
+// dimension buckets are the added axis.
+//
+// ("Dimension", not "modality": a modality is what a model produces and lives
+// on the model row (ADR-0226). These are token dimensions inside one request,
+// and calling both by the same name here made the two look like one concept.)
+//
+// A dimension bucket is a subset of a base one and falls back to that base
+// rate, so adding one to this list changes no charge until somebody prices it.
+// What it adds is the *ability* to price it -- before BucketImageIn existed,
+// an image model's image input tokens were billed at its text input rate and
+// there was nowhere to record the real one. BucketImageOut is the same gap on
+// the other side: a generated image is reported as output tokens, both OpenAI
+// and Google charge those well above text output, and without this bucket every
+// generated image was billed at the model's text output rate.
 const (
 	BucketIn         = "in"
 	BucketOut        = "out"
@@ -43,7 +57,15 @@ const (
 	BucketCacheWrite = "cache_write"
 	BucketAudioIn    = "audio_in"
 	BucketAudioOut   = "audio_out"
+	BucketImageIn    = "image_in"
+	BucketImageOut   = "image_out"
 )
+
+// There is deliberately no exported list of these here. The write side owns
+// that list -- pricing.KnownBuckets, which its own round-trip maps are built
+// from and which a test holds against the column's CHECK. A second copy in this
+// package would be one more thing to keep in step, which is the failure the
+// single list exists to end rather than to repeat.
 
 // Service tiers. Both protocols agree on these three values.
 const (
@@ -126,8 +148,9 @@ func NewPriceTable(base Price, rows []gwdb.ModelPriceDimensionRate) PriceTable {
 	// one. The rows arrive ordered by the query, but sorting here means the
 	// resolution does not depend on a caller having read them from that query.
 	for _, bands := range t.over {
-		sort.Slice(bands, func(i, j int) bool {
-			return bands[i].minInputTokens > bands[j].minInputTokens
+		// 降序：b 在前即为「大的排前面」。
+		slices.SortFunc(bands, func(a, b contextBand) int {
+			return cmp.Compare(b.minInputTokens, a.minInputTokens)
 		})
 	}
 	return t
@@ -167,6 +190,17 @@ func (s *Service) LockedPriceTable(
 	return NewPriceTable(pricing.Upstream, dims).WithToolPrices(tools), nil
 }
 
+// LockedUnitPriceTable reads this model's per-unit rates, inside the caller's
+// snapshot transaction, for the same reason and with the same guarantee as
+// LockedPriceTable above.
+func (s *Service) LockedUnitPriceTable(ctx context.Context, modelID pgtype.UUID) (UnitPriceTable, error) {
+	rows, err := s.q.ListModelPriceUnitRates(ctx, modelID)
+	if err != nil {
+		return UnitPriceTable{}, fmt.Errorf("catalog: read model unit rates: %w", err)
+	}
+	return NewUnitPriceTable(rows), nil
+}
+
 // Snapshot returns the complete table written alongside the request in the
 // usage log, so nothing later has to join against configuration. The sorting is
 // only to keep the JSON stable and diffs readable; billing does not depend on
@@ -181,17 +215,13 @@ func (t PriceTable) Snapshot() PriceTableSnapshot {
 			})
 		}
 	}
-	sort.Slice(dims, func(i, j int) bool {
-		if dims[i].Bucket != dims[j].Bucket {
-			return dims[i].Bucket < dims[j].Bucket
-		}
-		if dims[i].ServiceTier != dims[j].ServiceTier {
-			return dims[i].ServiceTier < dims[j].ServiceTier
-		}
-		if dims[i].Variant != dims[j].Variant {
-			return dims[i].Variant < dims[j].Variant
-		}
-		return dims[i].MinInputTokens < dims[j].MinInputTokens
+	slices.SortFunc(dims, func(a, b DimensionRateSnapshot) int {
+		return cmp.Or(
+			cmp.Compare(a.Bucket, b.Bucket),
+			cmp.Compare(a.ServiceTier, b.ServiceTier),
+			cmp.Compare(a.Variant, b.Variant),
+			cmp.Compare(a.MinInputTokens, b.MinInputTokens),
+		)
 	})
 	tools := make(map[string]int64, len(t.tools))
 	for name, rate := range t.tools {
@@ -329,9 +359,9 @@ func lookupDimensionRate(
 //     computed on the flat base rates, ignoring every dimension override, and
 //     folding them in now would change the hold of models that configure no
 //     context bands at all -- the one thing this axis must not do.
-//   - The audio buckets are not folded in either. A hold prices In and Out
-//     only, so an audio band would raise the gate using a rate that takes no
-//     part in the computation.
+//   - The modality buckets are not folded in either. A hold prices In and Out
+//     only, so an audio or image band would raise the gate using a rate that
+//     takes no part in the computation.
 func (t PriceTable) LongContextCeiling() Price {
 	var out Price
 	if t.billingFree {
@@ -365,9 +395,13 @@ func (t PriceTable) LongContextCeiling() Price {
 
 func (t PriceTable) baseOf(bucket string) int64 {
 	switch bucket {
-	case BucketIn, BucketAudioIn:
+	case BucketIn, BucketAudioIn, BucketImageIn:
 		return t.base.InNanoPerMTok
-	case BucketOut, BucketAudioOut:
+	// image_out belongs on the *output* side. Putting it in the arm above --
+	// the natural slip, since the other two image-ish buckets are input ones --
+	// would fall back to the input rate and bill every generated image at the
+	// price of reading one.
+	case BucketOut, BucketAudioOut, BucketImageOut:
 		return t.base.OutNanoPerMTok
 	case BucketCacheRead:
 		return t.base.CacheReadNanoPerMTok

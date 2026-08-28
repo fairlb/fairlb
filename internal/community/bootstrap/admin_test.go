@@ -96,9 +96,7 @@ func TestConcurrentFirstAdminLeavesExactlyOneWinner(t *testing.T) {
 	results := make([]error, racers)
 	start := make(chan struct{})
 	for i := range racers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			// Distinct addresses on purpose: with one shared address the
 			// unique index on email would serialise the racers, and this test
@@ -106,7 +104,7 @@ func TestConcurrentFirstAdminLeavesExactlyOneWinner(t *testing.T) {
 			// testing Postgres rather than the code under test.
 			results[i] = bootstrap.CreateFirstAdmin(ctx, pool,
 				fmt.Sprintf("racer%d@example.com", i), "hunter2hunter2", "")
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

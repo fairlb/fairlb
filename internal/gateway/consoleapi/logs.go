@@ -131,13 +131,14 @@ func (s *Server) GetRequestLog(ctx context.Context, req GetRequestLogRequestObje
 		Surface: base.Surface, Status: base.Status, HttpStatus: base.HttpStatus,
 		ErrorCode: base.ErrorCode, Stream: base.Stream, TokensIn: base.TokensIn,
 		TokensOut: base.TokensOut, ChargedNano: base.ChargedNano,
+		BilledUnits: base.BilledUnits, BilledUnit: base.BilledUnit,
 		DurationMs: base.DurationMs, ApiKeyId: base.ApiKeyId, EndUserId: base.EndUserId,
 
-		RouteAttempts:    ptr(int(detail.RouteAttempts)),
-		TtftMs:           ptr(int(detail.TTFTMs)),
-		TokensCachedRead: ptr(detail.TokensCachedRead),
-		TokensCacheWrite: ptr(detail.TokensCacheWrite),
-		TokensReasoning:  ptr(detail.TokensReasoning),
+		RouteAttempts:    new(int(detail.RouteAttempts)),
+		TtftMs:           new(int(detail.TTFTMs)),
+		TokensCachedRead: new(detail.TokensCachedRead),
+		TokensCacheWrite: new(detail.TokensCacheWrite),
+		TokensReasoning:  new(detail.TokensReasoning),
 		UsageEstimated:   &detail.UsageEstimated,
 	}
 	if access.Finance {
@@ -218,8 +219,9 @@ func logDTO(e usage.LogEntry, access orgReadAccess) RequestLog {
 	l := RequestLog{
 		RequestId: e.RequestID, CreatedAt: e.CreatedAt, ModelSlug: e.ModelSlug,
 		Surface: e.Surface, Status: e.Status, HttpStatus: int(e.HTTPStatus),
-		TokensIn: ptr(e.TokensIn), TokensOut: ptr(e.TokensOut),
-		ChargedNano: chargedNano, DurationMs: ptr(int(e.DurationMs)),
+		TokensIn: new(e.TokensIn), TokensOut: new(e.TokensOut),
+		BilledUnits: new(e.BilledUnits), BilledUnit: new(e.BilledUnit),
+		ChargedNano: chargedNano, DurationMs: new(int(e.DurationMs)),
 		Stream: &e.Stream,
 	}
 	if e.ErrorCode != "" {
@@ -231,9 +233,7 @@ func logDTO(e usage.LogEntry, access orgReadAccess) RequestLog {
 		l.EndUserId = &id
 	}
 	if access.KeyMetadata && e.APIKeyID.Valid {
-		l.ApiKeyId = ptr(publicid.Format(publicid.Key, e.APIKeyID))
+		l.ApiKeyId = new(publicid.Format(publicid.Key, e.APIKeyID))
 	}
 	return l
 }
-
-func ptr[T any](v T) *T { return &v }

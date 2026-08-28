@@ -26,16 +26,12 @@ func APISecurityHeaders(next http.Handler) http.Handler {
 // The zero value yields exactly the baseline policy, so a deployment that serves
 // the SPA and the API from the same origin needs nothing here.
 //
-// ConnectSrc is for split-host deployments: when the browser app talks to an API
-// on another hostname, XHR/fetch to that origin has to be allowed explicitly
-// (the API side needs a matching CORS allowance — both halves or neither).
 // ScriptSrc/FrameSrc exist for embedded third-party widgets, which typically
 // need their script and their iframe origin allowed together.
 // Empty strings are filtered out.
 type CSPExtra struct {
-	ConnectSrc []string
-	ScriptSrc  []string
-	FrameSrc   []string
+	ScriptSrc []string
+	FrameSrc  []string
 }
 
 // SPACSP is spaCSP for callers that compute the policy per request.
@@ -60,7 +56,7 @@ func spaCSP(extra CSPExtra) string {
 	}
 	csp := "default-src 'self'; " + join("script-src 'self'", extra.ScriptSrc) +
 		"; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; " +
-		join("connect-src 'self'", extra.ConnectSrc) + "; "
+		"connect-src 'self'; "
 	if hasNonEmpty(extra.FrameSrc) {
 		csp += join("frame-src 'self'", extra.FrameSrc) + "; "
 	}

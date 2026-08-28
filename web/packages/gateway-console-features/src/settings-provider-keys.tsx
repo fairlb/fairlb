@@ -1,5 +1,5 @@
 import { useI18n } from "@fairlb/i18n";
-import { Button, SectionHeading, SettingsSection } from "@fairlb/ui";
+import { Button, SettingsSection } from "@fairlb/ui";
 import { useState } from "react";
 import { BYOKSection } from "./byok";
 import { useOrgSettings } from "./host";
@@ -22,14 +22,9 @@ function ProviderKeys({ orgId }: { orgId: string }) {
   const [adding, setAdding] = useState(false);
   return (
     <SettingsSection
-      title={
-        // The create action of a section-level list sits at the right of its heading row.
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <SectionHeading>{t("byokTitle")}</SectionHeading>
-          <Button onClick={() => setAdding(true)}>{t("byokAdd")}</Button>
-        </div>
-      }
+      title={t("byokTitle")}
       description={t("byokIntro")}
+      actions={<Button onClick={() => setAdding(true)}>{t("byokAdd")}</Button>}
     >
       <BYOKSection orgId={orgId} adding={adding} onAddingChange={setAdding} />
     </SettingsSection>

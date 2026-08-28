@@ -83,12 +83,10 @@ func TestMemoryExpiryDoesNotDropConcurrentSet(t *testing.T) {
 		}
 		time.Sleep(2 * time.Millisecond) // make sure it has expired
 		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() { defer wg.Done(); _, _, _ = store.Get(ctx, "race") }()
-		go func() {
-			defer wg.Done()
+		wg.Go(func() { _, _, _ = store.Get(ctx, "race") })
+		wg.Go(func() {
 			_ = store.Set(ctx, "race", breaker.State{Status: breaker.StatusOpen, Failures: 5}, time.Minute)
-		}()
+		})
 		wg.Wait()
 		got, ok, _ := store.Get(ctx, "race")
 		if !ok || got.Status != breaker.StatusOpen {

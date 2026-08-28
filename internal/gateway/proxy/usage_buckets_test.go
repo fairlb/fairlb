@@ -290,3 +290,72 @@ func TestUsageBucketsGeminiClampsInconsistentUpstream(t *testing.T) {
 		t.Fatalf("a negative input bucket was produced: In=%d", u.In)
 	}
 }
+
+// A generated image is reported the same way audio is: a modality breakdown
+// inside the candidates total, on the very endpoint Google's image models are
+// reached on. Reading only the totals bills every image the model produces at
+// its text output rate -- and the two differ by an order of magnitude
+// (30 USD/Mtok against 2.5 for one of them).
+func TestUsageBucketsGeminiImageModality(t *testing.T) {
+	body := []byte(`{"usageMetadata":{"promptTokenCount":1300,"candidatesTokenCount":1330,
+	  "promptTokensDetails":[{"modality":"IMAGE","tokenCount":1290},{"modality":"TEXT","tokenCount":10}],
+	  "candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":1290},{"modality":"TEXT","tokenCount":40}]}}`)
+
+	u := proxy.ParseUsage(catalog.SurfaceGenerateContent, body)
+	if u.ImageIn != 1290 || u.ImageOut != 1290 {
+		t.Errorf("image not split out: ImageIn=%d ImageOut=%d, want 1290 and 1290", u.ImageIn, u.ImageOut)
+	}
+	// A subset of the parent count, like audio: the totals do not move, and
+	// pricing subtracts the image share before charging the text rate.
+	if u.In != 1300 || u.Out != 1330 {
+		t.Errorf("totals moved: In=%d Out=%d, want 1300 and 1330", u.In, u.Out)
+	}
+}
+
+// A modality this parser has not been taught about stays out of every bucket
+// rather than being folded into one. Priced at the text rate it is merely
+// approximate; folded into audio or image it is charged at somebody else's
+// rate, which is worse and looks the same.
+func TestUsageBucketsGeminiIgnoresAnUnknownModality(t *testing.T) {
+	body := []byte(`{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":50,
+	  "promptTokensDetails":[{"modality":"HOLOGRAM","tokenCount":90}]}}`)
+
+	u := proxy.ParseUsage(catalog.SurfaceGenerateContent, body)
+	if u.AudioIn != 0 || u.ImageIn != 0 {
+		t.Errorf("an unknown modality reached a bucket: AudioIn=%d ImageIn=%d", u.AudioIn, u.ImageIn)
+	}
+	if u.In != 100 {
+		t.Errorf("In=%d, want the reported total 100", u.In)
+	}
+}
+
+// The image endpoints report their own breakdown, on both sides. The output one
+// is the bucket a generation is mostly made of: gpt-image prices it at 32 per
+// million against a text output of 10.
+func TestUsageBucketsImageEndpointSplitsBothSides(t *testing.T) {
+	body := []byte(`{"data":[{"b64_json":"x"}],"usage":{
+	  "input_tokens":120,"output_tokens":1600,
+	  "input_tokens_details":{"image_tokens":100,"text_tokens":20},
+	  "output_tokens_details":{"image_tokens":1580,"text_tokens":20}}}`)
+
+	u := proxy.ParseUsage(catalog.SurfaceImages, body)
+	if u.ImageIn != 100 || u.ImageOut != 1580 {
+		t.Errorf("image tokens not split out: ImageIn=%d ImageOut=%d, want 100 and 1580", u.ImageIn, u.ImageOut)
+	}
+	if u.In != 120 || u.Out != 1600 {
+		t.Errorf("totals moved: In=%d Out=%d, want 120 and 1600", u.In, u.Out)
+	}
+}
+
+// An upstream contradicting the subset relation must not turn a served request
+// into a billing error: the breakdown is clamped to its parent, both sides.
+func TestUsageBucketsImageEndpointClampsToItsParent(t *testing.T) {
+	body := []byte(`{"usage":{"input_tokens":10,"output_tokens":20,
+	  "input_tokens_details":{"image_tokens":999},
+	  "output_tokens_details":{"image_tokens":999}}}`)
+
+	u := proxy.ParseUsage(catalog.SurfaceImages, body)
+	if u.ImageIn != 10 || u.ImageOut != 20 {
+		t.Errorf("clamping failed: ImageIn=%d ImageOut=%d, want 10 and 20", u.ImageIn, u.ImageOut)
+	}
+}

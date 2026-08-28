@@ -211,6 +211,34 @@ func (p *Pipeline) quoteFor(
 	return catalog.Compute(list, cost, tok, rates)
 }
 
+// unitCharge is what a unit-billed request owes on the account that actually
+// served it -- the per-unit family's counterpart to quoteFor above.
+//
+// It exists as one function because of the branch inside it. A request served
+// on the organization's own credential owes the service fee, not the list
+// price, and there are now three synchronous settle points plus the streaming
+// one; each spelling the branch itself is how two of them came to charge a
+// BYOK caller full price while the token-billed model on the very same
+// endpoint charged the fee. The job plane's own copy of this branch is
+// quoteVideoForCredential, which asks the same question of a pinned credential
+// rather than of a chosen route.
+//
+// The quantity vector is prep.units, fixed at admission: nothing after that
+// point is allowed to change how many units are owed, only which account they
+// are owed on.
+func (p *Pipeline) unitCharge(
+	prep prepared, route catalog.Route, usedBYOK bool, units catalog.Units,
+) (catalog.Quote, error) {
+	list, cost := prep.billingUnitPrices()
+	rates := prep.pricing.ratesForRoute(route)
+	if usedBYOK {
+		// No cost table on this branch: the upstream was paid by the customer,
+		// so there is no procurement cost of ours to report against it.
+		return catalog.ComputeUnitsBYOK(list, units, prep.pricing.byokFeeBps, rates)
+	}
+	return catalog.ComputeUnits(list, cost, units, rates)
+}
+
 // byokKeyIDIfUsed is the organization credential id for a hop, or the zero value when
 // that hop did not use one. It exists so "which credential served" and "did a
 // organization credential serve" can never disagree: both read the same field.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -57,6 +57,12 @@ type ImportOptions struct {
 	// Data is the reference dataset. The caller chooses between the copy
 	// bundled with the binary and one it read from a file.
 	Data *refdata.Dataset
+	// UnitData is the per-unit rate list, which is a separate source with
+	// separate provenance -- the token dataset is a vendored snapshot of
+	// somebody else's price list and carries no video model at all. Nil means
+	// this run prices token models only, which is what an operator supplying
+	// their own token file gets.
+	UnitData *refdata.UnitDataset
 	// Force overwrites a stored price that nobody has verified. Without it, a
 	// model that already has any price is left alone: refilling prices an
 	// operator may have adjusted is not what "import the reference rates"
@@ -324,6 +330,14 @@ func (s *pgPricingAdminService) importOneModel(
 		return out, nil
 	}
 
+	// Asked before the token dataset, because a model this list knows is not
+	// billed in tokens at all: looking it up there would miss, and the operator
+	// would be told "the dataset does not carry this model" about a model this
+	// binary can price perfectly well.
+	if unitRef, unitRoute, ok := resolveUnitReference(opts, routes); ok {
+		return s.importUnitPricedModel(ctx, opts, m, unitRef, unitRoute, out)
+	}
+
 	ref, detail := resolveReference(opts, routes)
 	if ref == nil {
 		out.Outcome, out.Detail = ImportSkipped, detail
@@ -451,6 +465,14 @@ func joinReasons(reasons []string) string {
 type nanoRates struct {
 	in, out, cacheRead, cacheWrite int64
 	free                           bool
+	// imageIn and imageOut are the two image dimension rates; the *Set flags
+	// say whether the dataset states them at all. Unset and zero are different
+	// claims -- "no separate image rate, bill at the text rate" against "image
+	// tokens are free" -- and only the first is ever true of a real entry.
+	imageIn     int64
+	imageInSet  bool
+	imageOut    int64
+	imageOutSet bool
 }
 
 func referenceRatesNano(ref *refdata.Reference) (nanoRates, error) {
@@ -474,7 +496,30 @@ func referenceRatesNano(ref *refdata.Reference) (nanoRates, error) {
 	// All four at zero is a model the vendor gives away, and that has to be
 	// stored as free rather than as a paid model priced at nothing: keeping
 	// those two apart is why the price row refuses the second shape at all.
+	//
+	// The image rates take no part in that judgement: each is a slice of a base
+	// bucket, so neither can make a model free that its base rates say is not,
+	// and a model whose four base rates are all zero is free whatever its image
+	// slices say.
 	n.free = n.in == 0 && n.out == 0 && n.cacheRead == 0 && n.cacheWrite == 0
+	for _, im := range []struct {
+		name  string
+		src   string
+		dst   *int64
+		isSet *bool
+	}{
+		{"image_input", ref.Rates.InputImage, &n.imageIn, &n.imageInSet},
+		{"image_output", ref.Rates.OutputImage, &n.imageOut, &n.imageOutSet},
+	} {
+		if im.src == "" {
+			continue
+		}
+		v, err := parseConfigurableUSDPerMToNano(im.src)
+		if err != nil {
+			return nanoRates{}, fmt.Errorf("%s/%s: %s: %w", ref.Provider, ref.ModelKey, im.name, err)
+		}
+		*im.dst, *im.isSet = v, true
+	}
 	return n, nil
 }
 
@@ -487,7 +532,9 @@ func sameStoredRates(m pricing.ImportCandidate, want nanoRates) bool {
 		m.Official.Input.Set && m.Official.Input.Nano == want.in &&
 		m.Official.Output.Set && m.Official.Output.Nano == want.out &&
 		m.Official.CacheRead.Set && m.Official.CacheRead.Nano == want.cacheRead &&
-		m.Official.CacheWrite.Set && m.Official.CacheWrite.Nano == want.cacheWrite
+		m.Official.CacheWrite.Set && m.Official.CacheWrite.Nano == want.cacheWrite &&
+		m.ImageIn.Set == want.imageInSet && m.ImageIn.Nano == want.imageIn &&
+		m.ImageOut.Set == want.imageOutSet && m.ImageOut.Nano == want.imageOut
 }
 
 func (s *pgPricingAdminService) writeReferencePrice(
@@ -516,19 +563,46 @@ func (s *pgPricingAdminService) writeReferencePrice(
 	// which is what the console editor sends when it is only touching the base
 	// rates.
 	//
-	// The dataset has no opinion about any of these dimensions, so there is
-	// nothing to put back. Dropping them leaves the model priced by the reference
-	// alone, which is a state the operator can see and re-enter; keeping them
-	// leaves an invented one nobody chose.
-	noDimensions := []ModelPriceDimensionRate{}
+	// The dataset has an opinion about exactly two of these dimensions -- the
+	// image input and output rates -- and none about the rest, so those two are
+	// put back and the others are dropped. Dropping them leaves the model
+	// priced by the reference alone, which is a state the operator can see and
+	// re-enter; keeping them leaves an invented one nobody chose.
+	//
+	// Each is written only when the dataset states it. Writing a zero for the
+	// models it says nothing about would claim their image tokens are free,
+	// where the truth is that they have no separate image rate and bill at the
+	// text rate on that side -- which is what an absent row already does.
+	dimensions := []ModelPriceDimensionRate{}
+	for _, im := range []struct {
+		bucket ModelPriceDimensionRateBucket
+		rate   string
+	}{
+		{ImageInput, ref.Rates.InputImage},
+		{ImageOutput, ref.Rates.OutputImage},
+	} {
+		if im.rate == "" {
+			continue
+		}
+		dimensions = append(dimensions, ModelPriceDimensionRate{
+			Bucket: im.bucket, RateUsdPerM: im.rate,
+		})
+	}
 	noTools := []ModelPriceToolRate{}
+	// The bundled dataset is a token price list and says nothing about per-unit
+	// billing, so the import writes the token family explicitly rather than
+	// leaving it to a default. A model already on the per-unit family is not
+	// reached by this path at all -- it has a price, and the import only fills
+	// empty ones.
+	family := PricingFamilyTokens
 	in := ModelPricingInput{
-		BillingMode: mode,
-		OfficialRates: DraftTokenRatesUSDPerM{
+		BillingMode:   mode,
+		PricingFamily: &family,
+		OfficialRates: &DraftTokenRatesUSDPerM{
 			Input: literalPtr(ref.Rates.Input), Output: literalPtr(ref.Rates.Output),
 			CacheRead: literalPtr(ref.Rates.CacheRead), CacheWrite: literalPtr(ref.Rates.CacheWrite),
 		},
-		DimensionRates: &noDimensions,
+		DimensionRates: &dimensions,
 		ToolRates:      &noTools,
 		// The sales multiplier is a commercial decision and no dataset has an
 		// opinion about it. An existing one is carried over untouched; a new row
@@ -698,7 +772,7 @@ func shortBuckets(in []string) string {
 	for _, b := range in {
 		out = append(out, strings.TrimSuffix(b, "_mtok"))
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return strings.Join(out, ", ")
 }
 
@@ -706,3 +780,132 @@ func shortBuckets(in []string) string {
 // here: strPtr maps the empty string to nil, while a rate of "0" has to survive
 // as a pointer to "0". Absent and zero are different prices.
 func literalPtr(s string) *string { return &s }
+
+// resolveUnitReference reads the model's routes and returns the one per-unit
+// rate card they agree on.
+//
+// Same shape as resolveReference and for the same reason: several routes for
+// one model is ordinary, and when they disagree there is no defensible way to
+// pick. Disagreement here answers "no opinion" rather than reporting a reason,
+// because the token path runs next and is the one that will say why the model
+// could not be priced -- two competing explanations for one outcome is worse
+// than one.
+func resolveUnitReference(
+	opts ImportOptions, routes []pricing.UsableRoute,
+) (refdata.UnitReference, string, bool) {
+	if opts.UnitData == nil {
+		return refdata.UnitReference{}, "", false
+	}
+	var chosen refdata.UnitReference
+	var chosenRoute string
+	for _, r := range routes {
+		ref, ok := opts.UnitData.Lookup(r.ProviderVendor, r.ProviderModelID)
+		if !ok {
+			continue
+		}
+		if chosenRoute == "" {
+			chosen, chosenRoute = ref, r.ProviderSlug
+			continue
+		}
+		if chosen.Label != ref.Label {
+			return refdata.UnitReference{}, "", false
+		}
+	}
+	return chosen, chosenRoute, chosenRoute != ""
+}
+
+// importUnitPricedModel writes a per-unit rate card.
+func (s *pgPricingAdminService) importUnitPricedModel(
+	ctx context.Context, opts ImportOptions,
+	m pricing.ImportCandidate, ref refdata.UnitReference, viaRoute string, out ImportResult,
+) (ImportResult, error) {
+	rates := make([]ModelPriceUnitRate, 0, len(ref.Rates))
+	for _, r := range ref.Rates {
+		row := ModelPriceUnitRate{
+			Unit:           ModelPriceUnitRateUnit(r.Unit),
+			RateUsdPerUnit: DecimalUSDPerUnit(r.USDPerUnit),
+		}
+		if r.Resolution != "" {
+			row.Resolution = literalPtr(r.Resolution)
+		}
+		if r.Audio != "" {
+			audio := ModelPriceUnitRateAudio(r.Audio)
+			row.Audio = &audio
+		}
+		if r.Variant != "" {
+			row.Variant = literalPtr(r.Variant)
+		}
+		rates = append(rates, row)
+	}
+
+	family := PricingFamilyUnits
+	acked := append([]PricingRiskCode(nil), importAcknowledged...)
+	noDimensions := []ModelPriceDimensionRate{}
+	noTools := []ModelPriceToolRate{}
+	// No OfficialRates. The write path refuses them on this family and fills the
+	// four token columns with explicit zeroes itself -- NULL means "not known"
+	// across this schema and fails closed at request time, while for a model
+	// billed by the second those rates are known not to exist. Sending a token
+	// rate here would be a second opinion about what charges this model.
+	in := ModelPricingInput{
+		BillingMode:    ModelPricingInputBillingModePaid,
+		PricingFamily:  &family,
+		UnitRates:      &rates,
+		DimensionRates: &noDimensions,
+		ToolRates:      &noTools,
+		// A commercial decision no list has an opinion about; an existing one is
+		// carried over and a new row gets "charge the list price".
+		Adjustment:        PricingAdjustment{MultiplierBps: int(m.MultiplierBps)},
+		SourceName:        ref.SourceName,
+		SourceUrl:         literalPtr(ref.SourceURL),
+		AcknowledgedRisks: &acked,
+	}
+	in.Reason = "reference price import: " + ref.Label + " per-unit rates, read on " + ref.CheckedOn
+
+	provenance, err := json.Marshal(importProvenance{
+		Maintenance:  "reference-import",
+		Dataset:      ref.Dataset,
+		SnapshotDate: ref.CheckedOn,
+		ProviderKey:  ref.Vendor,
+		ModelKey:     ref.Label,
+		MatchedBy:    "upstream id prefix, via route on " + viaRoute,
+	})
+	if err != nil {
+		return out, fmt.Errorf("pricing import: %s: record where the price came from: %w", m.ModelSlug, err)
+	}
+	write, err := modelPricingWriteFromDTO(in)
+	if err != nil {
+		out.Outcome, out.Detail = ImportSkipped, err.Error()
+		return out, nil
+	}
+	write.Actor = opts.Actor
+	// Left blank, always. This is a suggestion from a list in this repository,
+	// and the field records the act of a person checking a rate against the
+	// vendor's own page -- which pressing this button is not (ADR-0128). It is
+	// also the only thing the console's "unverified" marker rests on.
+	write.VerifiedAt = pgtype.Timestamptz{}
+	write.Provenance = provenance
+	write.DryRun = opts.DryRun
+	if _, _, err := s.saveModelPricing(ctx, m.ModelID, in, write); err != nil {
+		return out, fmt.Errorf("pricing import: %s: %w", m.ModelSlug, err)
+	}
+	out.Outcome = ImportPriced
+	if m.Priced {
+		out.Outcome = ImportUpdated
+	}
+	out.Detail = describeUnitReference(ref)
+	return out, nil
+}
+
+func describeUnitReference(ref refdata.UnitReference) string {
+	units := make([]string, 0, len(ref.Rates))
+	for _, r := range ref.Rates {
+		axis := r.Resolution
+		if axis == "" {
+			axis = "any resolution"
+		}
+		units = append(units, fmt.Sprintf("%s USD per %s at %s", r.USDPerUnit, r.Unit, axis))
+	}
+	return fmt.Sprintf("%s: %s (read on %s, unverified)",
+		ref.Label, strings.Join(units, ", "), ref.CheckedOn)
+}

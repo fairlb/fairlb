@@ -39,19 +39,19 @@ func TestModelPricingDimensionRatesRoundTripEveryBucketAndBand(t *testing.T) {
 	}
 
 	want := []gwstaffapi.ModelPriceDimensionRate{
-		{Bucket: gwstaffapi.Input, RateUsdPerM: "3", MinInputTokens: ptr(int32(0))},
-		{Bucket: gwstaffapi.Input, RateUsdPerM: "6", MinInputTokens: ptr(int32(200001))},
-		{Bucket: gwstaffapi.Output, RateUsdPerM: "22.5", MinInputTokens: ptr(int32(200001))},
+		{Bucket: gwstaffapi.Input, RateUsdPerM: "3", MinInputTokens: new(int32(0))},
+		{Bucket: gwstaffapi.Input, RateUsdPerM: "6", MinInputTokens: new(int32(200001))},
+		{Bucket: gwstaffapi.Output, RateUsdPerM: "22.5", MinInputTokens: new(int32(200001))},
 		{Bucket: gwstaffapi.CacheRead, RateUsdPerM: "0.3"},
-		{Bucket: gwstaffapi.CacheWrite, RateUsdPerM: "3.75", Variant: ptr("1h")},
+		{Bucket: gwstaffapi.CacheWrite, RateUsdPerM: "3.75", Variant: new("1h")},
 		{Bucket: gwstaffapi.AudioInput, RateUsdPerM: "30"},
 		{Bucket: gwstaffapi.AudioOutput, RateUsdPerM: "60"},
 	}
 	if _, _, err := svc.SaveModelPricing(ctx, modelID, gwstaffapi.ModelPricingInput{
 		AcknowledgedRisks: &[]gwstaffapi.PricingRiskCode{gwstaffapi.UnknownProcurementCost},
 		BillingMode:       gwstaffapi.ModelPricingInputBillingModePaid,
-		OfficialRates: gwstaffapi.DraftTokenRatesUSDPerM{
-			Input: ptr("3"), Output: ptr("15"), CacheRead: ptr("0.3"), CacheWrite: ptr("3.75"),
+		OfficialRates: &gwstaffapi.DraftTokenRatesUSDPerM{
+			Input: new("3"), Output: new("15"), CacheRead: new("0.3"), CacheWrite: new("3.75"),
 		},
 		Adjustment:     gwstaffapi.PricingAdjustment{MultiplierBps: 10000},
 		SourceName:     "test-fixture",
@@ -160,15 +160,15 @@ func TestModelPricingKeepsEveryContextBandOfOneBucket(t *testing.T) {
 		t.Fatal(err)
 	}
 	bands := []gwstaffapi.ModelPriceDimensionRate{
-		{Bucket: gwstaffapi.Input, RateUsdPerM: "3", MinInputTokens: ptr(int32(0))},
-		{Bucket: gwstaffapi.Input, RateUsdPerM: "6", MinInputTokens: ptr(int32(200001))},
-		{Bucket: gwstaffapi.Input, RateUsdPerM: "12", MinInputTokens: ptr(int32(1000000))},
+		{Bucket: gwstaffapi.Input, RateUsdPerM: "3", MinInputTokens: new(int32(0))},
+		{Bucket: gwstaffapi.Input, RateUsdPerM: "6", MinInputTokens: new(int32(200001))},
+		{Bucket: gwstaffapi.Input, RateUsdPerM: "12", MinInputTokens: new(int32(1000000))},
 	}
 	if _, _, err := svc.SaveModelPricing(ctx, modelID, gwstaffapi.ModelPricingInput{
 		AcknowledgedRisks: &[]gwstaffapi.PricingRiskCode{gwstaffapi.UnknownProcurementCost},
 		BillingMode:       gwstaffapi.ModelPricingInputBillingModePaid,
-		OfficialRates: gwstaffapi.DraftTokenRatesUSDPerM{
-			Input: ptr("3"), Output: ptr("15"), CacheRead: ptr("0"), CacheWrite: ptr("0"),
+		OfficialRates: &gwstaffapi.DraftTokenRatesUSDPerM{
+			Input: new("3"), Output: new("15"), CacheRead: new("0"), CacheWrite: new("0"),
 		},
 		Adjustment:     gwstaffapi.PricingAdjustment{MultiplierBps: 10000},
 		SourceName:     "test-fixture",
@@ -217,8 +217,8 @@ func TestModelPricingRefusesMalformedDimensionRows(t *testing.T) {
 		_, _, err := svc.SaveModelPricing(ctx, modelID, gwstaffapi.ModelPricingInput{
 			AcknowledgedRisks: &[]gwstaffapi.PricingRiskCode{gwstaffapi.UnknownProcurementCost},
 			BillingMode:       gwstaffapi.ModelPricingInputBillingModePaid,
-			OfficialRates: gwstaffapi.DraftTokenRatesUSDPerM{
-				Input: ptr("3"), Output: ptr("15"), CacheRead: ptr("0.3"), CacheWrite: ptr("3.75"),
+			OfficialRates: &gwstaffapi.DraftTokenRatesUSDPerM{
+				Input: new("3"), Output: new("15"), CacheRead: new("0.3"), CacheWrite: new("3.75"),
 			},
 			Adjustment: gwstaffapi.PricingAdjustment{MultiplierBps: 10000},
 			SourceName: "test-fixture", Reason: "refusal cases", CheckedAt: time.Now().UTC(),
@@ -232,10 +232,10 @@ func TestModelPricingRefusesMalformedDimensionRows(t *testing.T) {
 		rates []gwstaffapi.ModelPriceDimensionRate
 	}{
 		{"negative band bound", []gwstaffapi.ModelPriceDimensionRate{
-			{Bucket: gwstaffapi.Input, RateUsdPerM: "3", MinInputTokens: ptr(int32(-1))},
+			{Bucket: gwstaffapi.Input, RateUsdPerM: "3", MinInputTokens: new(int32(-1))},
 		}},
 		{"very negative band bound", []gwstaffapi.ModelPriceDimensionRate{
-			{Bucket: gwstaffapi.Input, RateUsdPerM: "3", MinInputTokens: ptr(int32(-2147483648))},
+			{Bucket: gwstaffapi.Input, RateUsdPerM: "3", MinInputTokens: new(int32(-2147483648))},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,7 +254,7 @@ func TestModelPricingRefusesMalformedDimensionRows(t *testing.T) {
 	// The positive control: a well-formed row on the same path still saves. A
 	// guard that refused everything would satisfy every assertion above.
 	if err := save([]gwstaffapi.ModelPriceDimensionRate{
-		{Bucket: gwstaffapi.Input, RateUsdPerM: "6", MinInputTokens: ptr(int32(200001))},
+		{Bucket: gwstaffapi.Input, RateUsdPerM: "6", MinInputTokens: new(int32(200001))},
 	}); err != nil {
 		t.Errorf("a well-formed band should still save: %v", err)
 	}

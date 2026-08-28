@@ -31,6 +31,9 @@ import (
 //      never converged
 //   3. the share of estimated billing   -> upstreams that report no usage force
 //      the charge onto an estimate
+//   4. terminal asynchronous jobs whose reservation never moved -> the job
+//      finished and the settlement transaction never landed, so the customer
+//      was either overcharged or not charged at all
 
 // RevenueReconArgs is the reverse reconciliation job.
 type RevenueReconArgs struct{}
@@ -82,6 +85,11 @@ type RevenueReconReport struct {
 	PricingReservedNano int64
 	EstimatedNano       int64
 	TotalNano           int64
+	// StuckJobs counts terminal asynchronous jobs still holding a reservation.
+	// StuckOldest is the earliest of their terminal times, which is what
+	// separates a live incident from one row stranded a month ago.
+	StuckJobs   int64
+	StuckOldest *time.Time
 }
 
 // EstimatedShareBps returns the estimated-billing share in basis points, or 0
@@ -103,6 +111,7 @@ func (r RevenueReconReport) Clean() bool {
 		r.AbandonedUnsettled == 0 &&
 		r.PendingUnsettled < unsettledPendingThreshold &&
 		r.PricingMissing == 0 &&
+		r.StuckJobs == 0 &&
 		r.EstimatedShareBps() < estimatedShareThresholdBps
 }
 
@@ -129,6 +138,19 @@ func (w *RevenueReconWorker) Run(ctx context.Context) (RevenueReconReport, error
 		return rep, fmt.Errorf("usage: query missing-price queue: %w", err)
 	}
 	rep.PricingMissing, rep.PricingReservedNano = pricingBacklog.Pending, pricingBacklog.ReservedNano
+
+	// No window: unlike the other checks this one is not asking "what happened
+	// in the last day" but "what is still wrong". A reservation stranded three
+	// weeks ago is more urgent than one stranded this morning, not less.
+	stuck, err := w.q.CountStuckMoneyJobs(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("usage: query jobs whose money never moved: %w", err)
+	}
+	rep.StuckJobs = stuck.Jobs
+	if stuck.OldestTerminalAt.Valid {
+		oldest := stuck.OldestTerminalAt.Time.UTC()
+		rep.StuckOldest = &oldest
+	}
 
 	share, err := w.q.ReconEstimatedShare(ctx, since)
 	if err != nil {
@@ -192,6 +214,19 @@ func describeRevenueRecon(r RevenueReconReport) string {
 			"missing rate is established, settle or void each one by hand "+
 			"against its snapshot. See the gateway_pricing_unsettled "+
 			"table.\n", r.PricingMissing, r.PricingReservedNano)
+	}
+	if r.StuckJobs > 0 {
+		since := ""
+		if r.StuckOldest != nil {
+			since = fmt.Sprintf(", the oldest waiting since %s", r.StuckOldest.Format(time.RFC3339))
+		}
+		fmt.Fprintf(&b, "- Asynchronous jobs terminal with their reservation "+
+			"unmoved: %d%s. Each one is a customer either overcharged or not "+
+			"charged at all, and nothing clears these on its own -- a "+
+			"`protected` hold is deliberately exempt from the timeout sweep. "+
+			"Settle or void each against its snapshot; they are the rows in "+
+			"gateway_async_jobs with a terminal status and settlement_state "+
+			"still held or protected.\n", r.StuckJobs, since)
 	}
 	if bps := r.EstimatedShareBps(); bps >= estimatedShareThresholdBps {
 		fmt.Fprintf(&b, "- Estimated billing share: %.2f%% (threshold "+

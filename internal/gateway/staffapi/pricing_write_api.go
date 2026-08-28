@@ -59,6 +59,8 @@ var (
 		CacheWrite:  "cache_write",
 		AudioInput:  "audio_in",
 		AudioOutput: "audio_out",
+		ImageInput:  "image_in",
+		ImageOutput: "image_out",
 	}
 	dimensionBucketFromDB = map[string]ModelPriceDimensionRateBucket{
 		"in":          Input,
@@ -67,6 +69,8 @@ var (
 		"cache_write": CacheWrite,
 		"audio_in":    AudioInput,
 		"audio_out":   AudioOutput,
+		"image_in":    ImageInput,
+		"image_out":   ImageOutput,
 	}
 )
 

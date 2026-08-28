@@ -19,6 +19,15 @@ var managementScopes = map[string]string{
 	"getRequestLog":       "management:usage:read",
 	"exportLogsCSV":       "management:usage:read",
 	"listAvailableModels": "management:usage:read",
+	"listVideoJobs":       "management:usage:read",
+	"getVideoJob":         "management:usage:read",
+	"getVideoJobContent":  "management:usage:read",
+	// cancelVideoJob and deleteVideoJob are deliberately absent: they are
+	// session-only. A management key holds one of three scopes and none of them
+	// is a write over usage, and minting a fourth to fit two buttons would
+	// widen an externally reachable authentication surface as a side effect of
+	// adding a screen. Neither operation is out of reach -- a person cancels
+	// from the console, a program cancels through the data plane.
 }
 
 // RequireManagementScope is the authorization gate for management keys, applied

@@ -9,8 +9,8 @@ import {
 import { type MessageKey, useI18n } from "@fairlb/i18n";
 import {
   Alert,
+  CheckboxGroupField,
   Button,
-  Card,
   Checkbox,
   ConfirmDialog,
   DataTable,
@@ -19,7 +19,7 @@ import {
   FormRow,
   InlineEmpty,
   Input,
-  intSchema,
+  ListPage,
   LoadingState,
   PageHeader,
   RowActions,
@@ -27,12 +27,12 @@ import {
   SectionHeading,
   Select,
   StatusBadge,
+  intSchema,
   useAdminTitle,
   validate,
 } from "@fairlb/ui";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useState } from "react";
-import { AdjustmentEditor } from "./adjustment-editor";
+import { useRef, useState } from "react";
 import {
   HeaderMapEditor,
   type HeaderRow,
@@ -40,18 +40,11 @@ import {
   mapFromRows,
   rowsFromMap,
 } from "./header-map";
-import { adjustmentBps, type AdjustmentMode, DECIMAL_RATE, multiplyRate } from "./pricing-math";
 import { protocolLabel, useProtocolItems } from "./providers-shared";
+import { VideoEnvelopeEditor } from "./video-envelope-editor";
 
 /** The four list prices are in the same order as on the detail page: one set of
  * quantities ordered differently in two places forces a reader to keep comparing. */
-const RATE_KEYS = ["input", "output", "cache_read", "cache_write"] as const;
-const RATE_LABELS: Record<(typeof RATE_KEYS)[number], string> = {
-  input: "Input",
-  output: "Output",
-  cache_read: "Cache Read",
-  cache_write: "Cache Write",
-};
 
 export const VISIBILITY_KEY: Record<string, MessageKey> = {
   public: "visibilityPublic",
@@ -152,30 +145,26 @@ function ModelsContent() {
   const refresh = () => void models.refetch();
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title={t("navGatewayModels")}
-        description={t("staffGatewayModelsDesc")}
-        actions={
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              disabled={selectedIds.length === 0}
-              onClick={() => setBatchOpen(true)}
-            >
-              {t("gwBatchAdjustment", { count: selectedIds.length })}
-            </Button>
-            <Button onClick={() => setCreating(true)}>{t("gwNewModel")}</Button>
-          </div>
-        }
-      />
-      {update.isError && <Alert>{apiErrorMessage(update.error)}</Alert>}
-
-      <Card className="space-y-3">
-        {/* A filter belongs to the table it filters, so the toolbar sits inside the
-            list card rather than in a card of its own. The card has no heading — it
-            would only repeat the page title — and the count stays at the right of the
-            toolbar row. */}
+    <ListPage
+      header={
+        <PageHeader
+          title={t("navGatewayModels")}
+          description={t("staffGatewayModelsDesc")}
+          actions={
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                disabled={selectedIds.length === 0}
+                onClick={() => setBatchOpen(true)}
+              >
+                {t("gwBatchAdjustment", { count: selectedIds.length })}
+              </Button>
+              <Button onClick={() => setCreating(true)}>{t("gwNewModel")}</Button>
+            </div>
+          }
+        />
+      }
+      filters={
         <FormRow className="sm:grid-cols-2 xl:grid-cols-[minmax(14rem,1fr)_11rem_11rem_11rem_11rem]">
           <FormRow.Item>
             <Field label={t("gwModelSearch")} htmlFor="model-search">
@@ -237,184 +226,190 @@ function ModelsContent() {
             </Field>
           </FormRow.Item>
         </FormRow>
-        <div className="flex items-center justify-end">
-          {/* Same reason: while the query is pending this line would read "showing 0
+      }
+      overlays={
+        <>
+          <CreateModelDialog open={creating} onOpenChange={setCreating} onCreated={refresh} />
+          <BatchAdjustmentDialog
+            open={batchOpen}
+            onOpenChange={setBatchOpen}
+            models={data.filter((model) => selectedIds.includes(model.id))}
+            onSaved={() => {
+              // Saving takes effect immediately; there is no publish step to send anyone
+              // to afterwards.
+              setSelectedIds([]);
+              refresh();
+            }}
+          />
+
+          <ConfirmDialog
+            open={togglingModel !== null}
+            onOpenChange={(o) => !o && setTogglingModel(null)}
+            destructive={togglingModel?.enabled ?? true}
+            title={togglingModel?.enabled ? t("gwDisableConfirmTitle") : t("gwEnableConfirmTitle")}
+            description={
+              togglingModel?.enabled
+                ? t("gwDisableConfirmBody", { slug: togglingModel?.slug ?? "" })
+                : t("gwEnableConfirmBody", { slug: togglingModel?.slug ?? "" })
+            }
+            confirmLabel={togglingModel?.enabled ? t("gwDisable") : t("gwEnable")}
+            pending={update.isPending}
+            onConfirm={() => {
+              if (!togglingModel) return;
+              update.mutate(
+                { modelId: togglingModel.id, data: { enabled: !togglingModel.enabled } },
+                {
+                  onSuccess: () => {
+                    toasts.add({
+                      variant: "success",
+                      title: togglingModel.enabled ? t("gwDisabledDone") : t("gwEnabledDone"),
+                    });
+                    setTogglingModel(null);
+                    refresh();
+                  },
+                },
+              );
+            }}
+          />
+        </>
+      }
+    >
+      {update.isError && <Alert>{apiErrorMessage(update.error)}</Alert>}
+      <div className="flex items-center justify-end">
+        {/* Same reason: while the query is pending this line would read "showing 0
               of 0", which is equally untrue. */}
-          {!models.isPending && (
-            <span className="text-base text-kumo-subtle">
-              {t("gwModelCount", { shown: filtered.length, total: data.length })}
-            </span>
-          )}
-        </div>
-        <DataTable caption={t("navGatewayModels")}>
-          <DataTable.Header>
-            <DataTable.Row>
-              <DataTable.Head>
+        {!models.isPending && (
+          <span className="text-base text-kumo-subtle">
+            {t("gwModelCount", { shown: filtered.length, total: data.length })}
+          </span>
+        )}
+      </div>
+      <DataTable caption={t("navGatewayModels")}>
+        <DataTable.Header>
+          <DataTable.Row>
+            <DataTable.Head>
+              <Checkbox
+                aria-label={t("gwSelectAllModels")}
+                checked={
+                  filtered.length > 0 && filtered.every((model) => selectedIds.includes(model.id))
+                }
+                onCheckedChange={(checked) =>
+                  setSelectedIds(
+                    checked === true
+                      ? Array.from(new Set([...selectedIds, ...filtered.map((model) => model.id)]))
+                      : selectedIds.filter((id) => !filtered.some((model) => model.id === id)),
+                  )
+                }
+              />
+            </DataTable.Head>
+            <DataTable.Head>{t("gwColSlug")}</DataTable.Head>
+            <DataTable.Head>{t("gwColVisibility")}</DataTable.Head>
+            <DataTable.Head>{t("gwColRoutes")}</DataTable.Head>
+            <DataTable.Head>{t("gwPricingState")}</DataTable.Head>
+            <DataTable.Head>{t("gwColCaps")}</DataTable.Head>
+            <DataTable.Head className="text-right">{t("gwColPriceIn")}</DataTable.Head>
+            <DataTable.Head className="text-right">{t("gwColPriceOut")}</DataTable.Head>
+            <DataTable.Head />
+          </DataTable.Row>
+        </DataTable.Header>
+        <DataTable.Body>
+          {filtered.map((m) => (
+            <DataTable.Row key={m.id} interactive>
+              <DataTable.Cell>
                 <Checkbox
-                  aria-label={t("gwSelectAllModels")}
-                  checked={
-                    filtered.length > 0 && filtered.every((model) => selectedIds.includes(model.id))
-                  }
+                  aria-label={t("gwSelectModel", { slug: m.slug })}
+                  checked={selectedIds.includes(m.id)}
                   onCheckedChange={(checked) =>
                     setSelectedIds(
                       checked === true
-                        ? Array.from(
-                            new Set([...selectedIds, ...filtered.map((model) => model.id)]),
-                          )
-                        : selectedIds.filter((id) => !filtered.some((model) => model.id === id)),
+                        ? [...selectedIds, m.id]
+                        : selectedIds.filter((id) => id !== m.id),
                     )
                   }
                 />
-              </DataTable.Head>
-              <DataTable.Head>{t("gwColSlug")}</DataTable.Head>
-              <DataTable.Head>{t("gwColVisibility")}</DataTable.Head>
-              <DataTable.Head>{t("gwColRoutes")}</DataTable.Head>
-              <DataTable.Head>{t("gwPricingState")}</DataTable.Head>
-              <DataTable.Head>{t("gwColCaps")}</DataTable.Head>
-              <DataTable.Head className="text-right">{t("gwColPriceIn")}</DataTable.Head>
-              <DataTable.Head className="text-right">{t("gwColPriceOut")}</DataTable.Head>
-              <DataTable.Head />
-            </DataTable.Row>
-          </DataTable.Header>
-          <DataTable.Body>
-            {filtered.map((m) => (
-              <DataTable.Row key={m.id} interactive>
-                <DataTable.Cell>
-                  <Checkbox
-                    aria-label={t("gwSelectModel", { slug: m.slug })}
-                    checked={selectedIds.includes(m.id)}
-                    onCheckedChange={(checked) =>
-                      setSelectedIds(
-                        checked === true
-                          ? [...selectedIds, m.id]
-                          : selectedIds.filter((id) => id !== m.id),
-                      )
-                    }
-                  />
-                </DataTable.Cell>
-                {/* `relative` is what lets the row title link cover the whole cell,
+              </DataTable.Cell>
+              {/* `relative` is what lets the row title link cover the whole cell,
                     and it is a real link: middle-click and copy-link-address both have
                     to work. */}
-                <DataTable.Cell className="relative">
-                  <span className="font-mono">
-                    <RowTitleLink to="/gateway/models/$modelId" params={{ modelId: m.id }}>
-                      {m.slug}
-                    </RowTitleLink>
-                    {m.is_free && <span className="ml-2 text-kumo-subtle">{t("gwFreeTag")}</span>}
-                  </span>
-                  {/* The display name was searchable but invisible: the filter matched
+              <DataTable.Cell className="relative">
+                {/* The monospace run closes around the slug. It used to wrap the
+                      free tag as well, which put a translated word in a monospaced
+                      face beside prose. */}
+                <span className="font-mono text-[0.9em]">
+                  <RowTitleLink to="/gateway/models/$modelId" params={{ modelId: m.id }}>
+                    {m.slug}
+                  </RowTitleLink>
+                </span>
+                {m.is_free && <span className="ml-2 text-kumo-subtle">{t("gwFreeTag")}</span>}
+                {/* The display name was searchable but invisible: the filter matched
                       on it while the list never showed it. The identity column is now
                       the primary identifier as a link with the name on a second line,
                       like the provider list. */}
-                  {m.display_name && <div className="text-kumo-subtle">{m.display_name}</div>}
-                </DataTable.Cell>
-                <DataTable.Cell>
-                  {t(VISIBILITY_KEY[m.visibility] ?? "visibilityHidden")}
-                </DataTable.Cell>
-                <DataTable.Cell>{m.route_count ?? 0}</DataTable.Cell>
-                <DataTable.Cell>
-                  <ModelStateBadges model={m} />
-                </DataTable.Cell>
-                <DataTable.Cell className="font-mono">
-                  {/* What probes have verified on the enabled routes -- the same
+                {m.display_name && <div className="text-kumo-subtle">{m.display_name}</div>}
+              </DataTable.Cell>
+              <DataTable.Cell>
+                {t(VISIBILITY_KEY[m.visibility] ?? "visibilityHidden")}
+              </DataTable.Cell>
+              <DataTable.Cell>{m.route_count ?? 0}</DataTable.Cell>
+              <DataTable.Cell>
+                <ModelStateBadges model={m} />
+              </DataTable.Cell>
+              <DataTable.Cell className="font-mono">
+                {/* What probes have verified on the enabled routes -- the same
                       set the public catalog publishes. A route with nothing
                       verified yet shows nothing here, not a declaration. */}
-                  {m.endpoints.length > 0 ? (
-                    m.endpoints.join(", ")
-                  ) : (
-                    <span className="text-kumo-warning">
-                      {(m.route_count ?? 0) > 0 ? t("gwNothingVerified") : t("gwNoRoute")}
-                    </span>
-                  )}
-                </DataTable.Cell>
-                <DataTable.Cell className="text-right font-mono">
-                  {m.public_rates?.input ?? "—"}
-                </DataTable.Cell>
-                <DataTable.Cell className="text-right font-mono">
-                  {m.public_rates?.output ?? "—"}
-                </DataTable.Cell>
-                {/* The end of a row carries only real actions; opening the detail page
+                {m.endpoints.length > 0 ? (
+                  m.endpoints.join(", ")
+                ) : (
+                  <span className="text-kumo-warning">
+                    {(m.route_count ?? 0) > 0 ? t("gwNothingVerified") : t("gwNoRoute")}
+                  </span>
+                )}
+              </DataTable.Cell>
+              <DataTable.Cell className="text-right font-mono">
+                {m.public_rates?.input ?? "—"}
+              </DataTable.Cell>
+              <DataTable.Cell className="text-right font-mono">
+                {m.public_rates?.output ?? "—"}
+              </DataTable.Cell>
+              {/* The end of a row carries only real actions; opening the detail page
                     is the job of the slug at the head of it. */}
-                <DataTable.Cell className="text-right whitespace-nowrap">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setTogglingModel(m)}
-                    disabled={update.isPending}
-                  >
-                    {m.enabled ? t("gwDisable") : t("gwEnable")}
-                  </Button>
-                </DataTable.Cell>
-              </DataTable.Row>
-            ))}
-            {/* No empty state while pending: "the catalog has no models" and "we have
+              <DataTable.Cell className="text-right whitespace-nowrap">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setTogglingModel(m)}
+                  disabled={update.isPending}
+                >
+                  {m.enabled ? t("gwDisable") : t("gwEnable")}
+                </Button>
+              </DataTable.Cell>
+            </DataTable.Row>
+          ))}
+          {/* No empty state while pending: "the catalog has no models" and "we have
                 not looked yet" are different facts, and defaulting the data to an empty
                 array lets the first speak for the second. */}
-            {models.isPending ? (
+          {models.isPending ? (
+            <DataTable.Row>
+              <DataTable.Cell colSpan={9}>
+                <LoadingState label={t("loading")} />
+              </DataTable.Cell>
+            </DataTable.Row>
+          ) : (
+            filtered.length === 0 && (
               <DataTable.Row>
                 <DataTable.Cell colSpan={9}>
-                  <LoadingState label={t("loading")} />
+                  <InlineEmpty
+                    title={t("gwNoModels")}
+                    description={modelsFiltered ? t("emptyClearFilters") : undefined}
+                  />
                 </DataTable.Cell>
               </DataTable.Row>
-            ) : (
-              filtered.length === 0 && (
-                <DataTable.Row>
-                  <DataTable.Cell colSpan={9}>
-                    <InlineEmpty
-                      title={t("gwNoModels")}
-                      description={modelsFiltered ? t("emptyClearFilters") : undefined}
-                    />
-                  </DataTable.Cell>
-                </DataTable.Row>
-              )
-            )}
-          </DataTable.Body>
-        </DataTable>
-      </Card>
-
-      <CreateModelDialog open={creating} onOpenChange={setCreating} onCreated={refresh} />
-      <BatchAdjustmentDialog
-        open={batchOpen}
-        onOpenChange={setBatchOpen}
-        models={data.filter((model) => selectedIds.includes(model.id))}
-        onSaved={() => {
-          // Saving takes effect immediately; there is no publish step to send anyone
-          // to afterwards.
-          setSelectedIds([]);
-          refresh();
-        }}
-      />
-
-      <ConfirmDialog
-        open={togglingModel !== null}
-        onOpenChange={(o) => !o && setTogglingModel(null)}
-        destructive={togglingModel?.enabled ?? true}
-        title={togglingModel?.enabled ? t("gwDisableConfirmTitle") : t("gwEnableConfirmTitle")}
-        description={
-          togglingModel?.enabled
-            ? t("gwDisableConfirmBody", { slug: togglingModel?.slug ?? "" })
-            : t("gwEnableConfirmBody", { slug: togglingModel?.slug ?? "" })
-        }
-        confirmLabel={togglingModel?.enabled ? t("gwDisable") : t("gwEnable")}
-        pending={update.isPending}
-        onConfirm={() => {
-          if (!togglingModel) return;
-          update.mutate(
-            { modelId: togglingModel.id, data: { enabled: !togglingModel.enabled } },
-            {
-              onSuccess: () => {
-                toasts.add({
-                  variant: "success",
-                  title: togglingModel.enabled ? t("gwDisabledDone") : t("gwEnabledDone"),
-                });
-                setTogglingModel(null);
-                refresh();
-              },
-            },
-          );
-        }}
-      />
-    </div>
+            )
+          )}
+        </DataTable.Body>
+      </DataTable>
+    </ListPage>
   );
 }
 
@@ -614,9 +609,7 @@ export function ModelStateBadges({ model }: { model: GatewayStaffTypes.GatewayMo
  * is absent — a pricing service that is not wired up — and treating "unknown" as
  * "none" is the conservative side to fail on.
  */
-export function modelPricingState(
-  model: GatewayStaffTypes.GatewayModel,
-): "free" | "active" | "unpriced" {
+function modelPricingState(model: GatewayStaffTypes.GatewayModel): "free" | "active" | "unpriced" {
   if (model.is_free || model.pricing_status === "free") return "free";
   if (model.pricing_status != null)
     return model.pricing_status === "active" ? "active" : "unpriced";
@@ -675,31 +668,23 @@ function CreateModelDialog({
     useState<GatewayStaffTypes.GatewayModelInputVisibility>("public");
   const [contextWindow, setContextWindow] = useState("");
   const [maxOutput, setMaxOutput] = useState("");
+  // Defaults to text, which is what the column defaults to. It is asked here
+  // rather than left to a later edit because a model created as text and served
+  // on an image endpoint is filed under the wrong axis until somebody notices,
+  // and nothing about it looks wrong (ADR-0226).
+  const [modalities, setModalities] = useState<string[]>(["text"]);
   const [providerId, setProviderId] = useState("");
   const [upstreamModel, setUpstreamModel] = useState("");
   const [chaining, setChaining] = useState(false);
-  const [rates, setRates] = useState<GatewayStaffTypes.DraftTokenRatesUSDPerM>({
-    input: null,
-    output: null,
-    cache_read: null,
-    cache_write: null,
-  });
-  const [adjustmentMode, setAdjustmentMode] = useState<AdjustmentMode>("original");
-  const [adjustmentPercent, setAdjustmentPercent] = useState("0");
-  const [sourceName, setSourceName] = useState("");
 
   const errContext = contextWindow ? validate(intSchema, contextWindow) : undefined;
   const errMaxOutput = maxOutput ? validate(intSchema, maxOutput) : undefined;
-  const multiplier = adjustmentBps(adjustmentMode, adjustmentPercent);
-  // The four list prices are all present or all empty — **the partial state is the
-  // only one worth blocking**: the server refuses it, and its error lands at the top of
-  // the dialog, far from the field that caused it.
-  const filledRates = RATE_KEYS.filter((key) => (rates[key] ?? "").trim() !== "");
-  const badRate = filledRates.find((key) => !DECIMAL_RATE.test((rates[key] ?? "").trim()));
-  const pricingPartial = filledRates.length > 0 && filledRates.length < RATE_KEYS.length;
-  const pricingReady = filledRates.length === RATE_KEYS.length && !badRate && multiplier != null;
-  const pricingBlocked =
-    pricingPartial || Boolean(badRate) || (filledRates.length > 0 && multiplier == null);
+  // Coarser than the database's models_slug_shape, and deliberately not a copy of
+  // it: exactly one slash with something either side. That is the mistake somebody
+  // actually makes -- typing the bare upstream name -- caught next to the field,
+  // while the exact pattern stays in the migration and answers with a message of
+  // its own for anything subtler.
+  const slugShapeWrong = slug.trim() !== "" && slug.trim().split("/").filter(Boolean).length !== 2;
   // Every provider is a candidate: a model owns no protocol, so there is no
   // dialect to match. The route is probed on whatever its provider speaks.
   const provList = providers.data?.items ?? [];
@@ -712,12 +697,9 @@ function CreateModelDialog({
     setVisibility("public");
     setContextWindow("");
     setMaxOutput("");
+    setModalities(["text"]);
     setProviderId("");
     setUpstreamModel("");
-    setRates({ input: null, output: null, cache_read: null, cache_write: null });
-    setAdjustmentMode("original");
-    setAdjustmentPercent("0");
-    setSourceName("");
     create.reset();
   };
 
@@ -752,7 +734,11 @@ function CreateModelDialog({
       error={create.isError ? apiErrorMessage(create.error) : undefined}
       submitLabel={t("gwCreateAndConfigure")}
       submitDisabled={
-        !slug.trim() || Boolean(errContext) || Boolean(errMaxOutput) || pricingBlocked
+        !slug.trim() ||
+        slugShapeWrong ||
+        Boolean(errContext) ||
+        Boolean(errMaxOutput) ||
+        modalities.length === 0
       }
       pending={create.isPending || chaining}
       onSubmit={() =>
@@ -765,14 +751,16 @@ function CreateModelDialog({
               ...(displayName.trim() ? { display_name: displayName.trim() } : {}),
               ...(contextWindow ? { context_window: Number(contextWindow) } : {}),
               ...(maxOutput ? { max_output_tokens: Number(maxOutput) } : {}),
+              output_modalities: modalities as GatewayStaffTypes.OutputModalities,
             },
           },
           {
             onSuccess: (created) => {
-              if (!pricingReady && !routeReady) {
-                // A missing price is the first reason a model fails closed, and the
-                // next step is the focused pricing page.
-                finish(created.id, "pricing");
+              if (!routeReady) {
+                // Nothing else was asked for, so land where the next step is. A
+                // model with no route cannot be enabled, and the routes face is
+                // where that is fixed.
+                finish(created.id, "routes");
                 return;
               }
               setChaining(true);
@@ -782,59 +770,37 @@ function CreateModelDialog({
               // created". The navigation happens once, in the finally branch: split
               // across then and catch, anything thrown inside then would be caught by
               // the same chain's catch and reported as a failure that never happened.
-              let pricingOk = true;
+              //
+              // One chained call, not two. Pricing used to be here as well, and it
+              // did not belong: ADR-0050 put it on the detail page because it needs a
+              // precondition check, a separate role, and a draft editor -- and the
+              // version that lived here quietly stamped checked_at with the current
+              // time, asserting on the operator's behalf that a price had been
+              // verified against the vendor. Pricing is now reached in exactly two
+              // places, both of which are honest about whether anyone checked: the
+              // model's own pricing face, and the reference-price import, which
+              // writes every row as unverified.
               let routeOk = true;
               void (async () => {
-                // **The two sub-resources succeed or fail independently**: a failed
-                // price write must not discard an already configured route, or vice
-                // versa. The model itself exists by now, and rolling that back is not
-                // something this code can do.
-                if (pricingReady) {
-                  try {
-                    await gatewayStaffApi.saveGatewayModelPricing(created.id, {
-                      billing_mode: "paid",
-                      official_rates: rates,
-                      adjustment: { multiplier_bps: multiplier ?? 10_000 },
-                      source_name: sourceName.trim(),
-                      checked_at: new Date().toISOString(),
-                      // The reason for an initial price is this sentence, not a copy of
-                      // the previous one — there is no previous one. It goes through the
-                      // message catalog rather than being hard-coded: an audit log is
-                      // read by people, in the language of whoever acted.
-                      reason: t("gwInitialPricingReason"),
-                    });
-                  } catch (error: unknown) {
-                    pricingOk = false;
-                    toasts.add({
-                      variant: "error",
-                      title: t("gwModelCreatedPricingFailed"),
-                      description: apiErrorMessage(error),
-                    });
-                  }
-                }
-                if (routeReady) {
-                  try {
-                    await gatewayStaffApi.createGatewayRoute(created.id, {
-                      provider_id: providerId,
-                      provider_model_id: upstreamModel.trim(),
-                    });
-                  } catch (error: unknown) {
-                    routeOk = false;
-                    toasts.add({
-                      variant: "error",
-                      title: t("gwModelCreatedRouteFailed"),
-                      description: apiErrorMessage(error),
-                    });
-                  }
+                try {
+                  await gatewayStaffApi.createGatewayRoute(created.id, {
+                    provider_id: providerId,
+                    provider_model_id: upstreamModel.trim(),
+                  });
+                } catch (error: unknown) {
+                  routeOk = false;
+                  toasts.add({
+                    variant: "error",
+                    title: t("gwModelCreatedRouteFailed"),
+                    description: apiErrorMessage(error),
+                  });
                 }
               })().finally(() => {
                 setChaining(false);
-                // Land on whichever page still has work outstanding, since that is
-                // where the retry is. Only when everything succeeded does it land on the
-                // overview, where the enable button in the header is the next step.
-                if (!routeOk) finish(created.id, "routes");
-                else if (!pricingOk || !pricingReady) finish(created.id, "pricing");
-                else finish(created.id, "overview");
+                // Land on whichever face still has work outstanding, since that is
+                // where the retry is: the routes face when the route did not take,
+                // otherwise pricing, which is what a new model is still missing.
+                finish(created.id, routeOk ? "pricing" : "routes");
               });
             },
           },
@@ -844,12 +810,19 @@ function CreateModelDialog({
       <SectionHeading level="sub" as="h3">
         {t("gwSectionIdentity")}
       </SectionHeading>
-      <Field label={t("gwSlugLabel")} htmlFor="m-slug" hint={t("gwSlugHint")}>
+      <Field
+        label={t("gwSlugLabel")}
+        htmlFor="m-slug"
+        hint={t("gwSlugHint")}
+        error={slugShapeWrong ? t("gwWiringDraftSlugShape") : undefined}
+      >
         <Input
           id="m-slug"
           value={slug}
           autoFocus
           required
+          className="font-mono"
+          placeholder={t("gwWiringDraftSlugPlaceholder")}
           onChange={(e) => setSlug(e.target.value)}
         />
       </Field>
@@ -906,76 +879,19 @@ function CreateModelDialog({
           </Field>
         </FormRow.Item>
       </FormRow>
-
-      <SectionHeading level="sub" as="h3">
-        {t("gwSectionPricing")}
-      </SectionHeading>
-      <p className="text-base text-kumo-subtle">{t("gwCreatePricingHint")}</p>
-      <FormRow className="sm:grid-cols-2">
-        {RATE_KEYS.map((key) => {
-          const raw = rates[key] ?? "";
-          const invalid = raw.trim() !== "" && !DECIMAL_RATE.test(raw.trim());
-          return (
-            <FormRow.Item key={key}>
-              <Field
-                label={`${RATE_LABELS[key]} ${t("gwOfficialPrice")}`}
-                htmlFor={`m-rate-${key}`}
-                error={invalid ? t("gwRateInvalid") : undefined}
-                // The published price sits under each field: once the multiplier is
-                // anything but list price, that is the number actually being decided.
-                hint={
-                  !invalid && raw.trim() !== "" && multiplier != null && multiplier !== 10_000
-                    ? `${t("gwPublicPrice")}: $${multiplyRate(raw.trim(), multiplier)}`
-                    : undefined
-                }
-              >
-                <div className="relative">
-                  <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-kumo-subtle">
-                    $
-                  </span>
-                  <Input
-                    id={`m-rate-${key}`}
-                    className="pl-7 font-mono"
-                    inputMode="decimal"
-                    value={raw}
-                    onChange={(e) => setRates({ ...rates, [key]: e.target.value || null })}
-                  />
-                </div>
-              </Field>
-            </FormRow.Item>
-          );
-        })}
-      </FormRow>
-      <FormRow className="sm:grid-cols-2">
-        <AdjustmentEditor
-          inputId="m-adjustment-percent"
-          mode={adjustmentMode}
-          percent={adjustmentPercent}
-          onChange={(mode, percent) => {
-            setAdjustmentMode(mode);
-            setAdjustmentPercent(percent);
-          }}
-        />
-      </FormRow>
-      <Field
-        label={t("gwSourceName")}
-        htmlFor="m-source-name"
-        hint={t("gwSourceNameCreateHint")}
-        error={
-          filledRates.length > 0 && sourceName.trim() === "" ? t("gwSourceNameRequired") : undefined
-        }
-      >
-        <Input
-          id="m-source-name"
-          value={sourceName}
-          onChange={(e) => setSourceName(e.target.value)}
-        />
-      </Field>
-      {/* A partly filled set is the **only** shape worth blocking: the server's
-          completeness constraint refuses it, and that error lands at the top of the
-          dialog, far from the field that caused it. All empty is a legitimate "price it
-          later". */}
-      {pricingPartial && <Alert variant="warning">{t("gwCreatePricingPartial")}</Alert>}
+      <CheckboxGroupField
+        legend={t("gwModality")}
+        hint={t("gwModalityHint")}
+        error={modalities.length === 0 ? t("gwModalityRequired") : undefined}
+        columns={2}
+        value={modalities}
+        onValueChange={setModalities}
+        options={[
+          { value: "text", label: t("gwModalityText") },
+          { value: "image", label: t("gwModalityImage") },
+          { value: "video", label: t("gwModalityVideo") },
+        ]}
+      />
 
       <SectionHeading level="sub" as="h3">
         {t("gwSectionFirstRoute")}
@@ -1025,7 +941,20 @@ export function RoutePanel({
 }) {
   const { t } = useI18n();
   const toasts = useKumoToastManager();
-  const routes = gatewayStaffApi.useListGatewayRoutes(model.id);
+  // Polled only while something is actually in flight, and stopped again the
+  // moment nothing is. A probe answers in seconds on a cheap endpoint and in
+  // minutes on one that generates a video, so a fixed interval would either
+  // leave the badge stale or poll a quiet page forever.
+  const routes = gatewayStaffApi.useListGatewayRoutes(model.id, {
+    query: {
+      refetchInterval: (query) =>
+        (query.state.data?.items ?? []).some((r) =>
+          (r.probes ?? []).some((p) => Boolean(p.probe_enqueued_at)),
+        )
+          ? PROBE_POLL_MS
+          : false,
+    },
+  });
   const providers = gatewayStaffApi.useListGatewayProviders();
   const create = gatewayStaffApi.useCreateGatewayRoute();
   const update = gatewayStaffApi.useUpdateGatewayRoute();
@@ -1328,24 +1257,35 @@ export function RoutePanel({
           );
         }}
       />
-      {editingRoute && (
-        <RouteEditDialog
-          model={model}
-          route={editingRoute}
-          onClose={() => setEditingRoute(null)}
-          onSaved={() => {
-            toasts.add({ variant: "success", title: t("commonSaved") });
-            setEditingRoute(null);
-            refresh();
-          }}
-        />
-      )}
+      <RouteEditDialog
+        model={model}
+        route={editingRoute}
+        onClose={() => setEditingRoute(null)}
+        onSaved={() => {
+          toasts.add({ variant: "success", title: t("commonSaved") });
+          setEditingRoute(null);
+          refresh();
+        }}
+      />
     </div>
   );
 }
 
-// The edit dialog remounts per target: the form's field state is initialized from the
-// route it is given.
+/**
+ * The edit dialog remounts per target — the form's field state is initialised
+ * from the route it is given — but it is *not* unmounted when it closes.
+ *
+ * It used to be rendered as `{editingRoute && <RouteEditDialog …>}` with `open`
+ * hard-coded inside, which made mounting the open state: closing cleared the
+ * target, the tree came out from under the dialog, and the closing animation
+ * went with it. `open` is a prop for exactly this reason.
+ *
+ * The two facts fit together through the same cache `ConfirmDialog` keeps: the
+ * caller clears the target the instant it asks the dialog to close, so the last
+ * route is held here for the length of the animation. The `key` still changes
+ * when the reader picks a different route, so the fields are re-initialised —
+ * that remount happens while the dialog is open and has no animation to swallow.
+ */
 function RouteEditDialog({
   model,
   route,
@@ -1353,16 +1293,24 @@ function RouteEditDialog({
   onSaved,
 }: {
   model: GatewayStaffTypes.GatewayModel;
-  route: GatewayStaffTypes.GatewayRoute;
+  /** The route being edited; null means closed. */
+  route: GatewayStaffTypes.GatewayRoute | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const shown = useRef(route);
+  if (route) shown.current = route;
+  const target = shown.current;
+  // Before the first open there is no closing animation to protect and no
+  // fields to initialise, so there is nothing to render.
+  if (!target) return null;
   return (
     <RouteEditForm
-      open
+      key={target.id}
+      open={route !== null}
       onOpenChange={(next) => !next && onClose()}
       model={model}
-      route={route}
+      route={target}
       onSaved={onSaved}
     />
   );
@@ -1402,7 +1350,21 @@ function RouteEditForm({
   const [maxOut, setMaxOut] = useState(
     route.max_output_tokens == null ? "" : String(route.max_output_tokens),
   );
+  // The image plane's whole envelope. It is what a per-image reservation is
+  // taken against: the charge follows how many images the response carried, so
+  // the reservation has to cover the most it could have carried.
+  const [maxImages, setMaxImages] = useState(
+    route.max_images == null ? "" : String(route.max_images),
+  );
   const [ignoresCap, setIgnoresCap] = useState(route.quirks?.ignores_max_output_tokens === true);
+  // Only a route whose provider speaks the video plane has an envelope to edit,
+  // and only such a route has one sent back on save. Everything else leaves the
+  // field out entirely, which is what tells the server to keep whatever is
+  // stored rather than to clear it.
+  const isVideoRoute = route.provider_protocols.includes("video");
+  const [envelope, setEnvelope] = useState<GatewayStaffTypes.VideoEnvelope>(
+    () => route.video_envelope ?? {},
+  );
 
   const errPriority = validate(intSchema, priority);
   const errWeight = validate(intSchema, weight);
@@ -1410,10 +1372,11 @@ function RouteEditForm({
   const intErr = (v: string) => (v.trim() === "" ? undefined : validate(intSchema, v));
   const errCtx = intErr(ctxWindow);
   const errMaxOut = intErr(maxOut);
+  const errMaxImages = intErr(maxImages);
   const headers = mapFromRows(rows);
   const invalid =
     Boolean(errPriority || errWeight || errHeaders) ||
-    Boolean(errCtx || errMaxOut) ||
+    Boolean(errCtx || errMaxOut || errMaxImages) ||
     upstream.trim() === "";
 
   return (
@@ -1438,7 +1401,9 @@ function RouteEditForm({
               headers,
               context_window: ctxWindow.trim() === "" ? undefined : Number(ctxWindow),
               max_output_tokens: maxOut.trim() === "" ? undefined : Number(maxOut),
+              max_images: maxImages.trim() === "" ? undefined : Number(maxImages),
               quirks: { ignores_max_output_tokens: ignoresCap },
+              ...(isVideoRoute ? { video_envelope: envelope } : {}),
             },
           },
           { onSuccess: onSaved },
@@ -1522,6 +1487,20 @@ function RouteEditForm({
               />
             </Field>
           </FormRow.Item>
+          <FormRow.Item>
+            <Field
+              label={t("gwRouteMaxImages")}
+              htmlFor={`mi-${route.id}`}
+              hint={t("gwRouteMaxImagesHint")}
+              error={errMaxImages && t(errMaxImages as MessageKey)}
+            >
+              <Input
+                id={`mi-${route.id}`}
+                value={maxImages}
+                onChange={(e) => setMaxImages(e.target.value)}
+              />
+            </Field>
+          </FormRow.Item>
           <FormRow.Item className="grid gap-2">
             <div className="flex min-h-9 items-center sm:row-start-2">
               <Checkbox
@@ -1536,6 +1515,16 @@ function RouteEditForm({
           </FormRow.Item>
         </FormRow>
       </div>
+
+      {isVideoRoute && (
+        <VideoEnvelopeEditor
+          route={route}
+          value={envelope}
+          onChange={setEnvelope}
+          disabled={update.isPending}
+          idPrefix={`env-${route.id}`}
+        />
+      )}
 
       <div className="space-y-2 border-t border-kumo-line pt-3">
         <SectionHeading level="sub" as="h4">
@@ -1572,6 +1561,11 @@ function RouteEditForm({
 // guessing. That is not hypothetical — with nine models all red, it was the
 // phrase "unsupported endpoint" in the raw message that identified the actual
 // cause.
+// How often the route list is re-read while a probe is in flight. Slow enough
+// that an open page is not a load generator, quick enough that the verdict of a
+// cheap probe does not look lost.
+const PROBE_POLL_MS = 5_000;
+
 function RouteProbes({
   modelId,
   route,
@@ -1585,6 +1579,11 @@ function RouteProbes({
   const toasts = useKumoToastManager();
   const override = gatewayStaffApi.useSetGatewayRouteProbe();
   const probe = gatewayStaffApi.useProbeGatewayRoute();
+  // The endpoint a paid probe is being confirmed for, or null when nothing is
+  // being confirmed. An endpoint that is never probed automatically is one that
+  // costs a real generation, so it is asked about rather than fired on a click
+  // — the same treatment the connectivity test gets, for the same reason.
+  const [confirming, setConfirming] = useState<string | null>(null);
   const probes = route.probes ?? [];
   if (probes.length === 0) return <span className="text-kumo-subtle">{t("gwInherit")}</span>;
   const fail = (error: unknown) =>
@@ -1602,10 +1601,25 @@ function RouteProbes({
     probe.mutate(
       { modelId, routeId: route.id, data: { endpoints: [endpoint] } },
       {
-        onSuccess: () => toasts.add({ variant: "success", title: t("gwProbeRequested") }),
+        onSuccess: () => {
+          setConfirming(null);
+          toasts.add({ variant: "success", title: t("gwProbeRequested") });
+          // Refresh so the badge picks up its in-flight mark. Without it the
+          // interface says nothing happened until something else reloads the
+          // page, which on a probe that costs money is an invitation to click
+          // again.
+          onChanged();
+        },
         onError: fail,
       },
     );
+  // A manual endpoint costs a real generation; an automatic one costs a token
+  // or two. Only the first is worth a dialog, and putting one in front of both
+  // would train the operator to dismiss it.
+  const start = (endpoint: string, mode: string | undefined) => {
+    if (mode === "manual") setConfirming(endpoint);
+    else run(endpoint);
+  };
   return (
     <div className="flex flex-wrap gap-1.5">
       {probes.map((p) => {
@@ -1633,6 +1647,11 @@ function RouteProbes({
                 ? t("gwProbeImagesManual")
                 : undefined;
         const byOperator = p.source === "operator";
+        // A probe is running. It does not change the badge's colour: the colour
+        // is the standing verdict, and a re-probe has not overturned it yet.
+        // What it changes is whether asking again is offered — on an endpoint
+        // that costs a real generation, a second click is a second charge.
+        const inFlight = Boolean(p.probe_enqueued_at);
         return (
           <DropdownMenu key={p.endpoint}>
             <DropdownMenu.Trigger
@@ -1641,19 +1660,30 @@ function RouteProbes({
                   {...props}
                   type="button"
                   className="inline-flex items-center gap-1 rounded"
-                  title={title}
+                  title={inFlight ? t("gwProbeInFlight") : title}
                   aria-label={t("gwProbeMenuFor", { endpoint: p.endpoint })}
                 >
                   <StatusBadge tone={tone}>
                     {byOperator ? `${p.endpoint} ✎` : p.endpoint}
+                    {inFlight && (
+                      <span
+                        aria-label={t("gwProbeInFlight")}
+                        className="ml-1 animate-pulse motion-reduce:animate-none"
+                      >
+                        ⋯
+                      </span>
+                    )}
                   </StatusBadge>
                 </button>
               )}
             />
             <DropdownMenu.Content align="start">
               <DropdownMenu.Group>
-                <DropdownMenu.Item onClick={() => run(p.endpoint)}>
-                  {t("gwProbeRunNow")}
+                <DropdownMenu.Item
+                  disabled={inFlight}
+                  onClick={() => start(p.endpoint, p.probe_mode)}
+                >
+                  {inFlight ? t("gwProbeInFlight") : t("gwProbeRunNow")}
                 </DropdownMenu.Item>
                 <DropdownMenu.Item onClick={() => set(p.endpoint, "ok")}>
                   {t("gwProbeMarkSupported")}
@@ -1671,6 +1701,16 @@ function RouteProbes({
           </DropdownMenu>
         );
       })}
+      <ConfirmDialog
+        open={confirming !== null}
+        onOpenChange={(open) => !open && setConfirming(null)}
+        destructive={false}
+        title={t("gwProbePaidConfirmTitle")}
+        description={t("gwProbePaidConfirmBody", { endpoint: confirming ?? "" })}
+        confirmLabel={t("gwProbeRunNow")}
+        pending={probe.isPending}
+        onConfirm={() => confirming && run(confirming)}
+      />
     </div>
   );
 }

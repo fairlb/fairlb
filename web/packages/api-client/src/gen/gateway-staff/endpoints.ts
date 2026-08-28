@@ -45,6 +45,8 @@ import type {
   GatewayRouteProbeRequest,
   GatewayTier,
   GatewayTierInput,
+  GetGatewayVendorVideoEnvelope200,
+  GetGatewayVendorVideoEnvelopeParams,
   ListGatewayModels200,
   ListGatewayModelsParams,
   ListGatewayPricingPlanModelOverrides200,
@@ -70,6 +72,7 @@ import type {
   PricingPlanCreateInput,
   PricingPlanPatchInput,
   PricingRiskReport,
+  Problem,
   ProblemResponse,
   PutOrgGatewaySettingsBody,
   ReferencePriceImportInput,
@@ -83,6 +86,26 @@ import type {
 } from "./endpoints.schemas";
 
 import { customFetch } from "../../mutator";
+
+// https://stackoverflow.com/questions/49579094/typescript-conditional-types-filter-out-readonly-properties-pick-only-requir/49579497#49579497
+type IfEquals<X, Y, A = X, B = never> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? A : B;
+
+type WritableKeys<T> = {
+  [P in keyof T]-?: IfEquals<{ [Q in P]: T[P] }, { -readonly [Q in P]: T[P] }, P>;
+}[keyof T];
+
+type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends (k: infer I) => void
+  ? I
+  : never;
+type DistributeReadOnlyOverUnions<T> = T extends any ? NonReadonly<T> : never;
+
+type Writable<T> = Pick<T, WritableKeys<T>>;
+type NonReadonly<T> = [T] extends [UnionToIntersection<T>]
+  ? {
+      [P in keyof Writable<T>]: T[P] extends object ? NonReadonly<NonNullable<T[P]>> : T[P];
+    }
+  : DistributeReadOnlyOverUnions<T>;
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
@@ -3402,7 +3425,7 @@ export const getCreateGatewayRouteUrl = (modelId: string) => {
  */
 export const createGatewayRoute = async (
   modelId: string,
-  gatewayRouteInput: GatewayRouteInput,
+  gatewayRouteInput: NonReadonly<GatewayRouteInput>,
   options?: RequestInit,
 ): Promise<GatewayRoute> => {
   return customFetch<GatewayRoute>(getCreateGatewayRouteUrl(modelId), {
@@ -3420,14 +3443,14 @@ export const getCreateGatewayRouteMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof createGatewayRoute>>,
     TError,
-    { modelId: string; data: GatewayRouteInput },
+    { modelId: string; data: NonReadonly<GatewayRouteInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof createGatewayRoute>>,
   TError,
-  { modelId: string; data: GatewayRouteInput },
+  { modelId: string; data: NonReadonly<GatewayRouteInput> },
   TContext
 > => {
   const mutationKey = ["createGatewayRoute"];
@@ -3439,7 +3462,7 @@ export const getCreateGatewayRouteMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof createGatewayRoute>>,
-    { modelId: string; data: GatewayRouteInput }
+    { modelId: string; data: NonReadonly<GatewayRouteInput> }
   > = (props) => {
     const { modelId, data } = props ?? {};
 
@@ -3452,7 +3475,7 @@ export const getCreateGatewayRouteMutationOptions = <
 export type CreateGatewayRouteMutationResult = NonNullable<
   Awaited<ReturnType<typeof createGatewayRoute>>
 >;
-export type CreateGatewayRouteMutationBody = GatewayRouteInput;
+export type CreateGatewayRouteMutationBody = NonReadonly<GatewayRouteInput>;
 export type CreateGatewayRouteMutationError = ProblemResponse;
 
 /**
@@ -3463,7 +3486,7 @@ export const useCreateGatewayRoute = <TError = ProblemResponse, TContext = unkno
     mutation?: UseMutationOptions<
       Awaited<ReturnType<typeof createGatewayRoute>>,
       TError,
-      { modelId: string; data: GatewayRouteInput },
+      { modelId: string; data: NonReadonly<GatewayRouteInput> },
       TContext
     >;
     request?: SecondParameter<typeof customFetch>;
@@ -3472,7 +3495,7 @@ export const useCreateGatewayRoute = <TError = ProblemResponse, TContext = unkno
 ): UseMutationResult<
   Awaited<ReturnType<typeof createGatewayRoute>>,
   TError,
-  { modelId: string; data: GatewayRouteInput },
+  { modelId: string; data: NonReadonly<GatewayRouteInput> },
   TContext
 > => {
   return useMutation(getCreateGatewayRouteMutationOptions(options), queryClient);
@@ -3488,7 +3511,7 @@ export const getUpdateGatewayRouteUrl = (modelId: string, routeId: string) => {
 export const updateGatewayRoute = async (
   modelId: string,
   routeId: string,
-  gatewayRouteInput: GatewayRouteInput,
+  gatewayRouteInput: NonReadonly<GatewayRouteInput>,
   options?: RequestInit,
 ): Promise<GatewayRoute> => {
   return customFetch<GatewayRoute>(getUpdateGatewayRouteUrl(modelId, routeId), {
@@ -3506,14 +3529,14 @@ export const getUpdateGatewayRouteMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof updateGatewayRoute>>,
     TError,
-    { modelId: string; routeId: string; data: GatewayRouteInput },
+    { modelId: string; routeId: string; data: NonReadonly<GatewayRouteInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof updateGatewayRoute>>,
   TError,
-  { modelId: string; routeId: string; data: GatewayRouteInput },
+  { modelId: string; routeId: string; data: NonReadonly<GatewayRouteInput> },
   TContext
 > => {
   const mutationKey = ["updateGatewayRoute"];
@@ -3525,7 +3548,7 @@ export const getUpdateGatewayRouteMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof updateGatewayRoute>>,
-    { modelId: string; routeId: string; data: GatewayRouteInput }
+    { modelId: string; routeId: string; data: NonReadonly<GatewayRouteInput> }
   > = (props) => {
     const { modelId, routeId, data } = props ?? {};
 
@@ -3538,7 +3561,7 @@ export const getUpdateGatewayRouteMutationOptions = <
 export type UpdateGatewayRouteMutationResult = NonNullable<
   Awaited<ReturnType<typeof updateGatewayRoute>>
 >;
-export type UpdateGatewayRouteMutationBody = GatewayRouteInput;
+export type UpdateGatewayRouteMutationBody = NonReadonly<GatewayRouteInput>;
 export type UpdateGatewayRouteMutationError = ProblemResponse;
 
 /**
@@ -3549,7 +3572,7 @@ export const useUpdateGatewayRoute = <TError = ProblemResponse, TContext = unkno
     mutation?: UseMutationOptions<
       Awaited<ReturnType<typeof updateGatewayRoute>>,
       TError,
-      { modelId: string; routeId: string; data: GatewayRouteInput },
+      { modelId: string; routeId: string; data: NonReadonly<GatewayRouteInput> },
       TContext
     >;
     request?: SecondParameter<typeof customFetch>;
@@ -3558,7 +3581,7 @@ export const useUpdateGatewayRoute = <TError = ProblemResponse, TContext = unkno
 ): UseMutationResult<
   Awaited<ReturnType<typeof updateGatewayRoute>>,
   TError,
-  { modelId: string; routeId: string; data: GatewayRouteInput },
+  { modelId: string; routeId: string; data: NonReadonly<GatewayRouteInput> },
   TContext
 > => {
   return useMutation(getUpdateGatewayRouteMutationOptions(options), queryClient);
@@ -4071,6 +4094,186 @@ export function useListGatewayVendors<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export const getGetGatewayVendorVideoEnvelopeUrl = (
+  vendor: string,
+  params: GetGatewayVendorVideoEnvelopeParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/staff/v1/gateway/vendors/${vendor}/video-envelope?${stringifiedParams}`
+    : `/api/staff/v1/gateway/vendors/${vendor}/video-envelope`;
+};
+
+/**
+ * A prefill source, and only that. It returns the envelope this build's vendor
+ * mapper carries for the named upstream model — the durations, resolutions,
+ * aspect ratios, audio behaviour and cancel semantics read out of that vendor's
+ * published contract when the mapper was written.
+ *
+ * It is not runtime truth and the response says so: `source` comes back
+ * `declared`, because nothing here was observed. From the moment somebody saves
+ * it, the person who saved it is the one answering for the configuration.
+ *
+ * Nothing is stored by this call. It answers for a vendor and an upstream model
+ * name, not for a route, because the mapper's answer varies by model — the same
+ * vendor's fast and pro models accept different things.
+ * @summary What this build records a vendor's video model as accepting, for prefilling a route's envelope
+ */
+export const getGatewayVendorVideoEnvelope = async (
+  vendor: string,
+  params: GetGatewayVendorVideoEnvelopeParams,
+  options?: RequestInit,
+): Promise<GetGatewayVendorVideoEnvelope200> => {
+  return customFetch<GetGatewayVendorVideoEnvelope200>(
+    getGetGatewayVendorVideoEnvelopeUrl(vendor, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetGatewayVendorVideoEnvelopeQueryKey = (
+  vendor: string,
+  params?: GetGatewayVendorVideoEnvelopeParams,
+) => {
+  return [
+    `/api/staff/v1/gateway/vendors/${vendor}/video-envelope`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetGatewayVendorVideoEnvelopeQueryOptions = <
+  TData = Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>,
+  TError = Problem | ProblemResponse,
+>(
+  vendor: string,
+  params: GetGatewayVendorVideoEnvelopeParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetGatewayVendorVideoEnvelopeQueryKey(vendor, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>> = ({
+    signal,
+  }) => getGatewayVendorVideoEnvelope(vendor, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: vendor !== null && vendor !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type GetGatewayVendorVideoEnvelopeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>
+>;
+export type GetGatewayVendorVideoEnvelopeQueryError = Problem | ProblemResponse;
+
+export function useGetGatewayVendorVideoEnvelope<
+  TData = Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>,
+  TError = Problem | ProblemResponse,
+>(
+  vendor: string,
+  params: GetGatewayVendorVideoEnvelopeParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>,
+          TError,
+          Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetGatewayVendorVideoEnvelope<
+  TData = Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>,
+  TError = Problem | ProblemResponse,
+>(
+  vendor: string,
+  params: GetGatewayVendorVideoEnvelopeParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>,
+          TError,
+          Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetGatewayVendorVideoEnvelope<
+  TData = Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>,
+  TError = Problem | ProblemResponse,
+>(
+  vendor: string,
+  params: GetGatewayVendorVideoEnvelopeParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary What this build records a vendor's video model as accepting, for prefilling a route's envelope
+ */
+
+export function useGetGatewayVendorVideoEnvelope<
+  TData = Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>,
+  TError = Problem | ProblemResponse,
+>(
+  vendor: string,
+  params: GetGatewayVendorVideoEnvelopeParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getGatewayVendorVideoEnvelope>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetGatewayVendorVideoEnvelopeQueryOptions(vendor, params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export const getGetGatewayKillSwitchUrl = () => {
   return `/api/staff/v1/gateway/kill-switch`;
 };
@@ -4395,6 +4598,152 @@ export function useGetGatewayHealth<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export const getGetProviderDiscoveredModelsUrl = (providerId: string) => {
+  return `/api/staff/v1/gateway/providers/${providerId}/discover-models`;
+};
+
+/**
+ * Returns what the upstream said the last time somebody asked, with the time it said it.
+ * No upstream call, no cost.
+ *
+ * `checked_at` is zero and `ok` is false when this provider has never been asked, which is a
+ * different fact from "asked, and it reported nothing" — the second comes back with `ok` true.
+ *
+ * The four states and the suggestions are recomputed on read rather than stored: which models
+ * exist locally, and whether they are priced and routed, changes without the upstream saying
+ * anything, so a stored verdict would go wrong on its own.
+ * @summary The last catalogue this provider reported, reclassified against the catalog as it stands now
+ */
+export const getProviderDiscoveredModels = async (
+  providerId: string,
+  options?: RequestInit,
+): Promise<DiscoverModelsResult> => {
+  return customFetch<DiscoverModelsResult>(getGetProviderDiscoveredModelsUrl(providerId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetProviderDiscoveredModelsQueryKey = (providerId: string) => {
+  return [`/api/staff/v1/gateway/providers/${providerId}/discover-models`] as const;
+};
+
+export const getGetProviderDiscoveredModelsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getProviderDiscoveredModels>>,
+  TError = ProblemResponse,
+>(
+  providerId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProviderDiscoveredModels>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetProviderDiscoveredModelsQueryKey(providerId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getProviderDiscoveredModels>>> = ({
+    signal,
+  }) => getProviderDiscoveredModels(providerId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: providerId !== null && providerId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getProviderDiscoveredModels>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type GetProviderDiscoveredModelsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getProviderDiscoveredModels>>
+>;
+export type GetProviderDiscoveredModelsQueryError = ProblemResponse;
+
+export function useGetProviderDiscoveredModels<
+  TData = Awaited<ReturnType<typeof getProviderDiscoveredModels>>,
+  TError = ProblemResponse,
+>(
+  providerId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProviderDiscoveredModels>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProviderDiscoveredModels>>,
+          TError,
+          Awaited<ReturnType<typeof getProviderDiscoveredModels>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetProviderDiscoveredModels<
+  TData = Awaited<ReturnType<typeof getProviderDiscoveredModels>>,
+  TError = ProblemResponse,
+>(
+  providerId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProviderDiscoveredModels>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProviderDiscoveredModels>>,
+          TError,
+          Awaited<ReturnType<typeof getProviderDiscoveredModels>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetProviderDiscoveredModels<
+  TData = Awaited<ReturnType<typeof getProviderDiscoveredModels>>,
+  TError = ProblemResponse,
+>(
+  providerId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProviderDiscoveredModels>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary The last catalogue this provider reported, reclassified against the catalog as it stands now
+ */
+
+export function useGetProviderDiscoveredModels<
+  TData = Awaited<ReturnType<typeof getProviderDiscoveredModels>>,
+  TError = ProblemResponse,
+>(
+  providerId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProviderDiscoveredModels>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetProviderDiscoveredModelsQueryOptions(providerId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export const getDiscoverProviderModelsUrl = (providerId: string) => {
   return `/api/staff/v1/gateway/providers/${providerId}/discover-models`;
 };
@@ -4410,10 +4759,15 @@ export const getDiscoverProviderModelsUrl = (providerId: string) => {
  * | `unpriced` | The model exists locally but has no price | Set a price first |
  * | `unknown` | The model does not exist locally | Create the model and price it first |
  *
- * Read-only, storing nothing: it exists to help check upstream model identity and capabilities,
- * and it neither reads nor writes prices. In particular it never creates model rows on its own —
- * an unpriced model cannot be routed, so creating them automatically would produce a batch of
- * models guaranteed to fail.
+ * It exists to help check upstream model identity and capabilities, and it neither reads nor
+ * writes prices. In particular it never creates model rows on its own — an unpriced model
+ * cannot be routed, so creating them automatically would produce a batch of models
+ * guaranteed to fail.
+ *
+ * The answer is stored, so that the GET on this path can return it without calling upstream
+ * again. Nothing on the data plane reads it: it is a record of what an upstream said and when,
+ * and it is discarded when the provider's base URL or vendor changes, because the record then
+ * describes a different service.
  *
  * Matching is a heuristic suggestion, not an authoritative judgement: the criterion is a slug
  * that is equal to, or ends with a path segment equal to, the upstream name.
@@ -4422,7 +4776,7 @@ export const getDiscoverProviderModelsUrl = (providerId: string) => {
  *
  * It really does call upstream and costs a little money, so it runs only when someone explicitly
  * asks for it.
- * @summary Fetch the upstream model list and compare it with the local catalog — read-only, nothing is stored
+ * @summary Fetch the upstream model list and compare it with the local catalog — costs an upstream call
  */
 export const discoverProviderModels = async (
   providerId: string,
@@ -4477,7 +4831,7 @@ export type DiscoverProviderModelsMutationResult = NonNullable<
 export type DiscoverProviderModelsMutationError = ProblemResponse;
 
 /**
- * @summary Fetch the upstream model list and compare it with the local catalog — read-only, nothing is stored
+ * @summary Fetch the upstream model list and compare it with the local catalog — costs an upstream call
  */
 export const useDiscoverProviderModels = <TError = ProblemResponse, TContext = unknown>(
   options?: {

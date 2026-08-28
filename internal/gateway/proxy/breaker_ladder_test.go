@@ -163,15 +163,13 @@ func TestBreakerConcurrentRecording(t *testing.T) {
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	for i := range 32 {
-		wg.Add(1)
-		go func(n int) {
-			defer wg.Done()
-			id := providerID(byte(n))
+		wg.Go(func() {
+			id := providerID(byte(i))
 			for range 20 {
 				b.RecordKeyFailure(ctx, id, 0, false)
 				b.RecordProviderFailure(ctx, id, "concurrent injection")
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 }

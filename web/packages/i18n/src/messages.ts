@@ -39,6 +39,7 @@ export const en = {
   ledgerKindGrant: "Credit grant",
   ledgerKindGrantConsume: "Grant usage",
   save: "Save",
+  apiKey: "API key",
   apiKeys: "API keys",
   // Teams. The word is "team" and not "organization" because that is what it is
   // here -- a group of keys sharing an allowance -- while "organization" is the
@@ -121,6 +122,13 @@ export const en = {
   recordNavigation: "Record navigation",
   localNavigation: "Section navigation",
   pageContents: "On this page",
+  // ⌘K command palette. The three keys the shared palette itself renders live
+  // here because the component does; `palettePlaceholder` stays in each
+  // application's dictionary, because it names the kinds of thing that
+  // application holds (ADR-0154).
+  paletteOpen: "Search",
+  paletteGroupPages: "Pages",
+  paletteEmpty: "No matches",
   notFoundTitle: "Page not found",
   notFoundBody: "The page you're looking for doesn't exist or has moved.",
   backHome: "Back to home",
@@ -149,7 +157,6 @@ export const en = {
   switchThemeTo: "Switch theme to {theme}",
   remove: "Remove",
   modelsDesc: "Browse the models and API surfaces available to this organization.",
-  playgroundDesc: "Send a real metered request before integrating it into your application.",
   usageTimezoneNote: "Times shown in {tz}.",
   logsDesc: "Inspect request outcomes and open a shareable detail view for an individual request.",
   usageDesc: "Compare traffic, tokens, spend, latency, and errors over time.",
@@ -197,7 +204,7 @@ export const en = {
   staffGatewayModelsDesc:
     "The catalog organizations see. A model needs an enabled route and a price before it will serve.",
   staffGatewayProvidersDesc:
-    "Upstream accounts requests are forwarded to. A channel with no key is never routed to.",
+    "Upstream accounts requests are forwarded to. A provider with no key is never routed to.",
   confirm: "Confirm",
   byokDeleteConfirmTitle: "Delete this provider key?",
   byokDeleteConfirmBody: "{name} is removed and requests routed through it fall back or fail.",
@@ -245,6 +252,15 @@ export const en = {
   gwProtocolOpenai: "OpenAI-compatible",
   gwProtocolAnthropic: "Anthropic-compatible",
   gwProtocolGemini: "Gemini",
+  gwProtocolVideo: "Video jobs",
+  gwModalityText: "Text",
+  gwModalityImage: "Image",
+  gwModalityVideo: "Video",
+  gwModality: "Produces",
+  gwModalityHint:
+    "What this model produces. Declared, not observed: no probe can tell whether the bytes coming back are words or pixels, and it cannot be read off the endpoints either — Gemini serves its image models on the same endpoint as its text models.",
+  gwModalityRequired: "A model produces something; pick at least one.",
+  gwFilterAllModalities: "Any output",
   gwProtocolUnknown: "Unknown protocol",
   modelsGroupOther: "Other",
   gwVendorPick: "Vendor",
@@ -335,6 +351,8 @@ export const en = {
     "Global circuit breaker. When on, the data plane rejects every request — the top level of the three-tier kill switch.",
   settingDescResourceAffinityTtlDays:
     "Days to retain the exact route and credential binding for stored Responses and Gemini Interactions (1–90 days).",
+  settingDescVideoRetentionHours:
+    "Hours a generated video stays available through the gateway before it is deleted (1–720 hours). Shortening this deletes stored videos.",
   settingDescAnomalyMultiplier:
     "Alert when an organization's hourly spend exceeds this multiple of its 7-day median. Alerts only; nothing is suspended.",
   settingDescAnomalyFloor:
@@ -366,6 +384,7 @@ export const en = {
   byokAllowFallbackHint:
     "Off by default. Falling back keeps requests working, but those requests are billed at the full platform rate instead of the BYOK service fee.",
   gwDiscoverRun: "Fetch upstream list",
+  gwDiscoverRunAgain: "Fetch again",
   gwDiscoverRunning: "Fetching…",
   gwDiscoverUpstream: "Upstream model",
   gwDiscoverState_routed: "Already wired",
@@ -427,7 +446,7 @@ export const en = {
   tierSetDefaultConfirmBody:
     "New organizations, and any organization without an explicit tier, will fall back to {slug}. The current default steps down in the same transaction.",
 
-  // ===== Console (usage / logs / models + playground / key control / auto top-up) =====
+  // ===== Console (usage / logs / models / key control / auto top-up) =====
   commonExportCsv: "Export CSV",
   commonClose: "Close",
   commonSaved: "Saved",
@@ -446,6 +465,54 @@ export const en = {
   usageSpend: "Spend",
   usageRequests: "Requests",
   usageTokens: "Tokens",
+  modelsPerSecond: "per second",
+  modelsPerCall: "per generation",
+  modelsPerImage: "per image",
+  modelsAudioOn: "with sound",
+  modelsAudioOff: "silent",
+  videosTitle: "Videos",
+  videosDesc:
+    "Every video job this organization has submitted. A job runs for a minute or two after it is accepted, and the film is fetched afterwards.",
+  videosStatus: "Status",
+  videosStatusAll: "Any status",
+  videosStatusQueued: "Queued",
+  videosStatusInProgress: "Generating",
+  videosStatusCompleted: "Done",
+  videosStatusFailed: "Failed",
+  videosStatusCanceled: "Cancelled",
+  videosStatusExpired: "Timed out",
+  videosColPrompt: "Prompt",
+  videosColBilled: "Billed",
+  videosBilledSeconds: "{count}s",
+  videosBilledCalls: "{count} generated",
+  videosDelete: "Delete",
+  videosDeleted: "The job and its film were deleted",
+  videosDeleteFailed: "The job could not be deleted",
+  videosDeleteConfirmTitle: "Delete this job?",
+  videosDeleteConfirmBody:
+    "The film and this job record are removed for good, and the film cannot be downloaded again. What was charged for it stays on your usage log — deleting a job here does not change a bill. A running job cannot be deleted; stop it first.",
+  videosDownload: "Download",
+  videosArtifactGone: "No longer kept",
+  videosCancel: "Stop",
+  videosCancelled: "The job was stopped and nothing was charged",
+  videosCancelFailed: "The job could not be stopped",
+  videosCancelConfirmTitle: "Stop this job?",
+  videosCancelConfirmBody:
+    "Nothing is charged for a job that was stopped, and no film is produced. The upstream decides whether it can still be stopped; if generation has already finished it will refuse.",
+  videosNotCancelable: "Cannot be stopped",
+  videosNotCancelableHint:
+    "This model has no way to stop a job once it has been submitted. Offering a button that did nothing would be worse than saying so.",
+  videosEmpty: "No jobs match these filters",
+  videosEmptyHint: "Try a wider status, or clear the model filter.",
+  videosNothingYet: "No videos yet",
+  videosNothingYetHint: "Submit one with POST /v1/videos and it appears here while it runs.",
+  usageBilledSeconds: "Video seconds",
+  usageBilledSecondsHint: "billed by the second, not by token",
+  usageBilledCalls: "Generations",
+  usageBilledCallsHint: "billed per generation, not by token",
+  usageBilledImages: "Images",
+  usageBilledImagesHint:
+    "Images produced by models billed per image. Counted on its own rather than added to the generations beside it: a request for four images is four here and one there.",
   usageTokensHint: "in {in} · out {out}",
   usageErrors: "Errors",
   usageErrorRate: "Error rate {rate}%",
@@ -459,7 +526,7 @@ export const en = {
   usageColSpend: "Spend ({currency})",
   usageColErrors: "Errors",
   usageEmpty: "No usage in this range",
-  usageEmptyHint: "Try a longer range, or send a request from the Playground.",
+  usageEmptyHint: "Try a longer range, or send a request with one of this organization's API keys.",
   logsTitle: "Requests",
   logsStatus: "Status",
   logsStatusAll: "All statuses",
@@ -516,7 +583,6 @@ export const en = {
   modelsColOut: "Output",
   modelsColCacheRead: "Cache read",
   modelsColCacheWrite: "Cache write",
-  modelsTry: "Try it",
   modelsFree: "Free",
   modelsUnpriced: "No price set",
   modelsEmpty: "No models available",
@@ -525,41 +591,13 @@ export const en = {
   modelsPriceNote: "Prices are per million tokens. See usage and spend on the",
   modelsUsagePage: "usage page",
   modelsColSurface: "API",
-  modelsColActions: "Actions",
   modelsSearch: "Search",
   modelsSearchHint: "Model, name or protocol",
   modelsNoMatch: "No matching models",
   modelsNoMatchHint: "Nothing in this catalog matches that search. Try a shorter term.",
-  playTitle: "Playground",
-  playModelLabel: "Model",
-  playNoModels: "No models available to try",
-  playNoModelsHint: "The catalog has no enabled chat or messages routes yet.",
-  playApiKey: "API key",
-  playKeyNote:
-    "Playground requests take exactly the same path as external calls: same key, same budgets and rate limits, same billing. That is why it asks for your own key instead of using your login session. The key stays in this browser tab.",
-  playNeedKey:
-    "Enter one of this organization's API keys first — the playground bills for real and cannot run on your login session.",
-  playCreateKey: "Create an API key",
-  playMessage: "Message",
-  playSystem: "System prompt",
-  playSystemHint: "Optional. Sets the assistant's behaviour for this conversation.",
-  playMaxTokens: "Max output tokens",
-  playSend: "Send",
-  playGenerating: "Generating…",
-  playStop: "Stop",
-  playClear: "Clear conversation",
-  playYou: "You",
-  playUpstreamStatus: "Upstream returned {status}",
-  playRequestId: "request_id for this call: {id}",
-  playCharged: "Charged {amount} {currency} · in {in} / out {out} tokens · {ms} ms · {id}",
-  playSurfaceLabel: "API surface",
-  playCodeTitle: "Run this from your own code",
-  playCodeHint: "Same request, same surface. Replace the key placeholder with your own.",
   copy: "Copy",
   copied: "Copied",
   copyFailed: "Copy failed",
-  playCopy: "Copy",
-  playCopied: "Copied",
   keyctlSpend30d: "Spend, last 30 days",
   keyctlSpendTotal: "total {amount} {currency} · {count} requests",
   keyctlNoSpend: "This key had no usage in the last 30 days",
@@ -567,6 +605,15 @@ export const en = {
     "Usage is rolled up hourly, so requests from the last hour may not appear yet; see the logs page for per-request records.",
 
   // ===== Admin, gateway section (model catalog / providers / health) =====
+  gwStuckMoneyTitle: "Settlement repair queue",
+  gwStuckMoneyUnknown:
+    "The count could not be read. This is not the same as nothing being stuck — retry, and treat a persistent failure as an incident.",
+  gwStuckMoneyClear: "No job is holding a reservation after reaching a terminal state.",
+  gwStuckMoneyFound:
+    "{jobs} job(s) reached a terminal state while their reservation never moved. Each one is a customer either overcharged or not charged at all.",
+  gwStuckMoneyOldest: "The oldest has been waiting since {time}.",
+  gwStuckMoneyHint:
+    "A settled job releases its hold in the same transaction that records the usage. A row here means that transaction never landed.",
   gwRetryBudget: "Retry budget",
   gwRetryRatio: "{retries} / {requests} requests retried ({pct}%, cap {cap}%)",
   gwLoading: "Loading…",
@@ -617,7 +664,7 @@ export const en = {
     "What this provider currently carries. Fetching the upstream catalog sends one real request and costs a little, so it only runs when you click it — until then the upstream column stays unchecked.",
   gwColModel: "Model",
   gwNoProviderRoutes: "No models routed here",
-  gwNoProviderRoutesHint: "Configure what this channel serves to start routing requests to it.",
+  gwNoProviderRoutesHint: "Configure what this provider serves to start routing requests to it.",
   gwAddModelRoute: "Add models",
   gwAddModelRouteUpstreamHint: "The model id this upstream expects, verbatim.",
   // The count goes in parentheses because this dictionary has no plural rules:
@@ -668,17 +715,30 @@ export const en = {
   gwWiringRowFailed: "Failed, no reason given",
   // ── Creating a catalog entry in place from an unknown row ──
   // ── Whole-set editing from the model side (which providers serve it) ──
-  gwModelProvidersTitle: "Channels serving {slug}",
+  gwModelProvidersTitle: "Providers serving {slug}",
   gwModelProvidersHint:
-    "Pick which channels serve this model. Everything already configured is listed and checked; unchecking one deletes that route. The upstream name is a guess prefilled from the slug — get it wrong and requests 404. To check what a channel actually calls it, fetch that channel's upstream list.",
-  gwModelProvidersConfirmTitle: "Save serving channels?",
+    "Pick which providers serve this model. Everything already configured is listed and checked; unchecking one deletes that route. The upstream name is a guess prefilled from the slug — get it wrong and requests 404. To see what a provider actually calls it, open that provider's page: its fetched list is stored there.",
+  gwModelProvidersConfirmTitle: "Save serving providers?",
   gwModelProvidersConfirmBody: "This will add {add} and remove {del} route(s) for {slug}.",
-  gwModelProvidersEmpty: "No matching channels",
-  gwModelProvidersEmptyHint: "No channel matches. Create one on the Channels page first.",
-  gwEditModelProviders: "Edit serving channels",
+  gwModelProvidersEmpty: "No matching providers",
+  gwModelProvidersEmptyHint: "No provider matches. Create one on the Providers page first.",
+  gwEditModelProviders: "Edit serving providers",
   gwWiringWillCreate: "Will create (disabled)",
   gwWiringDraftSlug: "New model slug",
   gwWiringDraftSlugRequired: "Slug is required, and cannot be changed once created",
+  gwWiringDraftSlugShape: "A slug is <creator>/<name>, for example openai/gpt-5.6-sol",
+  gwWiringDraftNumber: "Token counts are whole numbers",
+  gwWiringDraftSlugPlaceholder: "creator/model-name",
+  gwWiringDraftDisplayName: "Display name",
+  gwWiringDraftFromSeed:
+    "Prefilled from the built-in catalog, checked against the vendor\u2019s documentation.",
+  gwWiringDraftFromUpstream: "The upstream reports this name already in <creator>/<name> form.",
+  gwWiringDraftFromVendor:
+    "Assembled from this vendor\u2019s creator prefix \u2014 correctly shaped, not verified.",
+  gwWiringDraftNoSuggestion:
+    "This upstream\u2019s names carry no creator, so nothing was filled in. The slug cannot be changed later.",
+  gwWiringDraftManualProbe:
+    "Reachable only on the image endpoints, which are not probed automatically: mark it supported on the model\u2019s routes page before it is published.",
   gwWiringConfirmNewModels:
     "Not in the catalog yet, so they will be created — disabled and unpriced. Count: {n} ({slugs}).",
   // ── One-line summary of a fetch result ──
@@ -746,15 +806,6 @@ export const en = {
   gwEditProtocolsHint:
     "Dropping a protocol still used by a route is rejected; the error names the route.",
   gwConfigSaved: "Connection settings saved",
-  gwSectionPricing: "Pricing",
-  gwCreatePricingHint: "Enter all four official upstream prices now, or leave all four blank.",
-  gwCreatePricingPartial:
-    "Official prices must be all four or none. Fill in the rest, or clear them and price the model later.",
-  gwRateInvalid: "Enter an amount like 1.25 (no currency symbol, no exponent).",
-  gwSourceNameCreateHint:
-    "Where the official prices came from. Required once any price is entered.",
-  gwInitialPricingReason: "Initial pricing set when the model was created",
-  gwModelCreatedPricingFailed: "Model created, but saving its pricing failed",
   gwSectionIdentity: "Identity",
   gwSectionAttributes: "Catalog attributes",
   gwSectionFirstRoute: "First route",
@@ -818,7 +869,71 @@ export const en = {
   gwProbeUnsupported:
     "The upstream answered 404 or 405: nothing here for this model. The route is skipped for this endpoint.",
   gwProbeMenuFor: "Actions for the {endpoint} endpoint",
+  gwPricingFamily: "Billed by",
+  gwPricingFamilyHint:
+    "The two are alternatives, not layers: a model billed by unit has no token price and never falls back to one.",
+  gwPricingFamilyTokens: "Tokens",
+  gwPricingFamilyUnits: "Seconds or generations",
+  gwUnitRates: "Rate card",
+  gwUnitRatesHint:
+    "One row per case the price varies on. Leave an axis blank where the price does not vary on it — a single flat price is one row with both blank.",
+  gwUnitRatesRequired:
+    "A paid model billed by unit needs at least one rate. Without one it cannot be charged, and every request against it is refused.",
+  gwUnitRateUnit: "Unit",
+  gwUnitRateResolution: "Resolution",
+  gwUnitRateAudio: "Sound",
+  gwUnitRateVariant: "Variant",
+  gwUnitRateAdd: "Add a rate",
+  gwUnitRateDuplicate: "Another row already covers this case; one of the two would silently win",
+  gwUnitSecond: "Per second",
+  gwUnitCall: "Per generation",
+  gwUnitImage: "Per image",
+  gwUnitAxisAny: "Any",
+  gwUnitAudioOn: "With sound",
+  gwUnitAudioOff: "Silent",
+  gwEnvelopeTitle: "Video capability envelope",
+  gwEnvelopeHint:
+    "What this route accepts. It is checked before any money is held, so a request outside it is refused having cost nothing. It is declared rather than measured: finding out whether a model takes a twelve-second clip costs a twelve-second clip.",
+  gwEnvelopeDeclared: "Declared",
+  gwEnvelopeObserved: "Observed",
+  gwEnvelopePrefill: "Fill in from the vendor",
+  gwEnvelopePrefillFailed: "This build records no video envelope for that vendor and model",
+  gwEnvelopeDurations: "Clip lengths (seconds)",
+  gwEnvelopeDurationsHint:
+    "Type a value and press Enter. A request for any other length is refused, not rounded.",
+  gwEnvelopeResolutions: "Resolutions",
+  gwEnvelopeResolutionsHint:
+    "e.g. 720p, 1080p. Empty means this route declares none and serves nothing.",
+  gwEnvelopeAspectRatios: "Aspect ratios",
+  gwEnvelopeAspectRatiosHint: "e.g. 16:9, 9:16",
+  gwEnvelopeAudio: "Sound",
+  gwEnvelopeAudioNever: "Never — silent",
+  gwEnvelopeAudioOptional: "Optional — there is a switch",
+  gwEnvelopeAudioAlways: "Always — native, no parameter",
+  gwEnvelopeCancel: "Cancel",
+  gwEnvelopeCancelHint:
+    "Unset reads as never: saying nothing is not a promise that a job can be stopped.",
+  gwEnvelopeCancelNever: "Never",
+  gwEnvelopeCancelQueuedOnly: "While queued only",
+  gwEnvelopeCancelAnytime: "Any time",
+  gwEnvelopeMaxN: "Clips per request",
+  gwEnvelopeMaxRefImages: "Reference images",
+  gwEnvelopeMaxRefImagesHint: "Empty where steering images are not accepted",
+  gwEnvelopeMaxPromptChars: "Prompt limit (characters)",
+  gwEnvelopeMaxPromptCharsHint:
+    "In characters. Leave empty where the vendor states its limit in tokens — a token count entered here would refuse valid prompts.",
+  gwEnvelopeMaxJobSeconds: "Job time limit (seconds)",
+  gwEnvelopeMaxJobSecondsHint:
+    "How long a job may run before it is called expired. It also sizes the hold.",
+  gwEnvelopeImageToVideo: "Accepts a first frame",
+  gwEnvelopeLastFrame: "Accepts a last frame",
+  gwEnvelopeNegativePrompt: "Accepts a negative prompt",
+  gwEnvelopeRemoveValue: "Remove {value}",
   gwProbeRunNow: "Probe now",
+  gwProbeInFlight: "A probe is running",
+  gwProbePaidConfirmTitle: "Probe an endpoint that costs money?",
+  gwProbePaidConfirmBody:
+    "The {endpoint} endpoint is never probed automatically because one probe is a real generation, charged to your own upstream account. The verdict lands on this badge when it comes back.",
   gwProbeMarkSupported: "Mark as supported",
   gwProbeMarkUnsupported: "Mark as unsupported",
   gwProbeClearOverride: "Clear the override and re-probe",
@@ -844,6 +959,9 @@ export const en = {
   gwRouteLimitsTitle: "Limits and upstream quirks",
   gwRouteCtxWindow: "Context window override",
   gwRouteMaxOut: "Max output tokens override",
+  gwRouteMaxImages: "Max images per request",
+  gwRouteMaxImagesHint:
+    "For a model billed per image. The reservation covers this many; the charge follows how many the response actually returned. Empty means one.",
   gwRouteLimitFallback: "Blank = use the model value",
   gwRouteIgnoresCap: "Upstream ignores max_output_tokens",
   gwRouteIgnoresCapHint:
@@ -865,12 +983,12 @@ export const en = {
   gwHdrDupKey: "Duplicate header name (HTTP names are case-insensitive)",
   gwTransportTitle: "Transport profile",
   gwTransportHint:
-    "How to reach this upstream when the base URL and the protocol's defaults are not enough. Leave it empty unless a recipe says otherwise. Keys: auth (bearer, x-api-key, x-goog-api-key, header:<name>, aws_sigv4, gcp_service_account), anthropic_version, query, path_overrides, stream_path_overrides, envelope (bedrock, vertex), sigv4 (region, service), connect_timeout_ms. No credential goes in here — the secret stays with the provider's keys.",
+    "How to reach this upstream when the base URL and the protocol's defaults are not enough. Leave it empty unless a recipe says otherwise. Keys: auth (bearer, x-api-key, x-goog-api-key, header:<name>, aws_sigv4, gcp_service_account, kling_jwt), anthropic_version, query, path_overrides, stream_path_overrides, envelope (bedrock, vertex), sigv4 (region, service), connect_timeout_ms. No credential goes in here — the secret stays with the provider's keys.",
   gwTransportLabel: "Profile (JSON object)",
   gwTransportNotJson: "Not a JSON object — the profile has to parse before it can be saved",
   navGatewayPricingPlans: "Pricing plans",
   gwDetailOverview: "Overview",
-  gwDetailRoutes: "Routes",
+  gwDetailProviders: "Providers",
   gwModelSearch: "Search models",
   gwModelSearchHint: "Slug or display name",
   gwFilterAllProtocols: "All protocols",
@@ -971,6 +1089,7 @@ export const en = {
   gwAdjustmentPercent: "Percent",
   gwAdjustmentInvalid: "Enter a valid adjustment within the allowed multiplier range.",
   gwAudioInput: "Audio input",
+  gwImageInput: "Image input",
   gwAudioOutput: "Audio output",
   gwServiceTier: "Service tier",
   gwTierStandard: "Standard",
@@ -1087,6 +1206,8 @@ export const en = {
   byokKeyHintAwsKeypair:
     'The AWS credential as JSON: {"access_key_id": "…", "secret_access_key": "…"}',
   byokKeyHintGcpServiceAccount: "The service-account key file, verbatim, as downloaded",
+  byokKeyHintKlingKeypair:
+    'The access key and secret key as JSON: {"access_key": "...", "secret_key": "..."} — this platform signs a token per request, so a token pasted here would expire within the hour',
   byokColName: "Name",
   byokColVerified: "Last verified",
   byokStatusActive: "Active",

@@ -24,23 +24,16 @@ func NewHealth(checks map[string]func(context.Context) error) *Health {
 	return &Health{checks: checks}
 }
 
-// AddCheck registers a readiness dependency during synchronous application
-// assembly, before the HTTP servers start accepting requests.
-func (h *Health) AddCheck(name string, check func(context.Context) error) {
-	if h.checks == nil {
-		h.checks = make(map[string]func(context.Context) error)
-	}
-	h.checks[name] = check
-}
-
 // SetDraining starts shutdown draining: /up begins answering 503.
 func (h *Health) SetDraining() { h.draining.Store(true) }
 
-// Up reports startup readiness and, after the first successful dependency
-// check, latched liveness. Holding 503 until every startup dependency succeeds
-// keeps a bad process from accepting traffic, while latching readiness means a
-// later dependency incident is reported by /healthz without turning liveness
-// into a cascading traffic-removal signal.
+// Up answers 200 unless the process is draining.
+//
+// It reads no dependency: this is the liveness half, and a liveness probe that
+// fails on a dependency incident removes traffic from a process that is fine.
+// The paragraph that used to be here -- "reports startup readiness and, after
+// the first successful dependency check, latched liveness" -- described
+// StartupThenLiveness, one function down, and had never described this body.
 func (h *Health) Up(w http.ResponseWriter, r *http.Request) {
 	if h.draining.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)

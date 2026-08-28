@@ -35,7 +35,7 @@ export function vendorBySlug(
 }
 
 /** What a provider form starts as for a vendor. */
-export type VendorPrefill = {
+type VendorPrefill = {
   slug: string;
   baseUrl: string;
   protocols: string[];

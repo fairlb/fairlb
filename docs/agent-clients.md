@@ -38,7 +38,7 @@ uses `Authorization: Bearer`, which FairLB accepts; `ANTHROPIC_API_KEY` using
 ```sh
 export ANTHROPIC_BASE_URL="https://gateway.example.com"
 export ANTHROPIC_AUTH_TOKEN="fairlb-key"
-claude --model "anthropic/claude-sonnet-4"
+claude --model "anthropic/claude-sonnet-5"
 ```
 
 The selected route should advertise `messages` and
@@ -105,5 +105,14 @@ For a route intentionally using `/v1/chat/completions`, change `npm` to
   original route is `503 gateway.state_route_unavailable`.
 - Unknown fields, structured output, multimodal content, function/tool calls
   and remote MCP tool declarations are passed through in the native protocol.
-- Realtime/audio, Files, Vector Stores, Containers, asynchronous Batch, video,
+- Realtime/audio, Files, Vector Stores, Containers, asynchronous Batch,
   top-level MCP/A2A and cross-protocol translation are not data-plane APIs.
+- Video is not a data-plane API either, and for the same reason -- but it now
+  has its own contract on its own plane. `POST /v1/videos` submits a job,
+  `GET /v1/videos/{id}` polls it, `/content` returns the MP4, `/cancel` stops it
+  where the model supports stopping, and `GET /v1/videos/models` reports what
+  each model accepts. That API is this gateway's own, not any vendor's, because
+  no video vendor publishes a protocol the others speak. Charges are per second
+  of output, computed before the job starts, and a job that produces nothing --
+  including one refused by a content policy -- is not charged. See
+  [video.md](video.md).

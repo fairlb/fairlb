@@ -1264,7 +1264,8 @@ func TestPipelineClientErrorDoesNotFailover(t *testing.T) {
 }
 
 // A multipart image edit bills correctly, and the multipart body reaches the
-// upstream intact, with the boundary and the binary content unchanged.
+// upstream with the boundary and the upload unchanged and the model field
+// rewritten to the name that upstream knows.
 func TestPipelineImageEditBillsCorrectly(t *testing.T) {
 	// The fixture reads the body before the handler runs, so what arrived is
 	// inspected through the fixture's recorded body and headers.
@@ -1275,7 +1276,7 @@ func TestPipelineImageEditBillsCorrectly(t *testing.T) {
 	ctx := context.Background()
 	plaintext, _, org := f.seedKey(t, apikeys.CreateInput{})
 	f.topup(t, org, 1_000_000_000)
-	f.seedCatalog(t, "openai", "openai/gpt-image-2", "gpt-image-2", []string{"images"})
+	f.seedCatalog(t, "openai", "openai/gpt-image-2", "gpt-image-2", []string{"images_edits"})
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -1287,7 +1288,7 @@ func TestPipelineImageEditBillsCorrectly(t *testing.T) {
 	original := buf.Bytes()
 
 	res, gerr := f.pipeline.RunImageEdit(ctx, proxy.Request{
-		Surface: catalog.SurfaceImages, Protocol: proxy.ProtocolOpenAI,
+		Surface: catalog.SurfaceImagesEdit, Protocol: proxy.ProtocolOpenAI,
 		UpstreamPath: "/v1/images/edits",
 		Credential:   plaintext,
 	}, mw.FormDataContentType(), bytes.NewReader(original))
@@ -1298,13 +1299,25 @@ func TestPipelineImageEditBillsCorrectly(t *testing.T) {
 		t.Fatalf("status code: %d", res.Status)
 	}
 
-	// The multipart body must arrive unchanged: same boundary, identical
-	// bytes.
+	// The body arrives with the same boundary and the same upload, and with
+	// exactly one thing changed: the model field now names what this upstream
+	// calls the model, which is the substitution every other endpoint gets from
+	// RewriteRequest.
 	if ct := f.lastHeaders.Get("Content-Type"); !strings.HasPrefix(ct, "multipart/form-data") {
 		t.Errorf("the upstream should receive multipart: %q", ct)
 	}
-	if !bytes.Equal(f.lastBody, original) {
-		t.Errorf("the body the upstream received must be byte-identical to the original: %d vs %d bytes", len(f.lastBody), len(original))
+	if bytes.Contains(f.lastBody, []byte("openai/gpt-image-2")) {
+		t.Error("the public slug reached the upstream; the model field was not rewritten")
+	}
+	// Asserting the length rather than only the two strings: a rewrite that
+	// damaged the stream would still satisfy both of those.
+	wantLen := len(original) - len("openai/")
+	if len(f.lastBody) != wantLen {
+		t.Errorf("the upstream body is %d bytes, want %d: something other than the model moved",
+			len(f.lastBody), wantLen)
+	}
+	if !bytes.Contains(f.lastBody, bytes.Repeat([]byte{0xFF}, 8<<10)) {
+		t.Error("the upload did not arrive intact")
 	}
 
 	// Billing: 100 in at $3/Mtok plus 1000 out at $15/Mtok is 0.3e6 + 15e6 =
@@ -1325,7 +1338,7 @@ func TestPipelineImageEditBillsCorrectly(t *testing.T) {
 		Scan(&surface, &tokensOut); err != nil {
 		t.Fatal(err)
 	}
-	if surface != "images" || tokensOut != 1000 {
+	if surface != "images_edits" || tokensOut != 1000 {
 		t.Errorf("image usage row: surface=%s out=%d", surface, tokensOut)
 	}
 }
@@ -1940,5 +1953,40 @@ func TestBYOKFallbackDropsOnlyTheRejectedVendor(t *testing.T) {
 	}
 	if deepseekStatus != "active" {
 		t.Errorf("another platform's credential must not be touched by this rejection, got %q", deepseekStatus)
+	}
+}
+
+// dueNow brings every in-flight video job forward so the next scan claims it.
+//
+// The poll ladder is real time, and a test should not sleep through it. This
+// moves the clock rather than shortening the ladder, so the production backoff
+// stays under test everywhere else.
+func (f *pipeFixture) dueNow(t *testing.T) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(),
+		`UPDATE gateway_async_jobs SET next_poll_at = now() - interval '1 second'
+		  WHERE status IN ('queued','in_progress')`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runVideoScan runs the reconciler once, synchronously.
+//
+// The production scan is a River periodic job; a test needs the same work
+// without the queue, and running the worker directly is what keeps the test
+// exercising the real code path rather than a re-implementation of it.
+func (f *pipeFixture) runVideoScan(t *testing.T) {
+	t.Helper()
+	f.dueNow(t)
+	if err := proxy.NewVideoScanWorker(f.pipeline).Work(context.Background(), nil); err != nil {
+		t.Fatalf("the video reconciler failed: %v", err)
+	}
+}
+
+// runVideoSweep runs the orphan and retention sweep once.
+func (f *pipeFixture) runVideoSweep(t *testing.T) {
+	t.Helper()
+	if err := proxy.NewVideoSweepWorker(f.pipeline).Work(context.Background(), nil); err != nil {
+		t.Fatalf("the video sweeper failed: %v", err)
 	}
 }

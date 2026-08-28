@@ -67,7 +67,7 @@ func (s *Server) GetGatewayPricingPlan(ctx context.Context, req GetGatewayPricin
 }
 
 func (s *Server) UpdateGatewayPricingPlan(ctx context.Context, req UpdateGatewayPricingPlanRequestObject) (UpdateGatewayPricingPlanResponseObject, error) {
-	if err := validateIfMatch(req.Params.IfMatch); err != nil {
+	if err := validateIfMatch(&req.Params.IfMatch); err != nil {
 		return nil, err
 	}
 	if req.Body == nil || (req.Body.Name == nil && req.Body.Description == nil && req.Body.Status == nil) {
@@ -104,7 +104,7 @@ func (s *Server) UpdateGatewayPricingPlan(ctx context.Context, req UpdateGateway
 }
 
 func (s *Server) DeleteGatewayPricingPlan(ctx context.Context, req DeleteGatewayPricingPlanRequestObject) (DeleteGatewayPricingPlanResponseObject, error) {
-	if err := validateIfMatch(req.Params.IfMatch); err != nil {
+	if err := validateIfMatch(&req.Params.IfMatch); err != nil {
 		return nil, err
 	}
 	actor, err := httpx.RequireSuperadmin(ctx)
@@ -155,7 +155,7 @@ func (s *Server) ListGatewayPricingPlanModelOverrides(ctx context.Context, req L
 }
 
 func (s *Server) ReplaceGatewayPricingPlanModelOverrides(ctx context.Context, req ReplaceGatewayPricingPlanModelOverridesRequestObject) (ReplaceGatewayPricingPlanModelOverridesResponseObject, error) {
-	if err := validateIfMatch(req.Params.IfMatch); err != nil {
+	if err := validateIfMatch(&req.Params.IfMatch); err != nil {
 		return nil, err
 	}
 	if req.Body == nil {

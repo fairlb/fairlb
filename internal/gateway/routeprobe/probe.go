@@ -44,6 +44,11 @@ const Timeout = 20 * time.Second
 // Target is the provider a probe is sent to.
 type Target struct {
 	BaseURL string
+	// Vendor is which platform this provider is. It is inert for every dialect
+	// endpoint, and load-bearing for exactly one: the video plane's request
+	// shape comes from the vendor's mapper, so a probe that did not know the
+	// vendor could not build one (ADR-0219).
+	Vendor string
 	// Protocols is carried so the callee can check the provider really declares
 	// the dialect the endpoint implies; which dialect to speak is derived from
 	// the endpoint itself.
@@ -79,8 +84,15 @@ type Verdict struct {
 	Status    string
 	// Source says who wrote the verdict: the probe worker, or the operator
 	// overriding it.
-	Source     string
-	CheckedAt  time.Time
+	Source    string
+	CheckedAt time.Time
+	// EnqueuedAt is set while a probe of this endpoint is in flight and cleared
+	// the moment a verdict lands. Separate from Status because Status is the
+	// verdict: a re-probe leaves the standing one in place, and it has to --
+	// the catalogue publishes what was found `ok`, so a pending value living in
+	// Status would take the route out of the catalogue for the length of the
+	// re-probe (ADR-0224).
+	EnqueuedAt time.Time
 	LatencyMs  *int
 	StatusCode *int
 	Error      string
@@ -128,7 +140,7 @@ func Run(
 ) Result {
 	out := Result{CheckedAt: time.Now().UTC(), KeyID: keyID}
 
-	spec, ok := upstreamprobe.SpecForEndpoint(endpoint, upstreamModel)
+	spec, ok := upstreamprobe.SpecForEndpoint(endpoint, upstreamModel, target.Vendor)
 	if !ok {
 		out.Message = "Unknown probe endpoint: " + endpoint
 		return out
@@ -172,6 +184,9 @@ func groupVerdicts(rows []gwdb.ListRouteProbesRow) map[uuid.UUID][]Verdict {
 		}
 		if r.CheckedAt.Valid {
 			v.CheckedAt = r.CheckedAt.Time.UTC()
+		}
+		if r.ProbeEnqueuedAt.Valid {
+			v.EnqueuedAt = r.ProbeEnqueuedAt.Time.UTC()
 		}
 		out[id] = append(out[id], v)
 	}

@@ -53,6 +53,13 @@ export interface WiringRow {
    */
   onUpstream: boolean | null;
   discoveredState: DiscoveredState | null;
+  /**
+   * The catalog entry the server says this row would create, when it has no local
+   * model. Absent means the server could not name it — see `ModelSuggestion` in the
+   * contract: on Azure, Bedrock and Vertex the upstream name is a deployment name
+   * or an ARN with no creator in it, and there is nothing to derive a slug from.
+   */
+  suggestion?: SuggestionLike;
 }
 
 /** A row plus what the operator currently intends and what went wrong last time. */
@@ -87,6 +94,7 @@ export interface DiscoveredLike {
   state: string;
   model_id?: string | null;
   model_slug?: string;
+  suggestion?: SuggestionLike;
 }
 
 export interface ManualEntry {
@@ -178,6 +186,7 @@ export function mergeRows(input: MergeInput): WiringRow[] {
       origin: "upstream",
       onUpstream: true,
       discoveredState: d.state as DiscoveredState,
+      ...(d.suggestion ? { suggestion: d.suggestion } : {}),
     });
   }
 
@@ -263,17 +272,83 @@ export const canWire = (row: WiringRow): boolean =>
 export interface NewModelDraft {
   slug: string;
   displayName: string;
+  /** Empty rather than 0 while being typed: the field has to be clearable. */
+  contextWindow: string;
+  maxOutputTokens: string;
+  /** Where the prefill came from, or null when there was none to start from. */
+  source: SuggestionSource | null;
+  /** Only ever true on a seeded suggestion: this model is reachable on an endpoint
+   * the gateway will not probe by itself, so creating it is not the last step. */
+  manualProbe: boolean;
+  /** What the seed says the model produces; empty when the suggestion did not
+   * know, which leaves the column at its own default of text. Nothing is
+   * derived here either: an upstream name says nothing about whether the bytes
+   * coming back are words or pixels. */
+  outputModalities: string[];
 }
 
-/** The draft's initial values: slug prefilled from the upstream name. */
-export function newModelDraft(upstream: string): NewModelDraft {
-  return { slug: upstream, displayName: "" };
+/** Not exported: consumers reach it as `NewModelDraft["source"]`, which keeps the
+ * union and the field that carries it from drifting apart. */
+type SuggestionSource = "seed" | "upstream" | "vendor";
+
+export interface SuggestionLike {
+  slug: string;
+  display_name?: string;
+  context_window?: number;
+  max_output_tokens?: number;
+  manual_probe?: boolean;
+  output_modalities?: string[];
+  source: string;
 }
 
-/** Whether the draft can be submitted; when it cannot, a message key rather than a
- * finished string. */
+/**
+ * The draft's initial values, taken from the server's suggestion.
+ *
+ * **Nothing is derived here.** The slug used to be prefilled with the bare upstream
+ * name, which is not a slug at all — it produced catalog entries named `gpt-5.6-sol`
+ * where the convention, the documentation and now the database all say
+ * `openai/gpt-5.6-sol`, and a slug cannot be changed once created. The rule that
+ * decides what a name should be lives on the server, in one place, next to the
+ * seeded catalog and the vendor registry it reads.
+ *
+ * An absent suggestion leaves every field empty, which is the honest starting point
+ * when nothing here can name the model: the operator is asked rather than handed a
+ * plausible-looking guess.
+ */
+export function newModelDraft(suggestion?: SuggestionLike): NewModelDraft {
+  const number = (v?: number) => (v && v > 0 ? String(v) : "");
+  return {
+    slug: suggestion?.slug ?? "",
+    displayName: suggestion?.display_name ?? "",
+    contextWindow: number(suggestion?.context_window),
+    maxOutputTokens: number(suggestion?.max_output_tokens),
+    source: (suggestion?.source as SuggestionSource) ?? null,
+    manualProbe: suggestion?.manual_probe ?? false,
+    outputModalities: suggestion?.output_modalities ?? [],
+  };
+}
+
+/**
+ * Whether the draft can be submitted; when it cannot, a message key rather than a
+ * finished string.
+ *
+ * The slug check is deliberately coarser than the database's: exactly one slash with
+ * something either side. The exact pattern lives in the migration and is not
+ * restated here — an interface stricter than its own storage is the shape worth
+ * removing, and one that repeats a pattern is one more place for the two to drift.
+ * What this catches is the mistake somebody actually makes, immediately, next to the
+ * field; anything subtler is refused by the server with a message that says why.
+ */
 export function draftIssue(draft: NewModelDraft): MessageKey | null {
-  if (draft.slug.trim() === "") return "gwWiringDraftSlugRequired";
+  const slug = draft.slug.trim();
+  if (slug === "") return "gwWiringDraftSlugRequired";
+  const parts = slug.split("/");
+  if (parts.length !== 2 || parts[0] === "" || parts[1] === "") {
+    return "gwWiringDraftSlugShape";
+  }
+  for (const n of [draft.contextWindow, draft.maxOutputTokens]) {
+    if (n.trim() !== "" && !/^\d+$/.test(n.trim())) return "gwWiringDraftNumber";
+  }
   return null;
 }
 
@@ -506,7 +581,7 @@ export function composerIssue(
   return null;
 }
 
-export interface DiscoverSummary {
+interface DiscoverSummary {
   total: number;
   routed: number;
   mappable: number;
@@ -557,4 +632,4 @@ export function discoverSummary(
  * the witnesses moved server-side, where "conflict counts as already" and "missing
  * counts as already" have an assertion each.
  */
-export type RowOutcome = "done" | "already" | "failed";
+type RowOutcome = "done" | "already" | "failed";

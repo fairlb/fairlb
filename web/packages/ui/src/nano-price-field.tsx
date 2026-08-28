@@ -25,6 +25,7 @@ export function NanoPriceField({
   id,
   value,
   onChange,
+  currency,
   hint,
   error,
   disabled,
@@ -35,6 +36,11 @@ export function NanoPriceField({
    * separators, which are normalised on blur. */
   value: string;
   onChange: (next: string) => void;
+  /** Currency shown as a static suffix beside the input. The typed value is a
+   * bare number in main units either way; without the suffix the unit is
+   * invisible until the nano echo appears, and nano is the wrong unit to
+   * confirm against when the question is "dollars or nano?". */
+  currency?: string;
   hint?: ReactNode;
   error?: string;
   disabled?: boolean;
@@ -60,19 +66,22 @@ export function NanoPriceField({
         <>
           {hint}
           {hint && nano !== null && " · "}
-          {nano !== null && <span className="font-mono">= {nanoText} nano</span>}
+          {nano !== null && <span className="font-mono text-[0.9em]">= {nanoText} nano</span>}
         </>
       }
     >
-      <Input
-        id={id}
-        value={value}
-        inputMode="decimal"
-        disabled={disabled}
-        className="text-right font-mono"
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={() => normalized !== value && onChange(normalized)}
-      />
+      <div className="flex items-center gap-2">
+        <Input
+          id={id}
+          value={value}
+          inputMode="decimal"
+          disabled={disabled}
+          className="text-right font-mono"
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={() => normalized !== value && onChange(normalized)}
+        />
+        {currency && <span className="text-base text-kumo-subtle">{currency}</span>}
+      </div>
     </Field>
   );
 }

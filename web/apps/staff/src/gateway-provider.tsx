@@ -9,7 +9,7 @@ import { Centered, useAdminTitle, type PageHeaderBreadcrumbs } from "@fairlb/ui"
 import type { ReactNode } from "react";
 import { useCurrentAdmin } from "./admin-session";
 import { useAdminRecordBreadcrumb } from "@fairlb/app-composition";
-import { adminPages, resolveAdminPage } from "./registry";
+import { adminPages } from "./registry";
 
 /** Exported because the shell renders one page's header itself: the team access
  * page is mounted standalone here and has no record layout above it to supply
@@ -33,7 +33,6 @@ function CommunityOrgNotFound() {
 const gatewayConsoleHost: GatewayConsoleHost = {
   useOrg: () => ({ id: useCurrentAdmin().org_id, capabilities: communityOrgCapabilities }),
   useTitle: useAdminTitle,
-  canAccess: (_org, path) => resolveAdminPage(path) !== undefined,
   useImpersonating: () => false,
   OrgNotFound: CommunityOrgNotFound,
   useOrgSettings: () => ({

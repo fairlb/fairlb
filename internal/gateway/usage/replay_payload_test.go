@@ -72,6 +72,7 @@ func replayParams(t *testing.T) gwdb.InsertUsageLogParams {
 		ChargedNano: 42, ChargedCurrency: "USD", FxRate: fx,
 		ToolCalls: json.RawMessage(`{}`), ServiceTier: pgtype.Text{String: "", Valid: true},
 		TokensAudioIn: pgtype.Int4{Valid: true}, TokensAudioOut: pgtype.Int4{Valid: true},
+		TokensImageIn:      pgtype.Int4{Valid: true},
 		TokensCacheWrite5m: pgtype.Int4{Valid: true}, TokensCacheWrite1h: pgtype.Int4{Valid: true},
 		PricingSnapshot: json.RawMessage(`{"schema_version":1}`),
 		Attempts:        json.RawMessage(`[]`),

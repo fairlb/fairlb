@@ -228,7 +228,7 @@ describe("planWiring", () => {
         routeId: null,
         modelId: null,
         upstream: "brand-new",
-        draft: { slug: "openai/brand-new", displayName: "" },
+        draft: newModelDraft({ slug: "openai/brand-new", source: "vendor" }),
       }),
     ]);
     expect(plan.creates).toHaveLength(1);
@@ -245,16 +245,75 @@ describe("canWire / newModelDraft / draftIssue", () => {
     expect(canWire({ modelId: MODEL_A, origin: "route" } as WiringRow)).toBe(true);
   });
 
-  // The slug is prefilled from the upstream name but **must stay editable**: it is
-  // immutable once created, and the prefill is only a guess. There is no protocol
-  // to choose -- a model owns none -- so the draft has nothing else to settle.
-  it("prefills the slug from the upstream name and asks nothing else", () => {
-    expect(newModelDraft("gpt-4o")).toEqual({ slug: "gpt-4o", displayName: "" });
+  // The draft takes what the server suggested and nothing else. It used to derive
+  // the slug here, from the bare upstream name -- which is not a slug, and produced
+  // catalog entries named `gpt-4o` where the convention and now the database both
+  // say `openai/gpt-4o`. A slug cannot be changed once created, so that mistake was
+  // permanent; the rule that decides the name lives on the server, in one place.
+  it("takes the whole draft from the server's suggestion", () => {
+    expect(
+      newModelDraft({
+        slug: "google/gemini-3.1-flash-image",
+        display_name: "Gemini 3.1 Flash Image",
+        context_window: 1_050_000,
+        max_output_tokens: 128_000,
+        output_modalities: ["text", "image"],
+        source: "seed",
+      }),
+    ).toEqual({
+      slug: "google/gemini-3.1-flash-image",
+      displayName: "Gemini 3.1 Flash Image",
+      contextWindow: "1050000",
+      maxOutputTokens: "128000",
+      // Carried, never derived. It is the one field about this model that no
+      // upstream name could have supplied, and getting it from anywhere but the
+      // seed would file an image model under text.
+      outputModalities: ["text", "image"],
+      source: "seed",
+      manualProbe: false,
+    });
+  });
+
+  // No suggestion means the server could not name the model -- an Azure deployment
+  // name, a Bedrock ARN. Every field stays empty so the operator is asked, rather
+  // than handed something plausible for a value that cannot be corrected later.
+  it("leaves everything empty when there was no suggestion", () => {
+    expect(newModelDraft()).toEqual({
+      slug: "",
+      displayName: "",
+      contextWindow: "",
+      maxOutputTokens: "",
+      // Empty rather than ["text"]: the draft says nothing, and the column's
+      // own default is what decides. Prefilling text here would be this file
+      // deriving a value again, which is the mistake the comment above records.
+      outputModalities: [],
+      source: null,
+      manualProbe: false,
+    });
   });
 
   it("blocks a draft that is missing its slug", () => {
-    expect(draftIssue({ slug: "", displayName: "" })).toBe("gwWiringDraftSlugRequired");
-    expect(draftIssue({ slug: "x", displayName: "" })).toBeNull();
+    expect(draftIssue(newModelDraft())).toBe("gwWiringDraftSlugRequired");
+  });
+
+  // Coarser than the database's pattern on purpose -- the exact one lives in the
+  // migration -- but it catches the mistake somebody actually makes, right next to
+  // the field: a bare upstream name.
+  it("blocks a slug that is not two segments", () => {
+    const withSlug = (slug: string) => ({ ...newModelDraft(), slug });
+    expect(draftIssue(withSlug("gpt-4o"))).toBe("gwWiringDraftSlugShape");
+    expect(draftIssue(withSlug("openai/"))).toBe("gwWiringDraftSlugShape");
+    expect(draftIssue(withSlug("/gpt-4o"))).toBe("gwWiringDraftSlugShape");
+    expect(draftIssue(withSlug("a/b/c"))).toBe("gwWiringDraftSlugShape");
+    expect(draftIssue(withSlug("openai/gpt-4o"))).toBeNull();
+  });
+
+  it("blocks a token count that is not a whole number", () => {
+    const draft = { ...newModelDraft(), slug: "openai/gpt-4o" };
+    expect(draftIssue({ ...draft, contextWindow: "1e6" })).toBe("gwWiringDraftNumber");
+    expect(draftIssue({ ...draft, maxOutputTokens: "-1" })).toBe("gwWiringDraftNumber");
+    // Blank is allowed: it means "leave it unset", which the server handles.
+    expect(draftIssue({ ...draft, contextWindow: "" })).toBeNull();
   });
 });
 
@@ -383,7 +442,7 @@ describe("discoverSummary", () => {
 });
 
 describe("canPriceFromReference", () => {
-  const draft = { slug: "openai/gpt-4o", displayName: "" };
+  const draft = newModelDraft({ slug: "openai/gpt-4o", source: "vendor" });
 
   // The two states the upstream fetch reports as wired-but-not-sellable.
   it("offers it on an unpriced model and on a row creating its own", () => {

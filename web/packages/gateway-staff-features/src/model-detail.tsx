@@ -10,9 +10,11 @@ import {
 import { type MessageKey, useDisplayDate, useI18n } from "@fairlb/i18n";
 import {
   Alert,
+  CheckboxGroupField,
   Button,
   Card,
   ConfirmDialog,
+  ContentsLayout,
   DataTable,
   Field,
   FormActions,
@@ -20,17 +22,16 @@ import {
   FormRow,
   InlineEmpty,
   Input,
-  intSchema,
   LoadingState,
   PageActionDock,
-  PageContentsNav,
   PageHeader,
   RecordPage,
-  resolveNavValue,
   SectionHeading,
   Select,
   StatusBadge,
   Textarea,
+  intSchema,
+  resolveNavValue,
   useAdminTitle,
   validate,
 } from "@fairlb/ui";
@@ -126,7 +127,7 @@ export function GatewayModelLayout() {
   const basePath = `/gateway/models/${modelId}`;
   const aspects = [
     { value: "overview", label: t("gwDetailOverview"), href: basePath },
-    { value: "routes", label: t("gwDetailRoutes"), href: `${basePath}/routes` },
+    { value: "routes", label: t("gwDetailProviders"), href: `${basePath}/routes` },
     { value: "pricing", label: t("gwPricing"), href: `${basePath}/pricing` },
   ];
   const active = resolveNavValue(aspects, pathname);
@@ -268,24 +269,29 @@ export function GatewayModelPricingPage() {
   const { t } = useI18n();
   const { model, pricing, refreshPricing, refetchPricing, setPricingDirty } = useModelRecord();
   return (
-    <div className="flex min-w-0 flex-col gap-6 2xl:flex-row 2xl:items-start 2xl:gap-10">
-      <div className="min-w-0 flex-1">
-        <ModelPricingPanel
-          model={model}
-          resource={pricing}
-          onChanged={refreshPricing}
-          onRefetch={refetchPricing}
-          onDirtyChange={setPricingDirty}
-        />
-      </div>
-      <PageContentsNav
-        items={[
-          { href: "#model-price-formula", label: t("gwPriceFormula") },
-          { href: "#model-price-source", label: t("gwPriceProvenance") },
-          { href: "#model-price-advanced", label: t("gwAdvancedPricingSection") },
-        ]}
+    <ContentsLayout
+      contents={[
+        { href: "#model-price-formula", label: t("gwPriceFormula") },
+        { href: "#model-price-source", label: t("gwPriceProvenance") },
+        // The advanced card is the token family's; a per-unit model does not
+        // render it, and an entry pointing at a section that is not there
+        // scrolls nowhere. Read from the saved family rather than the form's,
+        // which lives inside the panel: between switching the family and saving
+        // it the entry is briefly stale, and that is a smaller wrong than a
+        // dead anchor on every per-second model.
+        ...(pricing?.pricing_family === "units"
+          ? []
+          : [{ href: "#model-price-advanced" as const, label: t("gwAdvancedPricingSection") }]),
+      ]}
+    >
+      <ModelPricingPanel
+        model={model}
+        resource={pricing}
+        onChanged={refreshPricing}
+        onRefetch={refetchPricing}
+        onDirtyChange={setPricingDirty}
       />
-    </div>
+    </ContentsLayout>
   );
 }
 
@@ -402,6 +408,12 @@ export function ModelOverview({
             </dd>
             <dt className="text-kumo-subtle">{t("gwColVisibility")}</dt>
             <dd>{t(VISIBILITY_KEY[model.visibility] ?? "visibilityHidden")}</dd>
+            {/* What the model produces. Beside the protocols above rather than
+                folded into them: a protocol says which dialect reaches this
+                model, this says what comes back, and for Gemini's image models
+                the two answers differ. */}
+            <dt className="text-kumo-subtle">{t("gwModality")}</dt>
+            <dd>{model.output_modalities.map((m) => modalityLabel(t, m)).join(" + ")}</dd>
             <dt className="text-kumo-subtle">{t("gwContextWindow")}</dt>
             <dd className="font-mono">
               {model.context_window ? formatNumber(model.context_window) : "—"}
@@ -496,6 +508,7 @@ function ModelEditDialog({
     useState<GatewayStaffTypes.GatewayModelInputVisibility>("public");
   const [contextWindow, setContextWindow] = useState("");
   const [maxOutput, setMaxOutput] = useState("");
+  const [modalities, setModalities] = useState<string[]>(["text"]);
   // The dialog stays mounted, so it refills from the current values on every open;
   // otherwise the previous edit's state lingers. Only this component's own state is
   // touched during render — clearing the error is a cross-store side effect and belongs
@@ -507,11 +520,15 @@ function ModelEditDialog({
     setVisibility(model.visibility as GatewayStaffTypes.GatewayModelInputVisibility);
     setContextWindow(model.context_window ? String(model.context_window) : "");
     setMaxOutput(model.max_output_tokens ? String(model.max_output_tokens) : "");
+    setModalities([...model.output_modalities]);
   }
   if (!open && loadedFor !== null) setLoadedFor(null);
 
   const errContext = contextWindow ? validate(intSchema, contextWindow) : undefined;
   const errMaxOutput = maxOutput ? validate(intSchema, maxOutput) : undefined;
+  // The column refuses an empty list, so the dialog does too -- and says why
+  // here rather than letting the save come back as a constraint violation.
+  const errModalities = modalities.length === 0 ? t("gwModalityRequired") : undefined;
 
   return (
     <FormDialog
@@ -524,7 +541,9 @@ function ModelEditDialog({
       description={t("gwEditModelHint", { slug: model?.slug ?? "" })}
       error={update.isError ? apiErrorMessage(update.error) : undefined}
       submitLabel={t("save")}
-      submitDisabled={!model || Boolean(errContext) || Boolean(errMaxOutput)}
+      submitDisabled={
+        !model || Boolean(errContext) || Boolean(errMaxOutput) || Boolean(errModalities)
+      }
       pending={update.isPending}
       onSubmit={() => {
         if (!model) return;
@@ -534,6 +553,7 @@ function ModelEditDialog({
             data: {
               display_name: displayName.trim(),
               visibility,
+              output_modalities: modalities as GatewayStaffTypes.OutputModalities,
               ...(contextWindow ? { context_window: Number(contextWindow) } : {}),
               ...(maxOutput ? { max_output_tokens: Number(maxOutput) } : {}),
             },
@@ -567,6 +587,15 @@ function ModelEditDialog({
           { value: "beta", label: t("visibilityBeta") },
           { value: "hidden", label: t("visibilityHidden") },
         ]}
+      />
+      <CheckboxGroupField
+        legend={t("gwModality")}
+        hint={t("gwModalityHint")}
+        error={errModalities}
+        columns={2}
+        value={modalities}
+        onValueChange={setModalities}
+        options={MODALITY_CHOICES.map((v) => ({ value: v, label: modalityLabel(t, v) }))}
       />
       <FormRow className="sm:grid-cols-2">
         <FormRow.Item>
@@ -616,6 +645,10 @@ interface PricingFormState {
   reason: string;
   dimensions: GatewayStaffTypes.ModelPriceDimensionRate[];
   tools: GatewayStaffTypes.ModelPriceToolRate[];
+  /** Which family charges this model. The two are alternatives, not layers:
+   * a per-unit model has no token price and never falls back to one. */
+  family: GatewayStaffTypes.PricingFamily;
+  unitRates: GatewayStaffTypes.ModelPriceUnitRate[];
 }
 
 // The form is initialized from **the current price row**. There is one source rather
@@ -645,6 +678,12 @@ function pricingState(cur?: GatewayStaffTypes.ModelPricingResource): PricingForm
     reason: "",
     dimensions: priced?.dimension_rates ?? [],
     tools: priced?.tool_rates ?? [],
+    family: priced?.pricing_family ?? "tokens",
+    // Read back whatever family the model is on. A card left behind by a
+    // switch back to tokens is still shown, because it is still stored, and an
+    // editor that could not see it would offer to save a price it had silently
+    // dropped half of.
+    unitRates: priced?.unit_rates ?? [],
   };
 }
 
@@ -741,11 +780,27 @@ function ModelPricingPanel({
     return () => cancelAnimationFrame(frame);
   }, [advanced, focusFieldId]);
 
+  const byUnit = form.family === "units";
+  // A per-unit model is not asked for the four token rates: it has none. Asking
+  // anyway, and refusing to save without them, is what made such a model
+  // unconfigurable from here at all.
   const firstInvalidRate = RATE_ROWS.find(
     ({ key }) =>
+      !byUnit &&
       form.billingMode === "paid" &&
       (form.rates[key] == null || !DECIMAL_RATE.test(form.rates[key] ?? "")),
   );
+  const unitKeys = new Set<string>();
+  const firstInvalidUnitRate = form.unitRates.findIndex((row) => {
+    const key = unitRowKey(row);
+    const bad = !DECIMAL_RATE.test(row.rate_usd_per_unit) || unitKeys.has(key);
+    unitKeys.add(key);
+    return bad;
+  });
+  // A paid per-unit model with no rates cannot be charged, and admission
+  // answers 503 to every request against it. The server refuses the save; this
+  // says so before the round trip rather than after it.
+  const unitRatesMissing = byUnit && form.billingMode === "paid" && form.unitRates.length === 0;
   const dimensionKeys = new Set<string>();
   const firstInvalidDimension = form.dimensions.findIndex((row) => {
     const key = dimensionRowKey(row);
@@ -771,6 +826,8 @@ function ModelPricingPanel({
   const reasonInvalid = dirty && form.reason.trim() === "";
   const invalid =
     firstInvalidRate != null ||
+    firstInvalidUnitRate >= 0 ||
+    unitRatesMissing ||
     firstInvalidDimension >= 0 ||
     firstInvalidTool >= 0 ||
     multiplier == null ||
@@ -780,7 +837,13 @@ function ModelPricingPanel({
 
   const payload = (): GatewayStaffTypes.ModelPricingInput => ({
     billing_mode: form.billingMode,
-    official_rates: form.rates,
+    pricing_family: form.family,
+    // Omitted for a per-unit model, and refused by the server if sent. Its four
+    // token columns are stored as explicit zeros by the write path; making this
+    // form send four zeros instead would put an invariant the schema cannot
+    // hold into every caller of the API.
+    ...(byUnit ? {} : { official_rates: form.rates }),
+    unit_rates: form.unitRates,
     adjustment: { multiplier_bps: multiplier ?? 10_000 },
     source_name: form.sourceName.trim(),
     ...(form.sourceUrl.trim() ? { source_url: form.sourceUrl.trim() } : {}),
@@ -801,6 +864,7 @@ function ModelPricingPanel({
   const savePricing = async (): Promise<GatewayStaffTypes.ModelPricingResource | null> => {
     if (invalid) {
       if (firstInvalidRate) setFocusFieldId(`pricing-rate-${firstInvalidRate.key}`);
+      else if (firstInvalidUnitRate >= 0) setFocusFieldId(`unit-rate-${firstInvalidUnitRate}`);
       else if (multiplier == null) setFocusFieldId("pricing-adjustment-percent");
       else if (form.sourceName.trim() === "") setFocusFieldId("pricing-source-name");
       else if (checkedAtInvalid) setFocusFieldId("pricing-checked-at");
@@ -906,6 +970,20 @@ function ModelPricingPanel({
                 />
               </Field>
             </FormRow.Item>
+            <FormRow.Item>
+              <Field label={t("gwPricingFamily")} hint={t("gwPricingFamilyHint")}>
+                <Select
+                  value={form.family}
+                  onValueChange={(value) =>
+                    setForm({ ...form, family: value === "units" ? "units" : "tokens" })
+                  }
+                  items={[
+                    { value: "tokens", label: t("gwPricingFamilyTokens") },
+                    { value: "units", label: t("gwPricingFamilyUnits") },
+                  ]}
+                />
+              </Field>
+            </FormRow.Item>
             <AdjustmentEditor
               inputId="pricing-adjustment-percent"
               mode={form.adjustmentMode}
@@ -920,57 +998,66 @@ function ModelPricingPanel({
           )}
         </div>
 
-        <DataTable caption={t("gwPriceFormula")} className="min-w-[44rem]">
-          <DataTable.Header>
-            <DataTable.Row>
-              <DataTable.Head>{t("gwBillingItem")}</DataTable.Head>
-              <DataTable.Head>{t("gwOfficialPrice")}</DataTable.Head>
-              {/* There is no adjustment column: it held the same constant on all four
+        {byUnit ? (
+          <UnitRateGrid
+            rows={form.unitRates}
+            onChange={(unitRates) => setForm({ ...form, unitRates })}
+            multiplier={multiplier}
+            billingMode={form.billingMode}
+            missing={unitRatesMissing}
+          />
+        ) : (
+          <DataTable caption={t("gwPriceFormula")} className="min-w-[44rem]">
+            <DataTable.Header>
+              <DataTable.Row>
+                <DataTable.Head>{t("gwBillingItem")}</DataTable.Head>
+                <DataTable.Head>{t("gwOfficialPrice")}</DataTable.Head>
+                {/* There is no adjustment column: it held the same constant on all four
                   rows, and the same number already appears at the top of the card. A
                   quantity that does not vary by row, placed in a column, says one thing
                   five times. */}
-              <DataTable.Head className="text-right">{t("gwPublicPrice")}</DataTable.Head>
-            </DataTable.Row>
-          </DataTable.Header>
-          <DataTable.Body>
-            {RATE_ROWS.map(({ key, label }) => {
-              const value = form.rates[key];
-              const missing =
-                form.billingMode === "paid" && (value == null || !DECIMAL_RATE.test(value));
-              const shown = multiplyRate(value, multiplier ?? 10_000);
-              // When nothing can be computed — the list price is empty or invalid — no
-              // dash is shown: this cell is an input, and a placeholder-looking dash
-              // reads as content waiting to be overwritten.
-              const publicShown = shown === "—" ? "" : shown;
-              return (
-                <DataTable.Row key={key}>
-                  <DataTable.Cell className="font-medium">{label}</DataTable.Cell>
-                  <DataTable.Cell>
-                    <div className="relative max-w-56">
-                      <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-kumo-subtle">
-                        $
-                      </span>
-                      <Input
-                        id={`pricing-rate-${key}`}
-                        aria-label={`${label} ${t("gwOfficialPrice")}`}
-                        aria-invalid={missing}
-                        className="pl-7 font-mono"
-                        inputMode="decimal"
-                        placeholder={t("gwMissingRate")}
-                        value={value ?? ""}
-                        onChange={(event) =>
-                          setForm({
-                            ...form,
-                            rates: { ...form.rates, [key]: event.target.value || null },
-                          })
-                        }
-                      />
-                    </div>
-                    {missing && (
-                      <p className="mt-1 text-base text-kumo-danger">{t("gwRateRequired")}</p>
-                    )}
-                  </DataTable.Cell>
-                  {/* **The published price can be entered directly.** The number in an
+                <DataTable.Head className="text-right">{t("gwPublicPrice")}</DataTable.Head>
+              </DataTable.Row>
+            </DataTable.Header>
+            <DataTable.Body>
+              {RATE_ROWS.map(({ key, label }) => {
+                const value = form.rates[key];
+                const missing =
+                  form.billingMode === "paid" && (value == null || !DECIMAL_RATE.test(value));
+                const shown = multiplyRate(value, multiplier ?? 10_000);
+                // When nothing can be computed — the list price is empty or invalid — no
+                // dash is shown: this cell is an input, and a placeholder-looking dash
+                // reads as content waiting to be overwritten.
+                const publicShown = shown === "—" ? "" : shown;
+                return (
+                  <DataTable.Row key={key}>
+                    <DataTable.Cell className="font-medium">{label}</DataTable.Cell>
+                    <DataTable.Cell>
+                      <div className="relative max-w-56">
+                        <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-kumo-subtle">
+                          $
+                        </span>
+                        <Input
+                          id={`pricing-rate-${key}`}
+                          aria-label={`${label} ${t("gwOfficialPrice")}`}
+                          aria-invalid={missing}
+                          className="pl-7 font-mono"
+                          inputMode="decimal"
+                          placeholder={t("gwMissingRate")}
+                          value={value ?? ""}
+                          onChange={(event) =>
+                            setForm({
+                              ...form,
+                              rates: { ...form.rates, [key]: event.target.value || null },
+                            })
+                          }
+                        />
+                      </div>
+                      {missing && (
+                        <p className="mt-1 text-base text-kumo-danger">{t("gwRateRequired")}</p>
+                      )}
+                    </DataTable.Cell>
+                    {/* **The published price can be entered directly.** The number in an
                       operator's head is usually "what do I want to sell this for", and
                       read-only this cell left them reversing a multiplier on a
                       calculator. Typing here derives it instead — and **there is one
@@ -978,30 +1065,31 @@ function ModelPricingPanel({
                       other three. That has to be said in the hint rather than
                       discovered. Under free pricing the published price is always zero
                       and is not an editable quantity at all. */}
-                  <DataTable.Cell className="text-right">
-                    {form.billingMode === "free" ? (
-                      <span className="font-mono text-base font-semibold">$0</span>
-                    ) : (
-                      <div className="relative ml-auto max-w-56">
-                        <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-kumo-subtle">
-                          $
-                        </span>
-                        <Input
-                          id={`pricing-public-${key}`}
-                          aria-label={`${label} ${t("gwPublicPrice")}`}
-                          className="pl-7 text-right font-mono font-semibold"
-                          inputMode="decimal"
-                          value={publicDraft?.key === key ? publicDraft.text : publicShown}
-                          onChange={(event) => setPublicRate(key, event.target.value)}
-                        />
-                      </div>
-                    )}
-                  </DataTable.Cell>
-                </DataTable.Row>
-              );
-            })}
-          </DataTable.Body>
-        </DataTable>
+                    <DataTable.Cell className="text-right">
+                      {form.billingMode === "free" ? (
+                        <span className="font-mono text-base font-semibold">$0</span>
+                      ) : (
+                        <div className="relative ml-auto max-w-56">
+                          <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-kumo-subtle">
+                            $
+                          </span>
+                          <Input
+                            id={`pricing-public-${key}`}
+                            aria-label={`${label} ${t("gwPublicPrice")}`}
+                            className="pl-7 text-right font-mono font-semibold"
+                            inputMode="decimal"
+                            value={publicDraft?.key === key ? publicDraft.text : publicShown}
+                            onChange={(event) => setPublicRate(key, event.target.value)}
+                          />
+                        </div>
+                      )}
+                    </DataTable.Cell>
+                  </DataTable.Row>
+                );
+              })}
+            </DataTable.Body>
+          </DataTable>
+        )}
       </Card>
 
       <Card id="model-price-source" className="max-w-3xl scroll-mt-6 space-y-4">
@@ -1061,32 +1149,43 @@ function ModelPricingPanel({
         </Field>
       </Card>
 
-      <Card id="model-price-advanced" className="max-w-3xl scroll-mt-6 space-y-4">
-        <button
-          type="button"
-          className="flex w-full items-center justify-between gap-4 text-left focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kumo-focus"
-          aria-expanded={advanced}
-          onClick={() => setAdvanced(!advanced)}
-        >
-          <SectionHeading>
-            {t("gwAdvancedPricing", { count: form.dimensions.length + form.tools.length })}
-          </SectionHeading>
-          <span aria-hidden="true" className="text-kumo-subtle">
-            {advanced ? "−" : "+"}
-          </span>
-        </button>
-        {advanced && (
-          <>
-            <AdvancedRatesEditor
-              rows={form.dimensions}
-              baseRates={form.rates}
-              multiplier={multiplier ?? 10_000}
-              onChange={(dimensions) => setForm({ ...form, dimensions })}
-            />
-            <ToolRatesEditor rows={form.tools} onChange={(tools) => setForm({ ...form, tools })} />
-          </>
-        )}
-      </Card>
+      {/* Token dimension and tool rates, and only for a model billed by token.
+          A per-unit model never falls back to a token rate, so offering these
+          on one is offering a control whose effect is nothing: the rows save,
+          they persist, and no charge ever reads them. The stored rows are left
+          untouched rather than cleared — a model switched back to tokens finds
+          its rate card where it left it. */}
+      {!byUnit && (
+        <Card id="model-price-advanced" className="max-w-3xl scroll-mt-6 space-y-4">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-4 text-left focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kumo-focus"
+            aria-expanded={advanced}
+            onClick={() => setAdvanced(!advanced)}
+          >
+            <SectionHeading>
+              {t("gwAdvancedPricing", { count: form.dimensions.length + form.tools.length })}
+            </SectionHeading>
+            <span aria-hidden="true" className="text-kumo-subtle">
+              {advanced ? "−" : "+"}
+            </span>
+          </button>
+          {advanced && (
+            <>
+              <AdvancedRatesEditor
+                rows={form.dimensions}
+                baseRates={form.rates}
+                multiplier={multiplier ?? 10_000}
+                onChange={(dimensions) => setForm({ ...form, dimensions })}
+              />
+              <ToolRatesEditor
+                rows={form.tools}
+                onChange={(tools) => setForm({ ...form, tools })}
+              />
+            </>
+          )}
+        </Card>
+      )}
 
       <PageActionDock
         status={
@@ -1206,6 +1305,223 @@ function ModelPricingConflictPanel({
   );
 }
 
+/**
+ * A per-unit rate row is identified by every axis it varies on. Two rows with
+ * the same key would both match one request and one of them would silently
+ * win, so the editor refuses that pair rather than letting the database's
+ * primary key report it later as a constraint name.
+ */
+function unitRowKey(row: GatewayStaffTypes.ModelPriceUnitRate): string {
+  return `${row.unit}:${row.resolution ?? ""}:${row.audio ?? ""}:${row.variant ?? ""}:${
+    row.service_tier ?? "standard"
+  }`;
+}
+
+const MODALITY_CHOICES = ["text", "image", "video"] as const;
+
+/**
+ * How each modality is named. Declared on the model rather than inferred from
+ * the endpoints beside it: Gemini reaches its image models on the same
+ * `generate_content` endpoint as its text ones, so there is nothing to infer
+ * from (ADR-0226).
+ */
+const MODALITY_KEY: Record<string, MessageKey> = {
+  text: "gwModalityText",
+  image: "gwModalityImage",
+  video: "gwModalityVideo",
+};
+
+/**
+ * A modality's label, falling back to the stored value itself.
+ *
+ * The fallback is the value rather than any of the three: a modality the column
+ * has grown and this table has not learned should read as the unfamiliar thing
+ * it is, not be relabelled as text.
+ */
+function modalityLabel(t: (key: MessageKey) => string, modality: string): string {
+  const key = MODALITY_KEY[modality];
+  return key ? t(key) : modality;
+}
+
+const UNIT_CHOICES: GatewayStaffTypes.ModelPriceUnitRateUnit[] = ["second", "call", "image"];
+
+/** The label of one billing unit. Three arms, so a conditional will not do. */
+const UNIT_LABEL: Record<GatewayStaffTypes.ModelPriceUnitRateUnit, MessageKey> = {
+  second: "gwUnitSecond",
+  call: "gwUnitCall",
+  image: "gwUnitImage",
+};
+const AUDIO_AXIS_CHOICES: GatewayStaffTypes.ModelPriceUnitRateAudio[] = ["", "on", "off"];
+
+/**
+ * The rate card of a model billed by unit, in place of the four token buckets.
+ *
+ * It replaces that table rather than sitting beside it, because the two are
+ * alternatives: a model billed by the second has no input rate, no output rate
+ * and no cache rates, and showing four empty boxes beside its real price would
+ * invite somebody to fill them in.
+ *
+ * The axes are `resolution` and `audio`, and an empty one means "this rate does
+ * not vary on that axis" — the opposite direction from the token table, which
+ * walks down to a base rate. A flat per-second price is therefore one row with
+ * both axes blank, and that is the shape the first row starts in.
+ *
+ * The published price is derived and read-only here, unlike the token table
+ * where it can be typed backwards. A card usually has several rows sharing one
+ * multiplier, so reversing from any of them would move the others under the
+ * reader's hands with no cell to look at for the cause.
+ */
+function UnitRateGrid({
+  rows,
+  onChange,
+  multiplier,
+  billingMode,
+  missing,
+}: {
+  rows: GatewayStaffTypes.ModelPriceUnitRate[];
+  onChange: (rows: GatewayStaffTypes.ModelPriceUnitRate[]) => void;
+  multiplier: number | null;
+  billingMode: "paid" | "free";
+  missing: boolean;
+}) {
+  const { t } = useI18n();
+  const patch = (index: number, next: Partial<GatewayStaffTypes.ModelPriceUnitRate>) =>
+    onChange(rows.map((row, i) => (i === index ? { ...row, ...next } : row)));
+  const seen = new Set<string>();
+  return (
+    <div className="space-y-3 px-6 py-5">
+      {missing && <Alert>{t("gwUnitRatesRequired")}</Alert>}
+      <p className="text-base text-kumo-subtle">{t("gwUnitRatesHint")}</p>
+      <DataTable caption={t("gwUnitRates")} className="min-w-[48rem]">
+        <DataTable.Header>
+          <DataTable.Row>
+            <DataTable.Head>{t("gwUnitRateUnit")}</DataTable.Head>
+            <DataTable.Head>{t("gwUnitRateResolution")}</DataTable.Head>
+            <DataTable.Head>{t("gwUnitRateAudio")}</DataTable.Head>
+            <DataTable.Head>{t("gwUnitRateVariant")}</DataTable.Head>
+            <DataTable.Head>{t("gwOfficialPrice")}</DataTable.Head>
+            <DataTable.Head className="text-right">{t("gwPublicPrice")}</DataTable.Head>
+            <DataTable.Head />
+          </DataTable.Row>
+        </DataTable.Header>
+        <DataTable.Body>
+          {rows.map((row, index) => {
+            const key = unitRowKey(row);
+            const duplicate = seen.has(key);
+            seen.add(key);
+            const badRate = !DECIMAL_RATE.test(row.rate_usd_per_unit);
+            const shown = multiplyRate(row.rate_usd_per_unit, multiplier ?? 10_000);
+            return (
+              <DataTable.Row key={index}>
+                <DataTable.Cell>
+                  <Select
+                    aria-label={t("gwUnitRateUnit")}
+                    value={row.unit}
+                    onValueChange={(v) =>
+                      patch(index, { unit: v as GatewayStaffTypes.ModelPriceUnitRateUnit })
+                    }
+                    items={UNIT_CHOICES.map((v) => ({
+                      value: v,
+                      label: t(UNIT_LABEL[v]),
+                    }))}
+                  />
+                </DataTable.Cell>
+                <DataTable.Cell>
+                  <Input
+                    aria-label={t("gwUnitRateResolution")}
+                    className="max-w-32 font-mono"
+                    placeholder={t("gwUnitAxisAny")}
+                    value={row.resolution ?? ""}
+                    onChange={(e) => patch(index, { resolution: e.target.value })}
+                  />
+                </DataTable.Cell>
+                <DataTable.Cell>
+                  <Select
+                    aria-label={t("gwUnitRateAudio")}
+                    value={row.audio ?? ""}
+                    onValueChange={(v) =>
+                      patch(index, { audio: v as GatewayStaffTypes.ModelPriceUnitRateAudio })
+                    }
+                    items={AUDIO_AXIS_CHOICES.map((v) => ({
+                      value: v,
+                      label: t(
+                        v === "on"
+                          ? "gwUnitAudioOn"
+                          : v === "off"
+                            ? "gwUnitAudioOff"
+                            : "gwUnitAxisAny",
+                      ),
+                    }))}
+                  />
+                </DataTable.Cell>
+                <DataTable.Cell>
+                  {/* The axis an image rate varies on where a video rate uses
+                      audio: the quality tier the upstream sells. Without a
+                      column for it, two rows of one card look identical and
+                      carry different numbers. */}
+                  <Input
+                    aria-label={t("gwUnitRateVariant")}
+                    className="max-w-32 font-mono"
+                    placeholder={t("gwUnitAxisAny")}
+                    value={row.variant ?? ""}
+                    onChange={(e) => patch(index, { variant: e.target.value })}
+                  />
+                </DataTable.Cell>
+                <DataTable.Cell>
+                  <div className="relative max-w-40">
+                    <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-kumo-subtle">
+                      $
+                    </span>
+                    <Input
+                      id={`unit-rate-${index}`}
+                      aria-label={t("gwOfficialPrice")}
+                      aria-invalid={badRate || duplicate}
+                      className="pl-7 font-mono"
+                      inputMode="decimal"
+                      value={row.rate_usd_per_unit}
+                      onChange={(e) => patch(index, { rate_usd_per_unit: e.target.value })}
+                    />
+                  </div>
+                  {duplicate && (
+                    <p className="mt-1 text-base text-kumo-danger">{t("gwUnitRateDuplicate")}</p>
+                  )}
+                </DataTable.Cell>
+                <DataTable.Cell className="text-right font-mono font-semibold">
+                  {billingMode === "free" ? "$0" : shown === "—" ? "—" : `$${shown}`}
+                </DataTable.Cell>
+                <DataTable.Cell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onChange(rows.filter((_, i) => i !== index))}
+                  >
+                    {t("remove")}
+                  </Button>
+                </DataTable.Cell>
+              </DataTable.Row>
+            );
+          })}
+        </DataTable.Body>
+      </DataTable>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() =>
+          // A new row starts flat: one price, both axes blank, matching any
+          // request. That is what a model with a single per-second price
+          // actually is, and it is the commonest card there is.
+          onChange([
+            ...rows,
+            { unit: "second", resolution: "", audio: "", variant: "", rate_usd_per_unit: "" },
+          ])
+        }
+      >
+        {t("gwUnitRateAdd")}
+      </Button>
+    </div>
+  );
+}
+
 // A dimension row is identified by all four of its axes. Leaving the context
 // band out of the key would report two bands of one bucket as a duplicate,
 // which is exactly the configuration long-context pricing is made of.
@@ -1240,13 +1556,16 @@ function AdvancedRatesEditor({
     cache_write: "Cache Write",
     audio_input: t("gwAudioInput"),
     audio_output: t("gwAudioOutput"),
+    image_input: t("gwImageInput"),
   };
   return (
     <div className="space-y-3">
       <p className="text-base text-kumo-subtle">{t("gwAdvancedPricingHint")}</p>
       <p className="text-base text-kumo-subtle">{t("gwMinInputTokensHint")}</p>
       {rows.map((row, index) => {
-        const inheritedKey = row.bucket.replace("audio_", "") as RateKey;
+        // A modality bucket inherits the base rate it is a slice of, which is what
+        // it falls back to when no rate is configured for it.
+        const inheritedKey = row.bucket.replace(/^(audio|image)_/, "") as RateKey;
         const inherited = inheritedKey in baseRates ? baseRates[inheritedKey] : null;
         const dimensionKey = dimensionRowKey(row);
         const duplicate =

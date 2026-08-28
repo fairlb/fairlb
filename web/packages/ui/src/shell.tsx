@@ -22,8 +22,9 @@ import { useTheme, type Theme } from "./theme";
  * wrong way round — the alignment was the cost of the strip, not a reason for
  * it. The constant that pinned the two heights together, and the token behind
  * it, went with the bar. On a mobile viewport the sidebar is an off-canvas
- * sheet, so a bar does remain there, holding the one thing the sheet cannot:
- * the control that opens it.
+ * sheet, so a bar does remain there, holding the two things the sheet cannot
+ * while it is closed: the control that opens it, and the name of the scope the
+ * page belongs to (`scopeLabel`).
  *
  * Navigation items are assembled by each application; the shell only fixes the
  * skeleton, so the applications share a structure.
@@ -67,6 +68,28 @@ export type AppShellProps = {
    * whose trigger is one); the shell supplies the surrounding menu list.
    */
   scopeSwitcher?: ReactNode;
+  /**
+   * The plain name of that same scope, for the mobile bar.
+   *
+   * A string rather than a node, and deliberately not the switcher itself: the
+   * bar is 56px and the switcher is a two-line menu button that has to live
+   * inside a `Sidebar.Menu`. What the bar owes the reader is the *answer*, not
+   * the control.
+   *
+   * It exists because the sidebar is an off-canvas sheet on a mobile viewport,
+   * so everything in it — the switcher included — is off-screen while the reader
+   * is looking at the page. Before this, the bar held the trigger and a second
+   * copy of the brand, and a console page said nothing at all about which
+   * organization's keys or invoices were on screen. That gap was inherited, not
+   * chosen: ADR-0061 declined to give the console breadcrumbs partly because
+   * "the mobile bar still carries the switcher chip showing the org name", and
+   * ADR-0202 later moved that chip into the rail without revisiting the
+   * sentence that depended on it.
+   *
+   * Applications with a single scope (the operations consoles) and the console's
+   * own global pages leave it unset, and the bar keeps the brand name.
+   */
+  scopeLabel?: string;
   /**
    * Sidebar navigation content; the groups and menus are assembled by the
    * application.
@@ -177,6 +200,7 @@ function ShellSidebarClose() {
 function ShellFrame({
   brand,
   scopeSwitcher,
+  scopeLabel,
   nav,
   account,
   banners,
@@ -297,7 +321,30 @@ function ShellFrame({
           // of the two is ever in the accessibility tree.
           <header className="flex h-14 shrink-0 items-center gap-3 border-b border-kumo-line bg-kumo-base px-3">
             <ShellSidebarTrigger />
-            <div className="flex min-w-0 items-center">{brand}</div>
+            <div
+              className={cn(
+                "flex min-w-0 items-center gap-2",
+                // When there is a scope to name, the brand shrinks to its mark.
+                // The product's name is on the first row of the sheet this bar
+                // opens; the organization's name is nowhere else on the screen,
+                // and only one of the two fits beside the trigger. The mark
+                // keeps the way home visible, and hiding the name by slot is
+                // what the collapsed rail already does, so both states clip the
+                // same element. `BrandMark` carries the full name as its
+                // accessible name either way.
+                scopeLabel && "[&_[data-slot=brand-name]]:hidden",
+              )}
+            >
+              {brand}
+              {scopeLabel && (
+                <span
+                  data-slot="shell-scope-label"
+                  className="min-w-0 truncate font-medium text-kumo-default"
+                >
+                  {scopeLabel}
+                </span>
+              )}
+            </div>
           </header>
         )}
         {/* Banners are the first thing in the content column and sit *outside*

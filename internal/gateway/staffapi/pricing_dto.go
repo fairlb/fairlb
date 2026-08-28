@@ -48,9 +48,20 @@ func modelPricingDTO(p pricing.ModelPricing) ModelPricingResource {
 	}
 	mode := ModelPricingResourceBillingMode(p.BillingMode)
 	out.BillingMode = &mode
-	out.OfficialRates = draftRatesDTO(p.Official)
+	family := PricingFamily(p.Family)
+	if family == "" {
+		family = PricingFamilyTokens
+	}
+	out.PricingFamily = &family
+	// A per-unit model's four token columns are explicit zeros, and rendering
+	// them would show a priced model as costing nothing per token -- which is
+	// true and useless, and which the interface would have to know to ignore.
+	// They are simply not part of its price.
+	if family != PricingFamilyUnits {
+		out.OfficialRates = draftRatesDTO(p.Official)
+		out.PublicRates = nanoRatesDTO(p.Published)
+	}
 	out.Adjustment = &PricingAdjustment{MultiplierBps: int(p.MultiplierBps)}
-	out.PublicRates = nanoRatesDTO(p.Published)
 	out.SourceName, out.SourceUrl = textPtr(p.SourceName), textPtr(p.SourceURL)
 	out.CheckedAt, out.UpdatedAt = timePtr(p.CheckedAt), timePtr(p.UpdatedAt)
 	out.Reason = textPtr(p.Reason)
@@ -76,6 +87,24 @@ func modelPricingDTO(p pricing.ModelPricing) ModelPricingResource {
 			})
 		}
 		out.ToolRates = &items
+	}
+	if len(p.UnitRates) > 0 {
+		items := make([]ModelPriceUnitRate, 0, len(p.UnitRates))
+		for _, u := range p.UnitRates {
+			resolution, variant := u.Resolution, u.Variant
+			audio := ModelPriceUnitRateAudio(u.Audio)
+			tier := ModelPriceUnitRateServiceTier(u.ServiceTier)
+			items = append(items, ModelPriceUnitRate{
+				Unit: ModelPriceUnitRateUnit(u.Unit),
+				// Rendered through the per-unit formatter, not the per-million
+				// one. The two agree numerically today and are still kept
+				// apart: see parseUSDPerUnitToNano.
+				RateUsdPerUnit: FormatNanoUSDPerUnit(u.NanoPerUnit),
+				Resolution:     &resolution, Audio: &audio,
+				Variant: &variant, ServiceTier: &tier,
+			})
+		}
+		out.UnitRates = &items
 	}
 	return out
 }
@@ -161,18 +190,23 @@ func modelPricingWriteFromDTO(in ModelPricingInput) (pricing.ModelPricingWrite, 
 		SourceURL:     valueOr(in.SourceUrl, ""),
 		Reason:        in.Reason,
 	}
+	if in.PricingFamily != nil {
+		out.Family = pricing.PricingFamily(*in.PricingFamily)
+	}
 	var err error
-	if out.Official.Input, err = parseRateInput(in.OfficialRates.Input); err != nil {
-		return pricing.ModelPricingWrite{}, err
-	}
-	if out.Official.Output, err = parseRateInput(in.OfficialRates.Output); err != nil {
-		return pricing.ModelPricingWrite{}, err
-	}
-	if out.Official.CacheRead, err = parseRateInput(in.OfficialRates.CacheRead); err != nil {
-		return pricing.ModelPricingWrite{}, err
-	}
-	if out.Official.CacheWrite, err = parseRateInput(in.OfficialRates.CacheWrite); err != nil {
-		return pricing.ModelPricingWrite{}, err
+	if in.OfficialRates != nil {
+		if out.Official.Input, err = parseRateInput(in.OfficialRates.Input); err != nil {
+			return pricing.ModelPricingWrite{}, err
+		}
+		if out.Official.Output, err = parseRateInput(in.OfficialRates.Output); err != nil {
+			return pricing.ModelPricingWrite{}, err
+		}
+		if out.Official.CacheRead, err = parseRateInput(in.OfficialRates.CacheRead); err != nil {
+			return pricing.ModelPricingWrite{}, err
+		}
+		if out.Official.CacheWrite, err = parseRateInput(in.OfficialRates.CacheWrite); err != nil {
+			return pricing.ModelPricingWrite{}, err
+		}
 	}
 	if in.AcknowledgedRisks != nil {
 		for _, c := range *in.AcknowledgedRisks {
@@ -193,7 +227,7 @@ func modelPricingWriteFromDTO(in ModelPricingInput) (pricing.ModelPricingWrite, 
 			}
 			items = append(items, pricing.DimensionRateInput{
 				Bucket:         pricing.Bucket(bucket),
-				ServiceTier:    string(valueOr(d.ServiceTier, Standard)),
+				ServiceTier:    string(valueOr(d.ServiceTier, ModelPriceDimensionRateServiceTierStandard)),
 				Variant:        valueOr(d.Variant, ""),
 				MinInputTokens: valueOr(d.MinInputTokens, 0),
 				NanoPerMTok:    nano,
@@ -211,6 +245,28 @@ func modelPricingWriteFromDTO(in ModelPricingInput) (pricing.ModelPricingWrite, 
 			items = append(items, pricing.ToolRateInput{Tool: r.Tool, NanoPerCall: nano})
 		}
 		out.ToolRates = &items
+	}
+	if in.UnitRates != nil {
+		items := make([]pricing.UnitRateInput, 0, len(*in.UnitRates))
+		for _, u := range *in.UnitRates {
+			nano, pErr := parseUSDPerUnitToNano(u.RateUsdPerUnit)
+			if pErr != nil {
+				return pricing.ModelPricingWrite{}, fmt.Errorf("%w: %v", ErrPricingInvalid, pErr)
+			}
+			items = append(items, pricing.UnitRateInput{
+				Unit:        string(u.Unit),
+				Resolution:  valueOr(u.Resolution, ""),
+				Audio:       string(valueOr(u.Audio, AudioAxisAny)),
+				Variant:     valueOr(u.Variant, ""),
+				ServiceTier: string(valueOr(u.ServiceTier, ModelPriceUnitRateServiceTierStandard)),
+				NanoPerUnit: nano,
+			})
+		}
+		// Non-nil replaces the whole card, nil leaves it alone -- the same
+		// rule the two groups above follow. An empty non-nil slice is
+		// therefore "remove them all", which the save path refuses on a paid
+		// per-unit model rather than writing a model nothing can charge.
+		out.UnitRates = &items
 	}
 	return out, nil
 }

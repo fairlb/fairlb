@@ -32,8 +32,8 @@ Four things in that file worth knowing before you edit it:
 - **`SECRET_KEY` is deliberately unset** and `/data` is a named volume; see the
   next section for why that combination and not the other one.
 - **Settings live in [`.env.example`](../.env.example)** — copy it to `.env` and
-  uncomment what you need. `PORT` and `FAIRLB_IMAGE` in there are read by
-  compose itself rather than by the gateway, which is why they do not appear in
+  uncomment what you need. `PORT` in there is read by compose itself rather
+  than by the gateway, which is why it does not appear in
   [configuration.md](configuration.md).
 
 ## The master key, and why the volume is not optional

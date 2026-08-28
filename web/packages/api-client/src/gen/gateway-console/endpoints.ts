@@ -29,6 +29,7 @@ import type {
 
 import type {
   CreateOrgProviderKeyBody,
+  DeleteVideoJob200,
   ExportLogsCSVParams,
   ExportUsageCSVParams,
   GetUsageParams,
@@ -37,12 +38,16 @@ import type {
   ListOrgProviderKeysParams,
   ListRequestLogs200,
   ListRequestLogsParams,
+  ListVideoJobs200,
+  ListVideoJobsParams,
   OrgProviderKey,
   OrgProviderKeyTestResult,
+  Problem,
   ProblemResponse,
   RequestLogDetail,
   TestOrgProviderKeyBody,
   UsageReport,
+  VideoJob,
 } from "./endpoints.schemas";
 
 import { customFetch } from "../../mutator";
@@ -1342,3 +1347,610 @@ export const useTestOrgProviderKey = <TError = ProblemResponse, TContext = unkno
 > => {
   return useMutation(getTestOrgProviderKeyMutationOptions(options), queryClient);
 };
+
+export const getListVideoJobsUrl = (orgId: string, params?: ListVideoJobsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/orgs/${orgId}/videos?${stringifiedParams}`
+    : `/api/v1/orgs/${orgId}/videos`;
+};
+
+/**
+ * The organization's own video jobs, newest first. Every member can see the
+ * operational facts — what was asked for, what came back, why it failed; for
+ * a caller without the financial read capability `charged_nano` is 0 and
+ * `charged_currency` is omitted, the same rule the request log applies.
+ *
+ * Failed jobs are listed, not hidden. A content refusal is the ordinary
+ * outcome on this plane rather than an edge case, and "why did my video
+ * fail" has to have an answer somewhere.
+ * @summary Video jobs, filterable and cursor-paginated
+ */
+export const listVideoJobs = async (
+  orgId: string,
+  params?: ListVideoJobsParams,
+  options?: RequestInit,
+): Promise<ListVideoJobs200> => {
+  return customFetch<ListVideoJobs200>(getListVideoJobsUrl(orgId, params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListVideoJobsQueryKey = (orgId: string, params?: ListVideoJobsParams) => {
+  return [`/api/v1/orgs/${orgId}/videos`, ...(params ? [params] : [])] as const;
+};
+
+export const getListVideoJobsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listVideoJobs>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  params?: ListVideoJobsParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listVideoJobs>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListVideoJobsQueryKey(orgId, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listVideoJobs>>> = ({ signal }) =>
+    listVideoJobs(orgId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: orgId !== null && orgId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof listVideoJobs>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type ListVideoJobsQueryResult = NonNullable<Awaited<ReturnType<typeof listVideoJobs>>>;
+export type ListVideoJobsQueryError = ProblemResponse;
+
+export function useListVideoJobs<
+  TData = Awaited<ReturnType<typeof listVideoJobs>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  params: undefined | ListVideoJobsParams,
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof listVideoJobs>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listVideoJobs>>,
+          TError,
+          Awaited<ReturnType<typeof listVideoJobs>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListVideoJobs<
+  TData = Awaited<ReturnType<typeof listVideoJobs>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  params?: ListVideoJobsParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listVideoJobs>>, TError, TData>> &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listVideoJobs>>,
+          TError,
+          Awaited<ReturnType<typeof listVideoJobs>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListVideoJobs<
+  TData = Awaited<ReturnType<typeof listVideoJobs>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  params?: ListVideoJobsParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listVideoJobs>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Video jobs, filterable and cursor-paginated
+ */
+
+export function useListVideoJobs<
+  TData = Awaited<ReturnType<typeof listVideoJobs>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  params?: ListVideoJobsParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listVideoJobs>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getListVideoJobsQueryOptions(orgId, params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getGetVideoJobUrl = (orgId: string, videoId: string) => {
+  return `/api/v1/orgs/${orgId}/videos/${videoId}`;
+};
+
+/**
+ * A pure read. It never asks the upstream anything: letting a console page
+ * drive polling would make an open browser tab an amplifier pointed at the
+ * vendor. The reconciler is what advances a job.
+ * @summary One video job
+ */
+export const getVideoJob = async (
+  orgId: string,
+  videoId: string,
+  options?: RequestInit,
+): Promise<VideoJob> => {
+  return customFetch<VideoJob>(getGetVideoJobUrl(orgId, videoId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetVideoJobQueryKey = (orgId: string, videoId: string) => {
+  return [`/api/v1/orgs/${orgId}/videos/${videoId}`] as const;
+};
+
+export const getGetVideoJobQueryOptions = <
+  TData = Awaited<ReturnType<typeof getVideoJob>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJob>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetVideoJobQueryKey(orgId, videoId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getVideoJob>>> = ({ signal }) =>
+    getVideoJob(orgId, videoId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: orgId !== null && orgId !== undefined && videoId !== null && videoId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getVideoJob>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type GetVideoJobQueryResult = NonNullable<Awaited<ReturnType<typeof getVideoJob>>>;
+export type GetVideoJobQueryError = ProblemResponse;
+
+export function useGetVideoJob<
+  TData = Awaited<ReturnType<typeof getVideoJob>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJob>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getVideoJob>>,
+          TError,
+          Awaited<ReturnType<typeof getVideoJob>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetVideoJob<
+  TData = Awaited<ReturnType<typeof getVideoJob>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJob>>, TError, TData>> &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getVideoJob>>,
+          TError,
+          Awaited<ReturnType<typeof getVideoJob>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetVideoJob<
+  TData = Awaited<ReturnType<typeof getVideoJob>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJob>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary One video job
+ */
+
+export function useGetVideoJob<
+  TData = Awaited<ReturnType<typeof getVideoJob>>,
+  TError = ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJob>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetVideoJobQueryOptions(orgId, videoId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getDeleteVideoJobUrl = (orgId: string, videoId: string) => {
+  return `/api/v1/orgs/${orgId}/videos/${videoId}`;
+};
+
+/**
+ * Deletes what this deployment holds. It does not promise the upstream also
+ * forgets, and claiming that would be a promise it cannot keep.
+ *
+ * Refused while the job is still running: removing the row would strand the
+ * reservation until a sweeper reached it hours later, and no usage row would
+ * ever be written while the upstream carried on generating a clip this
+ * deployment is billed for. Cancel it first.
+ * @summary Delete a finished job and the video it holds
+ */
+export const deleteVideoJob = async (
+  orgId: string,
+  videoId: string,
+  options?: RequestInit,
+): Promise<DeleteVideoJob200> => {
+  return customFetch<DeleteVideoJob200>(getDeleteVideoJobUrl(orgId, videoId), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteVideoJobMutationOptions = <
+  TError = ProblemResponse,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteVideoJob>>,
+    TError,
+    { orgId: string; videoId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteVideoJob>>,
+  TError,
+  { orgId: string; videoId: string },
+  TContext
+> => {
+  const mutationKey = ["deleteVideoJob"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteVideoJob>>,
+    { orgId: string; videoId: string }
+  > = (props) => {
+    const { orgId, videoId } = props ?? {};
+
+    return deleteVideoJob(orgId, videoId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteVideoJobMutationResult = NonNullable<Awaited<ReturnType<typeof deleteVideoJob>>>;
+
+export type DeleteVideoJobMutationError = ProblemResponse;
+
+/**
+ * @summary Delete a finished job and the video it holds
+ */
+export const useDeleteVideoJob = <TError = ProblemResponse, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof deleteVideoJob>>,
+      TError,
+      { orgId: string; videoId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof deleteVideoJob>>,
+  TError,
+  { orgId: string; videoId: string },
+  TContext
+> => {
+  return useMutation(getDeleteVideoJobMutationOptions(options), queryClient);
+};
+
+export const getCancelVideoJobUrl = (orgId: string, videoId: string) => {
+  return `/api/v1/orgs/${orgId}/videos/${videoId}/cancel`;
+};
+
+/**
+ * A cancelled job is never charged. That is a commercial commitment rather
+ * than a technical consequence, and a commitment nobody can reach is worth
+ * less than none — which is why this is here and not only on the data plane.
+ *
+ * How far a job can be stopped is a declared per-model capability, not a
+ * universal verb: the vendors range from a real cancel, through
+ * cancel-while-queued-only, to none at all. A model that cannot be stopped
+ * answers `gateway.job_not_cancelable` and says so, rather than reporting a
+ * success that did nothing. Read `cancel` on the job to know before asking.
+ *
+ * The upstream's own verdict decides. A vendor refusing because generation
+ * has already begun answers over a perfectly healthy connection, and calling
+ * the job cancelled anyway would void the hold while the clip is still being
+ * made and billed to this deployment.
+ * @summary Stop a running job; nothing is charged for it
+ */
+export const cancelVideoJob = async (
+  orgId: string,
+  videoId: string,
+  options?: RequestInit,
+): Promise<VideoJob> => {
+  return customFetch<VideoJob>(getCancelVideoJobUrl(orgId, videoId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getCancelVideoJobMutationOptions = <
+  TError = ProblemResponse,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelVideoJob>>,
+    TError,
+    { orgId: string; videoId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof cancelVideoJob>>,
+  TError,
+  { orgId: string; videoId: string },
+  TContext
+> => {
+  const mutationKey = ["cancelVideoJob"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof cancelVideoJob>>,
+    { orgId: string; videoId: string }
+  > = (props) => {
+    const { orgId, videoId } = props ?? {};
+
+    return cancelVideoJob(orgId, videoId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CancelVideoJobMutationResult = NonNullable<Awaited<ReturnType<typeof cancelVideoJob>>>;
+
+export type CancelVideoJobMutationError = ProblemResponse;
+
+/**
+ * @summary Stop a running job; nothing is charged for it
+ */
+export const useCancelVideoJob = <TError = ProblemResponse, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof cancelVideoJob>>,
+      TError,
+      { orgId: string; videoId: string },
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof cancelVideoJob>>,
+  TError,
+  { orgId: string; videoId: string },
+  TContext
+> => {
+  return useMutation(getCancelVideoJobMutationOptions(options), queryClient);
+};
+
+export const getGetVideoJobContentUrl = (orgId: string, videoId: string) => {
+  return `/api/v1/orgs/${orgId}/videos/${videoId}/content`;
+};
+
+/**
+ * The bytes come from this deployment, never as a redirect. An upstream URL
+ * names the vendor, often carries its credential, and is one this deployment
+ * can neither renew nor revoke.
+ *
+ * Past its retention window a video is gone, and that is a normal ending
+ * rather than a fault: it answers 410, which the console shows as "no longer
+ * kept" instead of an error.
+ * @summary The video itself
+ */
+export const getVideoJobContent = async (
+  orgId: string,
+  videoId: string,
+  options?: RequestInit,
+): Promise<Blob> => {
+  return customFetch<Blob>(getGetVideoJobContentUrl(orgId, videoId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetVideoJobContentQueryKey = (orgId: string, videoId: string) => {
+  return [`/api/v1/orgs/${orgId}/videos/${videoId}/content`] as const;
+};
+
+export const getGetVideoJobContentQueryOptions = <
+  TData = Awaited<ReturnType<typeof getVideoJobContent>>,
+  TError = Problem | ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJobContent>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetVideoJobContentQueryKey(orgId, videoId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getVideoJobContent>>> = ({ signal }) =>
+    getVideoJobContent(orgId, videoId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: orgId !== null && orgId !== undefined && videoId !== null && videoId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getVideoJobContent>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type GetVideoJobContentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getVideoJobContent>>
+>;
+export type GetVideoJobContentQueryError = Problem | ProblemResponse;
+
+export function useGetVideoJobContent<
+  TData = Awaited<ReturnType<typeof getVideoJobContent>>,
+  TError = Problem | ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJobContent>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getVideoJobContent>>,
+          TError,
+          Awaited<ReturnType<typeof getVideoJobContent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetVideoJobContent<
+  TData = Awaited<ReturnType<typeof getVideoJobContent>>,
+  TError = Problem | ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getVideoJobContent>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getVideoJobContent>>,
+          TError,
+          Awaited<ReturnType<typeof getVideoJobContent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetVideoJobContent<
+  TData = Awaited<ReturnType<typeof getVideoJobContent>>,
+  TError = Problem | ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJobContent>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary The video itself
+ */
+
+export function useGetVideoJobContent<
+  TData = Awaited<ReturnType<typeof getVideoJobContent>>,
+  TError = Problem | ProblemResponse,
+>(
+  orgId: string,
+  videoId: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getVideoJobContent>>, TError, TData>>;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetVideoJobContentQueryOptions(orgId, videoId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}

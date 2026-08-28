@@ -112,7 +112,12 @@ CREATE TABLE providers (
     -- Not redundant with the column type: this is what rejects the empty array.
     CONSTRAINT providers_protocols_check CHECK (
         cardinality(protocols) > 0
-        AND protocols <@ ARRAY['openai', 'anthropic', 'gemini']::text[]
+        -- `video` is not a wire dialect like the other three: it is the video
+        -- job plane, on which the vendor column selects the parameter mapper
+        -- (ADR-0219). It sits here because candidate resolution filters routes
+        -- by `protocol = ANY (providers.protocols)`, and a surface that names
+        -- no protocol has nothing to filter on.
+        AND protocols <@ ARRAY['openai', 'anthropic', 'gemini', 'video']::text[]
     )
 );
 
@@ -174,6 +179,40 @@ ALTER TABLE org_provider_keys ENABLE ROW LEVEL SECURITY;
 CREATE POLICY org_provider_keys_isolation ON org_provider_keys
     USING (org_id = current_setting('app.org_id')::uuid);
 
+-- The last time somebody asked this provider what it serves, and what it said.
+--
+-- This is an observation, not a truth, in exactly the sense model_route_probes
+-- is: nothing on the data plane reads it, and a stale row is a stale row rather
+-- than a wrong configuration. It exists because asking costs real money on a
+-- real upstream, and the answer used to live only in a component's state --
+-- so leaving the page, or reloading it, meant paying again to learn the same
+-- thing. It also gives the model side of the wiring editor something better
+-- than a guess when it needs the name a given provider uses.
+--
+-- One row per provider, in its own table rather than as columns on providers:
+-- that row is joined on the data plane, and a catalogue of up to 500 entries
+-- has no business hanging off it.
+--
+-- No row-level security, the same posture as providers itself: this is
+-- platform configuration, reachable only through the staff API.
+CREATE TABLE provider_discoveries (
+    provider_id uuid PRIMARY KEY REFERENCES providers (id) ON DELETE CASCADE,
+    checked_at  timestamptz NOT NULL,
+    -- Two bits, deliberately separate. ok says the fetch reached a conclusion;
+    -- complete says the conclusion covers everything the upstream has. A reader
+    -- that only looks at ok reads "all I saw" as "all there is", and then every
+    -- locally configured route past the cap gets shown as withdrawn upstream.
+    ok          boolean NOT NULL,
+    complete    boolean NOT NULL,
+    status_code integer,
+    message     text NOT NULL DEFAULT '',
+    -- The upstream model ids as reported, as a JSON array of strings. The local
+    -- classification (routed / mappable / unpriced / unknown) is deliberately
+    -- not stored: it is a fact about the catalog, which changes without this
+    -- row changing, so it is recomputed on read.
+    models      jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(models) = 'array')
+);
+
 -- ===== Model catalog and routing =====
 
 -- The catalog callers see. This table carries no prices: the single source of
@@ -192,11 +231,49 @@ CREATE POLICY org_provider_keys_isolation ON org_provider_keys
 -- verified route behind it only gets the caller a 404.
 CREATE TABLE models (
     id                  uuid PRIMARY KEY DEFAULT uuidv7(),
-    slug                text NOT NULL UNIQUE,          -- e.g. "openai/gpt-5.4"
+    -- The catalog identity, and the name a client writes in a request:
+    -- `<creator>/<name>`, e.g. "openai/gpt-5.4". The creator is who trained the
+    -- model, never the provider carrying it -- one slug can be routed through
+    -- several vendors, so a vendor prefix would write the routing dimension
+    -- into the catalog key.
+    --
+    -- The shape lives here and nowhere else. It used to live only in prose,
+    -- and every write path let a bare upstream name through: a slug cannot be
+    -- changed once created, model lookup is an exact match with no fallback,
+    -- and `owned_by` is the segment before the first slash -- so one bare slug
+    -- is permanent, unreachable under its documented name, and creator-less in
+    -- the public catalog. A constraint here is the only place that binds all
+    -- of the writers at once; the Go side translates the violation rather than
+    -- restating the pattern.
+    slug                text NOT NULL UNIQUE
+                        CONSTRAINT models_slug_shape
+                        CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*/[a-z0-9]+([._-][a-z0-9]+)*$'),
     display_name        text NOT NULL DEFAULT '',
     context_window      integer NOT NULL DEFAULT 0,
     max_output_tokens   integer NOT NULL DEFAULT 0,    -- the output cap a pre-authorization estimate assumes
     capabilities        jsonb NOT NULL DEFAULT '{}',
+    -- What this model produces. It is the modality axis, and it is the one
+    -- thing about a model that is declared rather than observed (ADR-0226).
+    --
+    -- ADR-0209 deleted `models.protocol` and `model_routes.endpoints` because
+    -- both restated *reachability*, which drifts the moment an upstream changes
+    -- and therefore has to be probed. A modality is not reachability: gpt-5.4
+    -- produces text and Nano Banana produces images for as long as either
+    -- exists, so there is nothing here that can drift. It is also the one thing
+    -- no probe can answer -- reaching an endpoint says nothing about whether
+    -- the bytes coming back are words or pixels.
+    --
+    -- An array, not a single value, because a model may genuinely produce more
+    -- than one: Gemini's image models return text and image parts in the same
+    -- response, and a single-valued column would force a choice between two
+    -- true answers.
+    --
+    -- The *input* modalities stay in `capabilities` (ADR-0070), which
+    -- deliberately carries no fixed enum.
+    output_modalities   text[] NOT NULL DEFAULT '{text}' CHECK (
+                            cardinality(output_modalities) > 0
+                            AND output_modalities <@ ARRAY['text', 'image', 'video']::text[]
+                        ),
     visibility          text NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'beta', 'hidden')),
     enabled             boolean NOT NULL DEFAULT true,
     metadata            jsonb NOT NULL DEFAULT '{}',
@@ -244,8 +321,51 @@ CREATE TABLE model_routes (
     -- rather than one column per flag, because each flag is read in one or two
     -- places and adding a column for it would cost more than it explains.
     quirks            jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(quirks) = 'object'),
+    -- What this deployment of a video model accepts: durations, resolutions,
+    -- aspect ratios, whether it can produce audio, whether it can be cancelled.
+    -- Empty for every non-video route.
+    --
+    -- This is the one place configuration deliberately restates the upstream,
+    -- which ADR-0209 otherwise forbids -- see ADR-0221 for the argument. The
+    -- short version: "does this model accept a 12-second clip" cannot be
+    -- observed without generating a 12-second clip, and the value space is
+    -- combinatorial, so it can only be declared or left unsaid. And unlike the
+    -- `endpoints` column that ADR-0209 deleted, neither direction of drift
+    -- produces a wrong bill: under-declaring refuses the request before any
+    -- money moves, and over-declaring ends in an upstream rejection whose hold
+    -- is voided.
+    --
+    -- It sits on the route rather than the model because one model carried by
+    -- two channels can accept different durations on each. Admission validates
+    -- against the union across candidate routes and then uses the envelope as
+    -- a candidate filter, the same way capacity and the breaker are filters.
+    -- Price does not vary by route, so this never moves the charge.
+    video_envelope    jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(video_envelope) = 'object'),
+    -- The most images one request to this route can come back with.
+    --
+    -- It is the image plane's whole envelope, and one integer rather than an
+    -- object because that is all there is to declare: the other two axes a
+    -- per-image rate varies on -- size and quality tier -- are already the rate
+    -- card's own, and a value it does not price is refused there.
+    --
+    -- Declared for ADR-0221's reason, and the reason is sharper here than on
+    -- video: "how many images can one request produce" cannot be observed
+    -- without paying for that many images. It sits on the route because two
+    -- channels carrying the same model can cap it differently.
+    --
+    -- What it is *for* is the hold. A per-image charge is settled from the
+    -- number of images the response actually contains, which is knowable only
+    -- afterwards, so the reservation has to be taken against the most a request
+    -- could produce. Without it the reservation is one image, the budget check
+    -- passes on the strength of one image, and an organization can spend past
+    -- its cap by however many the upstream chose to return.
+    --
+    -- NULL means one: the conservative reading, and what every one of these
+    -- endpoints does with a request that asks for no particular number.
+    max_images        integer,
     CONSTRAINT model_routes_caps_positive CHECK (
         coalesce(context_window, 1) > 0 AND coalesce(max_output_tokens, 1) > 0
+        AND coalesce(max_images, 1) > 0
     ),
     UNIQUE (model_id, provider_id, provider_model_id)
 );
@@ -257,6 +377,15 @@ CREATE INDEX model_routes_model_idx ON model_routes (model_id) WHERE enabled;
 CREATE TABLE resource_affinities (
     org_id               uuid NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
     protocol             text NOT NULL CHECK (protocol IN ('openai', 'gemini')),
+    -- Deliberately not widened for video jobs (ADR-0220). A video job carries an
+    -- outstanding hold, and this table's GC deletes every expired row
+    -- unconditionally, knowing nothing about settlement. And the primary key
+    -- below contains `upstream_id`, which a video job does not have when its
+    -- row must first exist: the row *is* the record that a hold was taken, so
+    -- it precedes the submit call. A key over a column that is not yet known is
+    -- not insertable, and the CHECK on that column refuses even an empty
+    -- placeholder. Video jobs carry the same five pin columns in their own
+    -- table instead.
     resource_type        text NOT NULL CHECK (resource_type IN ('response', 'interaction')),
     upstream_id          text NOT NULL CHECK (upstream_id <> '' AND length(upstream_id) <= 512),
     model_id             uuid NOT NULL REFERENCES models (id) ON DELETE CASCADE,
@@ -280,6 +409,192 @@ CREATE TRIGGER resource_affinities_updated_at BEFORE UPDATE ON resource_affiniti
 
 ALTER TABLE resource_affinities ENABLE ROW LEVEL SECURITY;
 CREATE POLICY resource_affinities_isolation ON resource_affinities
+    USING (org_id = current_setting('app.org_id')::uuid);
+
+
+CREATE SEQUENCE gateway_async_job_alias_seq START 1099511627776;
+
+-- ===== Asynchronous jobs: work that outlives the request that started it =====
+--
+-- The first retained resource this gateway *owns* rather than pins. A video
+-- generation returns a job id in seconds and an artifact minutes later, and the
+-- caller may never come back for it -- so the money cannot be settled on the
+-- goroutine that took the hold (ADR-0220).
+--
+-- `kind` is here rather than in a table name because the machinery is generic
+-- and already has two more callers waiting: background responses and background
+-- interactions, both refused in proxy/resource_handlers.go with the comment
+-- "until that worker exists".
+CREATE TABLE gateway_async_jobs (
+    id                  uuid PRIMARY KEY DEFAULT uuidv7(),
+    org_id              uuid NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+    -- Recorded as it was, no FK: settlement needs it at terminal time, which
+    -- can be long after the key was revoked.
+    api_key_id          uuid,
+    kind                text NOT NULL CHECK (kind IN ('video')),
+    -- The anchor. The hold was placed under this value and the usage row will
+    -- carry it. UNIQUE is possible here -- unlike usage_logs, which is
+    -- partitioned -- and it is the outer guard against a retried submit
+    -- becoming a second paid job.
+    request_id          text NOT NULL UNIQUE,
+    -- Supplied by the caller and required on submit. request_id is minted per
+    -- HTTP attempt, so it is unique by construction and can never catch a
+    -- retry; this is the value that can. The fingerprint is what makes "same
+    -- key, different request" answerable: replaying the first result for a
+    -- body that is not the one it was computed from would hand the caller
+    -- somebody else's video.
+    idempotency_key     text NOT NULL,
+    request_fingerprint text NOT NULL,
+
+    -- The pin: same five columns and the same one-credential rule as
+    -- resource_affinities. A job id means nothing on a different upstream
+    -- account, so it is never failed over after the upstream has one.
+    model_id            uuid NOT NULL REFERENCES models (id) ON DELETE CASCADE,
+    model_slug          text NOT NULL,          -- snapshotted; the usage row is written by slug
+    route_id            uuid REFERENCES model_routes (id) ON DELETE SET NULL,
+    provider_id         uuid REFERENCES providers (id) ON DELETE SET NULL,
+    provider_key_id     uuid REFERENCES provider_keys (id) ON DELETE SET NULL,
+    org_provider_key_id uuid REFERENCES org_provider_keys (id) ON DELETE SET NULL,
+    byok                boolean NOT NULL DEFAULT false,
+    CONSTRAINT gateway_async_jobs_one_credential_check CHECK (
+        NOT (provider_key_id IS NOT NULL AND org_provider_key_id IS NOT NULL)
+    ),
+
+    -- Empty until the upstream has accepted the submit. Not NULL-able, because
+    -- "not submitted yet" and "submitted and the id came back empty" are the
+    -- same recoverable state and splitting them buys nothing.
+    upstream_id         text NOT NULL DEFAULT '' CHECK (length(upstream_id) <= 512),
+
+    -- Two independent columns, deliberately (ADR-0220). `status` is what the
+    -- caller sees; `settlement_state` is what the money did. They come apart in
+    -- states that really happen: completed/held is a settlement transaction
+    -- that failed and awaits replay, completed/orphaned is a reservation the
+    -- sweeper reclaimed first, failed/voided is the ordinary refusal. Collapsed
+    -- into one column, the completed/held row is indistinguishable from a
+    -- settled one -- which is the path on which a finished job is charged
+    -- twice.
+    status              text NOT NULL CHECK (status IN (
+                            'queued', 'in_progress', 'completed', 'failed', 'canceled', 'expired'
+                        )),
+    settlement_state    text NOT NULL DEFAULT 'held' CHECK (settlement_state IN (
+                            'held', 'protected', 'settled', 'voided', 'orphaned'
+                        )),
+    -- The upstream's own status string, verbatim. Eight vendors spell success
+    -- eight ways; the normalisation into `status` happens in the mapper, and
+    -- this is what support reads when the normalisation is the thing in doubt.
+    upstream_status     text NOT NULL DEFAULT '',
+    progress            smallint NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+    error_code          text NOT NULL DEFAULT '',
+    -- Content-policy rejections land here verbatim. They are the common failure
+    -- mode for video, not an edge case, and rendering one as a bare code is a
+    -- guaranteed support ticket.
+    error_message       text NOT NULL DEFAULT '',
+
+    -- The normalised request, and the billable quantity vector derived from it.
+    -- Storing the vector means the charge can be recomputed without re-running
+    -- the vendor mapper.
+    params              jsonb NOT NULL CHECK (jsonb_typeof(params) = 'object'),
+    billing_units       jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(billing_units) = 'object'),
+
+    -- Recorded as it was, no FK: credit_holds is a Cloud table, and this one
+    -- ships in Community too.
+    hold_id             uuid,
+    hold_nano           bigint NOT NULL CHECK (hold_nano >= 0),
+    hold_expires_at     timestamptz,
+    charged_nano        bigint NOT NULL DEFAULT 0 CHECK (charged_nano >= 0),
+    charged_currency    text NOT NULL DEFAULT 'USD',
+    -- The full rate card, as usage_logs carries it: the row stays recomputable
+    -- on its own. usage_logs remains the billing record; this is a convenience
+    -- copy that expires with the job.
+    pricing_snapshot    jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(pricing_snapshot) = 'object'),
+
+    -- This model's own ceiling on how long a job may run, copied at creation.
+    -- The sweeper bounds a job by it rather than by one global constant: a
+    -- four-second clip and a long render are an order of magnitude apart, and a
+    -- single number either kills the second or lets the first linger.
+    max_job_seconds     integer NOT NULL CHECK (max_job_seconds > 0),
+    poll_attempts       integer NOT NULL DEFAULT 0 CHECK (poll_attempts >= 0),
+    -- Two consecutive upstream 404s are what turns a job into `expired`. One
+    -- cannot tell "gone" from "being rolled", the same reasoning the probe
+    -- table gives for `unsupported`.
+    not_found_count     smallint NOT NULL DEFAULT 0 CHECK (not_found_count >= 0),
+    next_poll_at        timestamptz,
+    last_polled_at      timestamptz,
+
+    artifact_key           text NOT NULL DEFAULT '',
+    artifact_bytes         bigint NOT NULL DEFAULT 0 CHECK (artifact_bytes >= 0),
+    artifact_content_type  text NOT NULL DEFAULT '',
+    artifact_fetched_at    timestamptz,
+    -- Whatever the upstream's poll gave us that addresses the finished bytes.
+    -- Usually a URL; on one vendor it is a file id that a second call turns
+    -- into a URL, which is why this is not named for either. Only that
+    -- vendor's mapper interprets it.
+    --
+    -- Never returned to a caller: it carries the upstream's identity and often
+    -- its credential, and it is a handle this gateway can neither renew nor
+    -- revoke (ADR-0222). It is here so the reconciler can fetch the bytes, and
+    -- so a deployment that takes no custody can fetch them again on read.
+    upstream_artifact_ref  text NOT NULL DEFAULT '',
+    upstream_artifact_expires_at timestamptz,
+
+    -- The same job as an integer, for the vendor compatibility surfaces whose
+    -- published schema types its identifier as int64. One of them does: its own
+    -- OpenAPI declares the file id an integer, so a UUID rendered there breaks
+    -- every generated client that parses the response into a typed model --
+    -- and "change one base URL" would stop being true for that vendor alone.
+    --
+    -- Filled for every job rather than only the ones created through such a
+    -- surface. A job that acquired an alias only when read a particular way
+    -- would change identity depending on which plane asked for it.
+    --
+    -- The sequence starts high rather than at one. A monotonic id counted from
+    -- zero tells anyone who receives one how many jobs this deployment has
+    -- ever run. What actually protects the row is that every read is narrowed
+    -- to the caller's organization, exactly as the UUID is; the starting value
+    -- only keeps the volume off the wire.
+    native_alias bigint NOT NULL UNIQUE DEFAULT nextval('gateway_async_job_alias_seq'),
+
+    end_user_id         text NOT NULL DEFAULT '',
+    -- Retention deadline for the row and its artifact together.
+    expires_at          timestamptz NOT NULL,
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    updated_at          timestamptz NOT NULL DEFAULT now(),
+    submitted_at        timestamptz,
+    terminal_at         timestamptz
+);
+
+-- One paid create per key per organization. Scoped to the org rather than
+-- global so two callers cannot collide on the same string, and it is a
+-- constraint rather than a check-then-insert because two concurrent retries
+-- would both pass the check.
+CREATE UNIQUE INDEX gateway_async_jobs_idempotency_idx
+    ON gateway_async_jobs (org_id, kind, idempotency_key);
+
+-- The reconciler's only scan.
+CREATE INDEX gateway_async_jobs_due_idx ON gateway_async_jobs (next_poll_at)
+    WHERE status IN ('queued', 'in_progress');
+-- The caller's list endpoint, keyset-ordered (ADR-0185/0195).
+CREATE INDEX gateway_async_jobs_org_idx ON gateway_async_jobs (org_id, created_at DESC, id DESC);
+CREATE INDEX gateway_async_jobs_expiry_idx ON gateway_async_jobs (expires_at);
+-- Terminal, but the money has not moved. This is the operator's repair queue,
+-- and it is an index rather than a report because a row sitting here is a
+-- customer either overcharged or not charged at all.
+CREATE INDEX gateway_async_jobs_stuck_money_idx ON gateway_async_jobs (terminal_at)
+    WHERE settlement_state IN ('held', 'protected')
+      AND status IN ('completed', 'failed', 'canceled', 'expired');
+-- FK columns, by the same criterion the rest of this file applies: the parent
+-- rows do get deleted, and this table grows with use.
+CREATE INDEX gateway_async_jobs_model_idx ON gateway_async_jobs (model_id);
+CREATE INDEX gateway_async_jobs_route_idx ON gateway_async_jobs (route_id);
+CREATE INDEX gateway_async_jobs_provider_idx ON gateway_async_jobs (provider_id);
+CREATE INDEX gateway_async_jobs_provider_key_idx ON gateway_async_jobs (provider_key_id);
+CREATE INDEX gateway_async_jobs_org_provider_key_idx ON gateway_async_jobs (org_provider_key_id);
+
+CREATE TRIGGER gateway_async_jobs_updated_at BEFORE UPDATE ON gateway_async_jobs
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+ALTER TABLE gateway_async_jobs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY gateway_async_jobs_isolation ON gateway_async_jobs
     USING (org_id = current_setting('app.org_id')::uuid);
 
 
@@ -322,8 +637,9 @@ CREATE TABLE usage_logs (
     surface                text NOT NULL CHECK (surface IN (
                                'chat_completions', 'messages', 'messages_count_tokens',
                                'responses', 'responses_compact', 'responses_resources', 'responses_input_tokens',
-                               'embeddings', 'images', 'generate_content', 'gemini_count_tokens',
-                               'gemini_embed_content', 'gemini_batch_embed_contents', 'gemini_interactions'
+                               'embeddings', 'images', 'images_edits', 'generate_content', 'gemini_count_tokens',
+                               'gemini_embed_content', 'gemini_batch_embed_contents', 'gemini_interactions',
+                               'video'
                            )),
     model_slug             text NOT NULL,
     provider_id            uuid,
@@ -381,10 +697,37 @@ CREATE TABLE usage_logs (
     -- reason as fx_rate: charged_nano must be recomputable from this row alone,
     -- without joining any configuration table.
     service_tier           text NOT NULL DEFAULT '',
-    -- These four are nullable on purpose: NULL means "not reported", which is
+    -- These six are nullable on purpose: NULL means "not reported", which is
     -- a different fact from a reported zero.
     tokens_audio_in        integer CHECK (tokens_audio_in IS NULL OR tokens_audio_in >= 0),
     tokens_audio_out       integer CHECK (tokens_audio_out IS NULL OR tokens_audio_out >= 0),
+    -- Image input tokens, the same shape as tokens_audio_in and a subset of
+    -- tokens_in for the same reason. Image models price them well above text
+    -- input, so folding them into the text count undercharges every image
+    -- request -- which is what happened while the upstream reported them and
+    -- nothing here had anywhere to put the number.
+    tokens_image_in        integer CHECK (tokens_image_in IS NULL OR tokens_image_in >= 0),
+    -- Image *output* tokens, the mirror of tokens_image_in on the other side
+    -- and a subset of tokens_out. It exists because the models that emit images
+    -- price that output separately from text output -- OpenAI lists an image
+    -- output token rate of its own, and Gemini charges a generated image as a
+    -- fixed block of output tokens at a rate well above its text output. With
+    -- nowhere to put the number they were both billed at the text output rate,
+    -- which undercharges every image a model generates.
+    tokens_image_out       integer CHECK (tokens_image_out IS NULL OR tokens_image_out >= 0),
+    -- How many billable units this request consumed, for a surface billed by
+    -- unit rather than by token: seconds of video, generations, or images.
+    --
+    -- Nullable on purpose, like the modality token columns above: NULL means
+    -- "this request is not billed by unit", which is a different fact from a
+    -- unit-billed request that consumed zero. Without it "how many seconds did
+    -- this organization generate" has no answer anywhere -- the quantities
+    -- would live only inside the price snapshot, which is a document rather
+    -- than a column and cannot be summed.
+    billed_units           integer CHECK (billed_units IS NULL OR billed_units >= 0),
+    billed_unit            text NOT NULL DEFAULT '' CHECK (
+                               billed_unit IN ('', 'second', 'call', 'image')
+                           ),
     tokens_cache_write_5m  integer CHECK (tokens_cache_write_5m IS NULL OR tokens_cache_write_5m >= 0),
     tokens_cache_write_1h  integer CHECK (tokens_cache_write_1h IS NULL OR tokens_cache_write_1h >= 0),
     -- The single source of truth for recomputing this charge later: the full
@@ -445,6 +788,24 @@ CREATE TABLE gateway_usage_rollups (
     tokens_reasoning       bigint NOT NULL DEFAULT 0,
     tokens_audio_in        bigint NOT NULL DEFAULT 0,
     tokens_audio_out       bigint NOT NULL DEFAULT 0,
+    tokens_image_in        bigint NOT NULL DEFAULT 0,
+    tokens_image_out       bigint NOT NULL DEFAULT 0,
+    -- One column per billing unit, never one column for all of them. Seconds of
+    -- video, prepaid generations and produced images are different dimensions,
+    -- and a single `billed_units` summing them produces a number that denotes
+    -- nothing -- the same reason seconds are not summed into the token counters
+    -- beside them.
+    --
+    -- Explicit columns rather than a jsonb map because the unit set is closed:
+    -- adding a billing unit should be a schema and contract change that fails
+    -- loudly, not a key that quietly appears. `billed_images` is that change
+    -- arriving for the first time, and it did fail loudly.
+    --
+    -- NOT NULL here while the source column is nullable: a rollup row is an
+    -- aggregate, and "nobody generated any video this hour" really is zero.
+    billed_seconds         bigint NOT NULL DEFAULT 0,
+    billed_calls           bigint NOT NULL DEFAULT 0,
+    billed_images          bigint NOT NULL DEFAULT 0,
     tokens_cache_write_5m  bigint NOT NULL DEFAULT 0,
     tokens_cache_write_1h  bigint NOT NULL DEFAULT 0,
     charged_nano           bigint NOT NULL DEFAULT 0,
@@ -820,11 +1181,12 @@ CREATE TABLE model_route_probes (
                    endpoint IN (
                        'chat', 'messages', 'messages_count_tokens',
                        'responses', 'responses_compact', 'responses_input_tokens',
-                       'embeddings', 'images', 'generate_content', 'gemini_count_tokens',
-                       'gemini_embed_content', 'gemini_batch_embed_contents', 'gemini_interactions'
+                       'embeddings', 'images', 'images_edits', 'generate_content', 'gemini_count_tokens',
+                       'gemini_embed_content', 'gemini_batch_embed_contents', 'gemini_interactions',
+                       'video'
                    )
                ),
-    protocol   text NOT NULL CHECK (protocol IN ('openai', 'anthropic', 'gemini')),
+    protocol   text NOT NULL CHECK (protocol IN ('openai', 'anthropic', 'gemini', 'video')),
     -- How this endpoint's verdict is reached: `auto` by the worker on its own,
     -- `manual` only when an operator asks (it costs money). Written by the
     -- seeder from the surface table in code, stored so that SQL -- the
@@ -838,6 +1200,23 @@ CREATE TABLE model_route_probes (
                    status IN ('unverified', 'ok', 'unsupported', 'failed')
                ),
     source     text NOT NULL DEFAULT 'probe' CHECK (source IN ('probe', 'operator')),
+    -- A probe is in flight. Deliberately a column and not a fifth member of
+    -- `status`: that column is the *verdict*, and a re-probe must not erase the
+    -- standing one. `model_published_endpoints` below selects `status = 'ok'`,
+    -- so a pending value living in `status` would drop the route out of the
+    -- catalogue for as long as the re-probe took -- the probe mechanism
+    -- injuring exactly what it exists to protect (ADR-0224).
+    --
+    -- "A probe is running" and "what the last one found" are orthogonal facts,
+    -- so they are orthogonal columns. Written when the job is enqueued, cleared
+    -- when any verdict lands, and swept clear when it has outlived every retry
+    -- a probe job can take -- otherwise a worker that died leaves the row
+    -- pending forever, and the operator can never ask again.
+    --
+    -- It matters most where a probe costs money and answers slowly: `images`
+    -- and `video` are both `manual` for that reason, and without this the
+    -- interface has no way to say "it is running, do not pay for it twice".
+    probe_enqueued_at timestamptz,
     checked_at timestamptz,
     latency_ms integer,
     status_code integer,
@@ -862,6 +1241,11 @@ CREATE INDEX model_route_probes_failed_idx ON model_route_probes (status)
 -- Only rows it can advance: automatically probed, not the operator's.
 CREATE INDEX model_route_probes_sweep_idx ON model_route_probes (status, checked_at)
     WHERE source <> 'operator' AND probe_mode = 'auto';
+
+-- The stuck-pending scan. Small by construction -- a row is only here while a
+-- probe is actually in flight -- and partial so that it stays that size.
+CREATE INDEX model_route_probes_pending_idx ON model_route_probes (probe_enqueued_at)
+    WHERE probe_enqueued_at IS NOT NULL;
 
 -- What the catalog publishes, stated once. Every reader of "which endpoints
 -- does this model serve" -- the public catalog, the staff listing, the Gemini
@@ -967,6 +1351,21 @@ CREATE INDEX IF NOT EXISTS orgs_created_at_id_desc_idx ON orgs (created_at DESC,
 CREATE TABLE model_pricing (
     model_id                            uuid PRIMARY KEY REFERENCES models (id) ON DELETE CASCADE,
     billing_mode                        text NOT NULL CHECK (billing_mode IN ('paid', 'free')),
+    -- Which family of rates actually charges this model (ADR-0220). `tokens`
+    -- is the four buckets below plus model_price_dimension_rates; `units` is
+    -- model_price_unit_rates, priced per second of output or per call.
+    --
+    -- It exists because a video model has no token price at all, and the
+    -- completeness constraint below used to make such a row unrepresentable:
+    -- four NOT NULLs plus "not all four may be zero" is exactly the shape of
+    -- "every model is billed per token".
+    --
+    -- The four columns stay NOT NULL for a `units` model and carry explicit
+    -- zeros. NULL means "unknown" throughout this schema and fails closed; a
+    -- video model's text rate is not unknown, it does not exist, and zero is
+    -- the honest spelling of that.
+    pricing_family                      text NOT NULL DEFAULT 'tokens'
+                                            CHECK (pricing_family IN ('tokens', 'units')),
     upstream_in_nano_per_mtok           bigint CHECK (upstream_in_nano_per_mtok BETWEEN 0 AND 92233720368547758),
     upstream_out_nano_per_mtok          bigint CHECK (upstream_out_nano_per_mtok BETWEEN 0 AND 92233720368547758),
     upstream_cache_read_nano_per_mtok   bigint CHECK (upstream_cache_read_nano_per_mtok BETWEEN 0 AND 92233720368547758),
@@ -996,7 +1395,17 @@ CREATE TABLE model_pricing (
         -- A free model must say so with billing_mode = 'free'. Allowing a
         -- 'paid' row with all four buckets at zero would make "deliberately
         -- free" and "price never filled in" the same state again.
+        --
+        -- A `units` model is exempt from that arm and not from the NOT NULLs:
+        -- its rates live in model_price_unit_rates, and "at least one unit rate
+        -- exists" is an invariant across two tables, which a CHECK cannot see.
+        -- It is therefore enforced twice elsewhere -- on the write path, and at
+        -- admission, where a model with no usable rate is refused with
+        -- ErrModelUnpriced rather than served at zero. Naming an invariant the
+        -- schema cannot hold is the point of this comment: an unenforceable
+        -- rule that nobody writes down is the one that rots.
         AND (billing_mode = 'free'
+             OR pricing_family = 'units'
              OR upstream_in_nano_per_mtok > 0
              OR upstream_out_nano_per_mtok > 0
              OR upstream_cache_read_nano_per_mtok > 0
@@ -1010,8 +1419,22 @@ CREATE TRIGGER model_pricing_updated_at BEFORE UPDATE ON model_pricing
 
 CREATE TABLE model_price_dimension_rates (
     model_id      uuid NOT NULL REFERENCES model_pricing (model_id) ON DELETE CASCADE,
+    -- The four base buckets plus the dimension buckets. A dimension bucket is a
+    -- subset of its base one -- audio and image input tokens are counted again
+    -- inside tokens_in, and image output tokens inside tokens_out -- so
+    -- charging it means subtracting it from the base count first, which
+    -- catalog.BuildCharge does in one place.
+    --
+    -- ("Dimension", not "modality": the modality axis is what a model produces
+    -- and lives on models.output_modalities. These are token dimensions inside
+    -- one request, and the two were called the same thing here for a while.)
+    --
+    -- A model with no rate here for a dimension falls back to the base
+    -- bucket's rate rather than to zero, so adding a bucket to this list
+    -- changes nothing until somebody prices it.
     bucket        text NOT NULL CHECK (
-                      bucket IN ('in', 'out', 'cache_read', 'cache_write', 'audio_in', 'audio_out')
+                      bucket IN ('in', 'out', 'cache_read', 'cache_write',
+                                 'audio_in', 'audio_out', 'image_in', 'image_out')
                   ),
     service_tier  text NOT NULL DEFAULT 'standard' CHECK (
                       service_tier IN ('standard', 'priority', 'batch')
@@ -1031,6 +1454,48 @@ CREATE TABLE model_price_dimension_rates (
     min_input_tokens integer NOT NULL DEFAULT 0 CHECK (min_input_tokens >= 0),
     nano_per_mtok bigint NOT NULL CHECK (nano_per_mtok BETWEEN 0 AND 92233720368547758),
     PRIMARY KEY (model_id, bucket, service_tier, variant, min_input_tokens)
+);
+
+-- ===== Per-unit rates: what a video second, or a generated image, costs =====
+--
+-- A separate family from model_price_dimension_rates, deliberately (ADR-0220).
+-- Two reasons, both hard:
+--
+--   * that table's rate column is `nano_per_mtok` and every reader divides by
+--     one million. Storing $0.10/second there means pre-multiplying by 1e6, and
+--     the first reader who does not know that convention is off by a factor of
+--     a million. The unit belongs in the schema, not in a convention.
+--   * its lookup falls back to the model's four base token rates. A video unit
+--     has no meaningful token fallback, and falling back to the input rate
+--     would bill a generated video at a text price. This family must fail
+--     closed instead: a unit with no rate is ErrUnitPriceMissing, never zero
+--     and never somebody else's rate.
+--
+-- `resolution`, `audio` and `variant` are the axes a per-unit rate varies on.
+-- A video rate varies on resolution and audio; an image rate varies on
+-- resolution (the requested size) and variant (the quality tier the upstream
+-- sells), and leaves `audio` empty. Empty means "this rate does not vary on
+-- that axis" and matches any request -- the opposite direction from the token
+-- table, which walks *down* to a base rate. A model with one flat per-unit
+-- price is one row with every axis empty.
+CREATE TABLE model_price_unit_rates (
+    model_id      uuid NOT NULL REFERENCES model_pricing (model_id) ON DELETE CASCADE,
+    -- `second` is per second of produced output. `image` is per produced image.
+    -- `call` is per generation regardless of how many outputs it produced, for
+    -- upstreams that sell prepaid generation packs rather than time.
+    --
+    -- `image` and `call` are kept apart because they count different things: a
+    -- request for four images is four units on the first and one on the second,
+    -- and collapsing them would silently quarter or quadruple a bill.
+    unit          text NOT NULL CHECK (unit IN ('second', 'call', 'image')),
+    resolution    text NOT NULL DEFAULT '',
+    audio         text NOT NULL DEFAULT '' CHECK (audio IN ('', 'on', 'off')),
+    variant       text NOT NULL DEFAULT '',
+    service_tier  text NOT NULL DEFAULT 'standard' CHECK (
+                      service_tier IN ('standard', 'priority', 'batch')
+                  ),
+    nano_per_unit bigint NOT NULL CHECK (nano_per_unit BETWEEN 0 AND 92233720368547758),
+    PRIMARY KEY (model_id, unit, resolution, audio, variant, service_tier)
 );
 
 CREATE TABLE model_price_tool_rates (

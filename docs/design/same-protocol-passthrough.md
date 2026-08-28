@@ -139,12 +139,43 @@ different upstream account where the identifier could mean something else.
 ## Deliberately separate products
 
 Realtime/audio, Gemini Live, Responses WebSocket, Files, Vector Stores,
-Containers, asynchronous Batch, video and top-level MCP/A2A are not inference
+Containers, asynchronous Batch and top-level MCP/A2A are not inference
 surface aliases. They require different connection lifetimes, retained
 resources, settlement and security policies, so they stay out of this data
 plane until each has an explicit product contract. Native requests may still
 carry function calls, structured output, multimodal content and remote MCP tool
 declarations unchanged.
+
+Video was on that list and is no longer. It did **not** move into this data
+plane. It got the explicit product contract the sentence above asks for, and
+that contract is a second plane of its own -- submit a job, poll it, fetch the
+artifact -- with its own lifetime, its own billing unit and its own delivery
+model. The decision and its bound are ADR-0218; the vendor-mapping half is
+ADR-0219 (`docs/adr/` in the repository root).
+
+The distinction matters because the rule at the top of this document is easy to
+misread as a rule about the company. It is not. It is a rule about **a plane on
+which the caller has already chosen a dialect**. An OpenAI-shaped request names
+OpenAI's fields; converting it into Anthropic's fields would be the gateway
+deciding what the caller meant, and a wrong decision about a token count is a
+wrong bill. On the video plane the caller chooses this gateway's own dialect,
+because no video vendor publishes a protocol the others speak -- there is no
+second dialect to be unfaithful to. Normalising duration, resolution, aspect
+ratio and audio across vendors is not a translation between two things the
+caller could have written; it is the only thing the caller can write.
+
+The bound on that exception is stated here so it cannot creep:
+
+> **A plane may normalise only what its own contract defines. Nothing on the
+> inference data plane may be translated into anything, ever.**
+
+So the video plane may map its own `resolution` onto whatever each upstream
+calls it, and may refuse a value an upstream cannot express rather than
+silently approximating it. It may not accept one vendor's body shape and
+forward it to another. And none of this licenses a `/v1/chat/completions`
+request reaching an Anthropic upstream: that remains forbidden, `RewriteRequest`
+remains the only function here that edits a request body, and this document's
+opening sentence is unchanged.
 
 Exactly two of those four touch the request body — the model name and the usage
 option — and that is the whole list of rewrites the gateway performs on its own.

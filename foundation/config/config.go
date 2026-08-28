@@ -73,6 +73,17 @@ type Config struct {
 
 	// DBPoolMaxConns is 0 when pgx should choose its own default.
 	DBPoolMaxConns int32
+
+	// BrandProfileDir is the brand bundle to serve, as produced by
+	// public/web/scripts/pack-brand-profile.mjs. Empty serves the brand built
+	// into the artifact, which is a complete profile in its own right -- so
+	// this is "which brand", never "whether a brand".
+	//
+	// A named directory that cannot be loaded is fatal rather than a fallback:
+	// the browser bundle does fall back to the default profile when a page
+	// carries no profile, so a half-loaded brand would otherwise be served as
+	// the default with nothing said (foundation/brand.Serve).
+	BrandProfileDir string
 }
 
 type Drivers struct {
@@ -113,10 +124,11 @@ func LoadRuntime(src Source, defaults Defaults) (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:     String(src, "HTTP_ADDR", DefaultHTTPAddr),
-		InternalAddr: String(src, "INTERNAL_ADDR", DefaultInternalAddr),
-		DatabaseURL:  databaseURL,
-		RedisURL:     redisURL,
+		HTTPAddr:        String(src, "HTTP_ADDR", DefaultHTTPAddr),
+		InternalAddr:    String(src, "INTERNAL_ADDR", DefaultInternalAddr),
+		DatabaseURL:     databaseURL,
+		RedisURL:        redisURL,
+		BrandProfileDir: String(src, "BRAND_PROFILE_DIR", ""),
 		Drivers: Drivers{
 			Cache:     String(src, "DRIVER_CACHE", DriverMemory),
 			RateLimit: String(src, "DRIVER_RATELIMIT", DriverMemory),

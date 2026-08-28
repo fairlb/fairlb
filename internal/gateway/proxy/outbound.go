@@ -101,6 +101,18 @@ type Target struct {
 	// Same reason as Method: it has to be in place before the request is
 	// signed, so it cannot be appended to the finished URL.
 	ExtraQuery map[string]string
+	// AbsoluteURL, when set, is the whole address and bypasses the base URL,
+	// the profile's path overrides and the model substitution. Only the video
+	// plane's artifact fetch uses it: the upstream reports where the bytes are,
+	// and that address is not a path relative to its API.
+	AbsoluteURL string
+	// OmitCredential suppresses every form of authentication on this request.
+	//
+	// It exists for one case: an artifact whose address already carries its own
+	// authorisation -- a presigned CDN link. Sending ours there would hand the
+	// upstream API key to a third party, and sending an empty one produces a
+	// bare "Bearer " that some hosts reject outright.
+	OmitCredential bool
 }
 
 // endpointURL assembles the address: the profile's path override if there is
@@ -111,6 +123,14 @@ type Target struct {
 // the parameters into part of the path name -- an address that looks almost
 // right in a log and cannot work.
 func endpointURL(t Target) (string, error) {
+	// An absolute URL is the address, not a path under one. Artifact downloads
+	// name a host of the upstream's choosing, and joining that onto the
+	// provider's base URL yields something like
+	// https://api.vendor.test/https:/cdn.other/v.mp4 -- a path that exists
+	// nowhere and answers 404.
+	if t.AbsoluteURL != "" {
+		return t.AbsoluteURL, nil
+	}
 	path := t.Transport.PathFor(t.Path, t.UpstreamModel, t.Stream)
 	path = strings.ReplaceAll(path, "{resource}", url.PathEscape(t.Resource))
 	endpoint, err := url.JoinPath(strings.TrimRight(t.BaseURL, "/"), path)
@@ -160,12 +180,13 @@ func authHeaderFor(t Target) (name string, bearer bool) {
 		return hdrGoogAPIKey, false
 	case catalog.AuthBearer:
 		return hdrAuthorization, true
-	case catalog.AuthAWSSigV4, catalog.AuthGCPServiceAccount:
-		// Both derive their value per request -- a signature over this exact
-		// request, or a token that expires within the hour -- and both put the
-		// result in Authorization. The value is written later, once every other
-		// header is in place, because a signature covers the headers that exist
-		// when it is computed.
+	case catalog.AuthAWSSigV4, catalog.AuthGCPServiceAccount, catalog.AuthKlingJWT:
+		// All three derive their value per request -- a signature over this
+		// exact request, a token that expires within the hour, a token that
+		// expires within the half hour -- and all three put the result in
+		// Authorization. The value is written later, once every other header is
+		// in place, because a signature covers the headers that exist when it
+		// is computed.
 		return hdrAuthorization, false
 	default:
 		return http.CanonicalHeaderKey(strings.TrimPrefix(mode, catalog.AuthHeaderPrefix)), false
@@ -181,6 +202,9 @@ func authHeaderFor(t Target) (name string, bearer bool) {
 // The derived modes are skipped here and handled after every other header is
 // written; setAuth would have nothing to copy for them anyway.
 func setAuth(h http.Header, t Target) {
+	if t.OmitCredential {
+		return
+	}
 	mode := t.Transport.AuthMode(string(t.Protocol))
 	if !upstream.Handles(mode) {
 		name, bearer := authHeaderFor(t)
@@ -258,6 +282,9 @@ func refuseCredentialInterpolation(t Target) error {
 // it is computed, so anything written afterwards either invalidates it or
 // travels outside it.
 func presentCredential(ctx context.Context, req *http.Request, t Target, payload []byte, payloadReadable bool) error {
+	if t.OmitCredential {
+		return nil
+	}
 	mode := t.Transport.AuthMode(string(t.Protocol))
 	if !upstream.Handles(mode) {
 		return nil

@@ -54,7 +54,10 @@ export function StatTile({
               <button
                 type="button"
                 aria-label={`${label}: ${hint}`}
-                className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-kumo-subtle transition-colors hover:text-kumo-default focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kumo-focus motion-reduce:transition-none"
+                // No transition on the hover colour: a colour change on a pointer-speed
+                // interaction has to be immediate, and the only animated property here
+                // was that colour — so the reduced-motion escape hatch went with it.
+                className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-kumo-subtle hover:text-kumo-default focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kumo-focus"
               />
             }
           >

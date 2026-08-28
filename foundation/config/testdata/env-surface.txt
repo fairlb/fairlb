@@ -5,6 +5,7 @@
 # loader. When you change how the service is configured, this is the list that
 # tells you what you missed.
 AUTH_RATE_LIMIT_PER_IP_RPM
+BRAND_PROFILE_DIR
 DATABASE_URL
 DATABASE_URL_FILE
 DB_POOL_MAX_CONNS

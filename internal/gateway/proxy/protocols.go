@@ -31,6 +31,10 @@ const (
 	ProtocolOpenAI    Protocol = "openai"
 	ProtocolAnthropic Protocol = "anthropic"
 	ProtocolGemini    Protocol = "gemini"
+	// ProtocolVideo is the video job plane, not a dialect. Nothing on it goes
+	// through RewriteRequest: a video request is shaped by its vendor's mapper
+	// instead (ADR-0218, ADR-0219).
+	ProtocolVideo Protocol = "video"
 )
 
 // Usage is the normalised usage of both dialects. The four billing buckets are
@@ -64,6 +68,20 @@ type Usage struct {
 	// price.
 	AudioIn  int64
 	AudioOut int64
+	// ImageIn is image input tokens, and like AudioIn it is a *subset* of the
+	// prompt rather than something alongside it. Image models charge it well
+	// above their text input rate -- gpt-image-2 at 8 against 5 per million --
+	// so leaving it folded into In undercharges every image request. The
+	// upstream has always reported it; there was simply nowhere to put it.
+	ImageIn int64
+	// ImageOut is image *output* tokens: what a model that generates images
+	// reports for the pixels it produced, a subset of Out the same way.
+	//
+	// The gap it closes is larger than the input one. The reference dataset
+	// prices one Gemini image model's output at 30 against a text output of
+	// 2.5, and gpt-image at 32 against 10 -- so a generated image folded into
+	// Out was billed at somewhere between a third and a twelfth of its cost.
+	ImageOut int64
 	// CacheWrite5m and CacheWrite1h are Anthropic's two cache-write TTLs, and
 	// they are priced differently. The 1h tier costs more, so a single
 	// CacheWrite bucket would charge the whole lot at the 5m price and
@@ -316,20 +334,46 @@ func subsetIn(parent, cached, cacheWrite int64) int64 {
 // the images surface did until it was given its own arm.
 func ParseUsage(surface catalog.Surface, body []byte) Usage {
 	switch surface {
-	case catalog.SurfaceImages:
+	case catalog.SurfaceVideo:
+		// Deliberately empty, and deliberately not the default arm. A video
+		// job's charge is a pure function of its admitted parameters, computed
+		// before the upstream is called (ADR-0220), so there is no usage object
+		// to read and Present must stay false. Reaching the default arm instead
+		// would come back Present with every count at zero, which is the exact
+		// silent failure described above.
+		return Usage{}
+	case catalog.SurfaceImages, catalog.SurfaceImagesEdit:
 		// Image responses use the input_tokens/output_tokens spelling, which no
 		// other openai-protocol surface uses.
 		return ParseImageUsage(body)
 	case catalog.SurfaceResponses, catalog.SurfaceResponsesCompact:
 		var r struct {
-			Usage       *responsesUsage `json:"usage"`
-			ServiceTier string          `json:"service_tier"`
-			ToolUsage   map[string]any  `json:"tool_usage"`
+			Usage       *responsesUsage      `json:"usage"`
+			ServiceTier string               `json:"service_tier"`
+			ToolUsage   map[string]any       `json:"tool_usage"`
+			Output      []responseOutputItem `json:"output"`
 		}
-		if err := json.Unmarshal(body, &r); err != nil || r.Usage == nil {
+		if err := json.Unmarshal(body, &r); err != nil {
 			return Usage{}
 		}
-		return r.Usage.usage(r.ServiceTier, r.ToolUsage)
+		images := countGeneratedImages(r.Output)
+		if r.Usage == nil {
+			// No usage object, which is the ordinary "the caller must
+			// estimate" answer -- except that an image the tool produced is
+			// not estimable and is not in that object anyway. Present stays
+			// false so the text side is still estimated; the tool count rides
+			// along, and the estimate paths keep it rather than overwriting
+			// it. Returning early here instead billed those images at nothing.
+			if images == 0 {
+				return Usage{}
+			}
+			u := Usage{}
+			addGeneratedImages(&u, images)
+			return u
+		}
+		u := r.Usage.usage(r.ServiceTier, r.ToolUsage)
+		addGeneratedImages(&u, images)
+		return u
 	case catalog.SurfaceGenerateContent, catalog.SurfaceGeminiEmbedContent:
 		return parseGeminiUsage(body)
 	case catalog.SurfaceGeminiBatchEmbedContents:
@@ -406,6 +450,7 @@ func (u Usage) BillingTokens() catalog.Tokens {
 	return catalog.Tokens{
 		In: u.In, Out: u.Out, CachedRead: u.CachedRead, CacheWrite: u.CacheWrite,
 		AudioIn: u.AudioIn, AudioOut: u.AudioOut,
+		ImageIn: u.ImageIn, ImageOut: u.ImageOut,
 		CacheWrite5m: u.CacheWrite5m, CacheWrite1h: u.CacheWrite1h,
 		ServiceTier: u.ServiceTier, ToolCalls: u.ToolCalls,
 	}
@@ -526,6 +571,7 @@ func addUsage(a, b Usage) Usage {
 	a.Reasoning += b.Reasoning
 	a.AudioIn += b.AudioIn
 	a.AudioOut += b.AudioOut
+	a.ImageIn += b.ImageIn
 	a.CacheWrite5m += b.CacheWrite5m
 	a.CacheWrite1h += b.CacheWrite1h
 	a.Present = a.Present || b.Present
@@ -594,21 +640,25 @@ func (u interactionUsage) usage(serviceTier string) Usage {
 		// Interactions reports generated output and billable thinking as
 		// separate totals. Unlike OpenAI's reasoning breakdown, thought tokens
 		// are not included in total_output_tokens and must be added once.
-		Out:         u.TotalOutputTokens + u.TotalThoughtTokens,
-		CachedRead:  u.TotalCachedTokens,
-		Reasoning:   u.TotalThoughtTokens,
-		AudioIn:     interactionAudioTokens(u.InputByModality) + interactionAudioTokens(u.ToolUseByModality),
-		AudioOut:    interactionAudioTokens(u.OutputByModality),
+		Out:        u.TotalOutputTokens + u.TotalThoughtTokens,
+		CachedRead: u.TotalCachedTokens,
+		Reasoning:  u.TotalThoughtTokens,
+		AudioIn: interactionModalityTokens(u.InputByModality, "audio") +
+			interactionModalityTokens(u.ToolUseByModality, "audio"),
+		AudioOut: interactionModalityTokens(u.OutputByModality, "audio"),
+		ImageIn: interactionModalityTokens(u.InputByModality, "image") +
+			interactionModalityTokens(u.ToolUseByModality, "image"),
+		ImageOut:    interactionModalityTokens(u.OutputByModality, "image"),
 		ServiceTier: serviceTier,
 		ToolCalls:   toolCalls,
 		Present:     true,
 	}
 }
 
-func interactionAudioTokens(details []interactionModalityCount) int64 {
+func interactionModalityTokens(details []interactionModalityCount, modality string) int64 {
 	var n int64
 	for _, detail := range details {
-		if strings.EqualFold(detail.Modality, "audio") {
+		if strings.EqualFold(detail.Modality, modality) {
 			n += detail.Tokens
 		}
 	}
@@ -636,14 +686,14 @@ type geminiModalityCount struct {
 	TokenCount int64  `json:"tokenCount"`
 }
 
-// audioTokens totals the AUDIO entries of a breakdown. An unknown modality is
-// ignored rather than folded into audio: a new one the vendor adds is priced at
-// the text rate until somebody teaches this function about it, which is the
-// direction that does not invent a charge.
-func audioTokens(details []geminiModalityCount) int64 {
+// modalityTokens totals one modality's entries of a breakdown. A modality this
+// function is not asked about is ignored rather than folded in: a new one the
+// vendor adds is priced at the text rate until somebody teaches the caller
+// about it, which is the direction that does not invent a charge.
+func modalityTokens(details []geminiModalityCount, modality string) int64 {
 	var n int64
 	for _, d := range details {
-		if strings.EqualFold(d.Modality, "AUDIO") {
+		if strings.EqualFold(d.Modality, modality) {
 			n += d.TokenCount
 		}
 	}
@@ -661,7 +711,8 @@ func (m geminiUsageMetadata) usage() Usage {
 		return Usage{
 			In:         subsetIn(m.TotalTokenCount, m.CachedContentTokenCount, 0),
 			CachedRead: m.CachedContentTokenCount,
-			AudioIn:    audioTokens(m.PromptTokensDetails),
+			AudioIn:    modalityTokens(m.PromptTokensDetails, "AUDIO"),
+			ImageIn:    modalityTokens(m.PromptTokensDetails, "IMAGE"),
 			Present:    true,
 		}
 	}
@@ -670,8 +721,68 @@ func (m geminiUsageMetadata) usage() Usage {
 		CachedRead: m.CachedContentTokenCount,
 		Out:        m.CandidatesTokenCount + m.ThoughtsTokenCount,
 		Reasoning:  m.ThoughtsTokenCount,
-		AudioIn:    audioTokens(m.PromptTokensDetails),
-		AudioOut:   audioTokens(m.CandidatesTokensDetails),
-		Present:    true,
+		AudioIn:    modalityTokens(m.PromptTokensDetails, "AUDIO"),
+		AudioOut:   modalityTokens(m.CandidatesTokensDetails, "AUDIO"),
+		ImageIn:    modalityTokens(m.PromptTokensDetails, "IMAGE"),
+		// The candidates breakdown is where a generated image lands, and this
+		// protocol is how Google's image models are reached at all -- they sit
+		// on generate_content beside the text models. Left unread, every image
+		// they produce is billed at the model's text output rate.
+		ImageOut: modalityTokens(m.CandidatesTokensDetails, "IMAGE"),
+		Present:  true,
+	}
+}
+
+// imageGenerationTool is the name a generated image is counted under.
+//
+// It is the tool's own name upstream, so an operator prices it by writing the
+// same word into the model's per-call tool rates that they read in their own
+// request.
+const imageGenerationTool = "image_generation"
+
+// countGeneratedImages counts the images a Responses answer produced through
+// the image generation tool.
+//
+// This is the one surface where an image is produced and the upstream reports
+// *nothing* about it: its usage object carries the text model's tokens and
+// neither image tokens nor the tool's cost. Left alone, a caller generates
+// images through this gateway and pays only for the prose around them.
+//
+// So the count comes from the output items, which is the same rule the images
+// surface settles on -- how many the response actually carried -- applied to
+// the place this surface puts them. Partial renders stream under a different
+// event and never appear in a completed answer's output array, so they cannot
+// be counted twice.
+func countGeneratedImages(items []responseOutputItem) int64 {
+	var n int64
+	for _, it := range items {
+		if it.Type == imageGenerationTool+"_call" {
+			n++
+		}
+	}
+	return n
+}
+
+// responseOutputItem is one entry of a Responses answer's output array, read
+// only for what kind of thing it is.
+type responseOutputItem struct {
+	Type string `json:"type"`
+}
+
+// addGeneratedImages folds a generated-image count into tool usage, leaving a
+// count the upstream already reported alone.
+//
+// Larger wins rather than sum, for the same reason mergeToolCalls does it that
+// way: a relay that does report tool_usage is reporting a total, and adding the
+// output items to it would charge each image twice.
+func addGeneratedImages(u *Usage, images int64) {
+	if images <= 0 {
+		return
+	}
+	if u.ToolCalls == nil {
+		u.ToolCalls = make(map[string]int64, 1)
+	}
+	if images > u.ToolCalls[imageGenerationTool] {
+		u.ToolCalls[imageGenerationTool] = images
 	}
 }

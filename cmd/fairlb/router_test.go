@@ -131,7 +131,7 @@ func newCERouterWithHealth(
 		},
 	})
 	health := httpx.NewHealth(map[string]func(context.Context) error{"db": pool.Ping})
-	r := buildRouter(cfg, pool, module, communitystaffauth.New(pool), drv, orgID, keys, health, set)
+	r := buildRouter(cfg, pool, module, communitystaffauth.New(pool), drv, orgID, keys, health, set, nil)
 	return r, pool, health
 }
 

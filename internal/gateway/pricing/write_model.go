@@ -52,6 +52,30 @@ type DimensionRateInput struct {
 	NanoPerMTok    int64
 }
 
+// PricingFamily is which family of rates charges a model.
+type PricingFamily string
+
+const (
+	// FamilyTokens is the four base buckets plus the dimension overrides.
+	FamilyTokens PricingFamily = "tokens"
+	// FamilyUnits is the per-unit family: seconds of output, or generations.
+	FamilyUnits PricingFamily = "units"
+)
+
+// UnitRateInput is one per-unit price as submitted.
+//
+// Resolution and Audio are the axes a video rate varies on, and an empty value
+// means "does not vary on that axis" -- a model with one flat per-second price
+// is a single row with both empty.
+type UnitRateInput struct {
+	Unit        string
+	Resolution  string
+	Audio       string
+	Variant     string
+	ServiceTier string
+	NanoPerUnit int64
+}
+
 // ToolRateInput is one per-call tool price as submitted.
 type ToolRateInput struct {
 	Tool        string
@@ -97,7 +121,11 @@ type Risk struct {
 //     does not have one to record, and the column is nullable precisely so it
 //     can say so rather than name somebody who was not there.
 type ModelPricingWrite struct {
-	BillingMode   BillingMode
+	BillingMode BillingMode
+	// Family decides which rates actually charge this model. Empty means
+	// tokens, so every existing caller keeps its behaviour; `units` is what
+	// makes a per-second model representable at all (ADR-0220).
+	Family        PricingFamily
 	Official      TokenRatesInput
 	MultiplierBps int32
 	SourceName    string
@@ -109,6 +137,9 @@ type ModelPricingWrite struct {
 	// them all", which is a different instruction from "do not touch them".
 	DimensionRates *[]DimensionRateInput
 	ToolRates      *[]ToolRateInput
+	// UnitRates is the per-unit family, replaced or left alone by the same
+	// nil-versus-empty rule as the two above.
+	UnitRates *[]UnitRateInput
 
 	// AcknowledgedRisks are the warning codes the caller has seen and accepted.
 	// Blockers cannot be acknowledged.

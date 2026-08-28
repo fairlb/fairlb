@@ -39,13 +39,11 @@ func GracefulShutdown(cfg ShutdownConfig) error {
 		if server == nil {
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := server.Shutdown(ctx); err != nil {
 				errs <- err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

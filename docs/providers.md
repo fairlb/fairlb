@@ -92,13 +92,14 @@ there is refused rather than stored.
 ### Derived credentials
 
 Two auth modes compute the credential per request instead of copying a stored
-one, and both expect the provider key to be a **JSON credential document**
+one, and each expects the provider key to be a **JSON credential document**
 rather than a bare token:
 
 | Mode | The provider key holds |
 |---|---|
 | `aws_sigv4` | `{"access_key_id": "...", "secret_access_key": "...", "session_token": "..."}` — the session token only for temporary credentials. Each request is signed with Signature Version 4. |
 | `gcp_service_account` | The service-account key file, verbatim, as downloaded. It is exchanged for an access token, which the gateway refreshes before it expires. |
+| `kling_jwt` | `{"access_key": "...", "secret_key": "..."}`. The platform takes a token the caller signs, and the one it accepts is valid for half an hour, so the gateway signs a fresh one for every request. A token pasted here instead of the pair works until it expires and then answers 401 on every request. |
 
 The credential is stored encrypted with the provider's other keys and is never
 returned by any endpoint. Nothing secret belongs in the transport profile: that
@@ -257,9 +258,9 @@ setting instead of two, and it cannot be half-applied.
 If you authenticate with a directory token instead of a resource key, leave
 `auth` at its default and store the token as the provider key; it goes out as
 `Authorization: Bearer <token>`. The gateway has no token exchange for this
-directory, so it only refreshes tokens for `gcp_service_account`, and a stored
-one here stops working when it expires. Practical with a long-lived token, not
-with an hour-long one.
+directory — it renews credentials only for the derived modes above — and a
+stored token here stops working when it expires. Practical with a long-lived
+token, not with an hour-long one.
 
 **Organization-supplied keys.** A organization-supplied credential replaces the key and, if
 one was given, the base URL — it does not replace the transport profile, which

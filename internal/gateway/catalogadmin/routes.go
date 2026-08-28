@@ -118,10 +118,19 @@ type Route struct {
 	// Headers and Quirks are decoded here rather than carried as bytes: they
 	// are a map in the contract and a map in the database, and the only place
 	// they are ever bytes is the wire between the two.
-	Headers         map[string]string
-	Quirks          map[string]any
+	Headers map[string]string
+	Quirks  map[string]any
+	// VideoEnvelope is this deployment's declared video capability set, carried
+	// as a free-form object because its shape belongs to the video plane and
+	// this package must not depend on it (ADR-0221).
+	VideoEnvelope   map[string]any
 	ContextWindow   *int32
 	MaxOutputTokens *int32
+	// MaxImages is the most images one request to this route can return. It is
+	// the image plane's whole envelope, and what a per-image hold is taken
+	// against -- see the column's own comment for why the reservation cannot be
+	// the charge on that family.
+	MaxImages *int32
 	// Verdicts is what is known per endpoint -- the route's only capability
 	// record -- filled by the listing calls only.
 	Verdicts []routeprobe.Verdict
@@ -139,8 +148,10 @@ type RouteCreate struct {
 	Enabled         *bool
 	Headers         *map[string]string
 	Quirks          *map[string]any
+	VideoEnvelope   *map[string]any
 	ContextWindow   *int32
 	MaxOutputTokens *int32
+	MaxImages       *int32
 }
 
 // RoutePatch is a partial update; a nil field is left alone.
@@ -155,8 +166,10 @@ type RoutePatch struct {
 	Enabled         *bool
 	Headers         *map[string]string
 	Quirks          *map[string]any
+	VideoEnvelope   *map[string]any
 	ContextWindow   *int32
 	MaxOutputTokens *int32
+	MaxImages       *int32
 }
 
 // routeParties reads the two ends of a route before it is created: it answers
@@ -251,7 +264,9 @@ func routeFrom(r gwdb.CreateRouteRow, providerProtocols []string) Route {
 		ProviderModelID: r.ProviderModelID,
 		Priority:        r.Priority, Weight: r.Weight, Enabled: r.Enabled,
 		Headers: decodeHeaders(r.Headers), Quirks: decodeJSONObject(r.Quirks),
+		VideoEnvelope: decodeJSONObject(r.VideoEnvelope),
 		ContextWindow: int32Ptr(r.ContextWindow), MaxOutputTokens: int32Ptr(r.MaxOutputTokens),
+		MaxImages: int32Ptr(r.MaxImages),
 	}
 }
 
@@ -263,8 +278,10 @@ func routeFromAdminRow(r gwdb.ListRoutesForAdminRow, verdicts []routeprobe.Verdi
 		ProviderProtocols: r.ProviderProtocols, ProviderModelID: r.ProviderModelID,
 		Priority: r.Priority, Weight: r.Weight, Enabled: r.Enabled,
 		Headers: decodeHeaders(r.Headers), Quirks: decodeJSONObject(r.Quirks),
+		VideoEnvelope: decodeJSONObject(r.VideoEnvelope),
 		ContextWindow: int32Ptr(r.ContextWindow), MaxOutputTokens: int32Ptr(r.MaxOutputTokens),
-		Verdicts: verdicts,
+		MaxImages: int32Ptr(r.MaxImages),
+		Verdicts:  verdicts,
 	}
 }
 
@@ -329,7 +346,9 @@ func (s *Service) CreateRoute(ctx context.Context, in RouteCreate) (Route, error
 		Priority:        derefOr(in.Priority, 100), Weight: derefOr(in.Weight, 1),
 		Enabled: derefOr(in.Enabled, true),
 		Headers: encodeMap(in.Headers), Quirks: encodeMap(in.Quirks),
+		VideoEnvelope: encodeMap(in.VideoEnvelope),
 		ContextWindow: int4(in.ContextWindow), MaxOutputTokens: int4(in.MaxOutputTokens),
+		MaxImages: int4(in.MaxImages),
 	})
 	if err != nil {
 		if db.IsUniqueViolation(err) {
@@ -369,7 +388,9 @@ func (s *Service) UpdateRoute(
 		Priority:        int4(in.Priority), Weight: int4(in.Weight),
 		Enabled: boolOrNull(in.Enabled),
 		Headers: encodeMapOrNull(in.Headers), Quirks: encodeMapOrNull(in.Quirks),
+		VideoEnvelope: encodeMapOrNull(in.VideoEnvelope),
 		ContextWindow: int4(in.ContextWindow), MaxOutputTokens: int4(in.MaxOutputTokens),
+		MaxImages: int4(in.MaxImages),
 	})
 	if err != nil {
 		if db.IsNoRows(err) {

@@ -163,6 +163,46 @@ func TestRevenueReconEstimatedShare(t *testing.T) {
 
 // Everything normal reports clean. Otherwise the alert gets ignored as routine
 // noise.
+// A terminal job whose reservation never moved is the fourth way revenue goes
+// missing, and the only one with no retry path behind it: a `protected` hold is
+// deliberately exempt from the timeout sweep, so nothing clears it without a
+// person. It therefore has to reach the alert rather than only a dashboard.
+func TestRevenueReconFlagsJobsWhoseMoneyNeverMoved(t *testing.T) {
+	for _, state := range []string{"held", "protected"} {
+		t.Run(state, func(t *testing.T) {
+			f := newReconFixture(t)
+			f.seedStuckJob(t, state, "completed")
+
+			rep := f.run(t)
+			if rep.StuckJobs != 1 {
+				t.Errorf("want 1 stuck job, got %d", rep.StuckJobs)
+			}
+			if rep.StuckOldest == nil {
+				t.Error("a stuck job must carry how long it has been waiting")
+			}
+			if rep.Clean() {
+				t.Error("must not report clean while a delivered job holds an unmoved reservation")
+			}
+		})
+	}
+}
+
+// The states where the money did move are not findings; counting them would
+// make the alert cry wolf on every healthy deployment.
+func TestRevenueReconIgnoresJobsWhoseMoneyMoved(t *testing.T) {
+	f := newReconFixture(t)
+	for _, state := range []string{"settled", "voided", "orphaned"} {
+		f.seedStuckJob(t, state, "completed")
+	}
+	// Still running: the reservation is in flight, not stranded.
+	f.seedStuckJob(t, "held", "in_progress")
+
+	rep := f.run(t)
+	if rep.StuckJobs != 0 {
+		t.Errorf("settled, voided, orphaned and in-flight jobs must not count as stuck, got %d", rep.StuckJobs)
+	}
+}
+
 func TestRevenueReconCleanWhenHealthy(t *testing.T) {
 	f := newReconFixture(t)
 	f.usageLog(t, "gw_ok_1", "openai/x", "ok", 12_600_000, false)
@@ -220,4 +260,26 @@ func newReconFixture(t *testing.T) *reconFixture {
 		t.Fatal(err)
 	}
 	return &reconFixture{pool: pool, org: org, key: key}
+}
+
+// seedStuckJob inserts one asynchronous job in a given status/settlement pair.
+func (f *reconFixture) seedStuckJob(t *testing.T, settlement, status string) {
+	t.Helper()
+	ctx := context.Background()
+	var model pgtype.UUID
+	if err := f.pool.QueryRow(ctx,
+		`INSERT INTO models (slug, output_modalities) VALUES ($1, ARRAY['video']) RETURNING id`,
+		"acme/vid-"+settlement+"-"+status).Scan(&model); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx,
+		`INSERT INTO gateway_async_jobs
+		   (org_id, kind, request_id, idempotency_key, request_fingerprint, model_id, model_slug,
+		    status, settlement_state, params, hold_nano, max_job_seconds, terminal_at, expires_at)
+		 VALUES ($1, 'video', $2, $3, 'fp', $4, 'acme/vid', $5, $6, '{}', 1000, 600,
+		         CASE WHEN $5 IN ('queued','in_progress') THEN NULL ELSE now() - interval '2 days' END,
+		         now() + interval '1 day')`,
+		f.org, "req-"+settlement+"-"+status, "idem-"+settlement+"-"+status, model, status, settlement); err != nil {
+		t.Fatal(err)
+	}
 }

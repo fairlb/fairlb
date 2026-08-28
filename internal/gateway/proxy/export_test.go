@@ -74,3 +74,31 @@ func AccumulateForTest(surface catalog.Surface, frames []string) Usage {
 	}
 	return acc.result()
 }
+
+// ExportImageUnits is the billable quantity vector for a per-image request: a
+// rate row and a count. Exported so a test can hold the arithmetic without
+// standing up a pipeline -- getting it wrong charges for the wrong number of
+// images with nothing to say so.
+func ExportImageUnits(body []byte, unit catalog.Unit, images int64) catalog.Units {
+	p := imageParamsOf(body)
+	return imageUnits(catalog.UnitKey{Unit: unit, Resolution: p.Size, Variant: p.Quality}, images)
+}
+
+// ExportHeldRateKey is the rate row a request was admitted against, which
+// settlement must keep rather than resolve a second time.
+func ExportHeldRateKey(held catalog.Units) (catalog.UnitKey, bool) { return heldRateKey(held) }
+
+// ExportImagesInResponse is the count settlement charges on: how many images
+// the upstream's response actually carried. Exported because it is the whole
+// answer to "how many images is this caller paying for", and the request cannot
+// give that answer on every vendor.
+func ExportImagesInResponse(body []byte) (int64, bool) { return imagesInResponse(body) }
+
+// ExportMaxImagesOf is the number of images the hold is taken against: the
+// largest any candidate route declared it can return.
+func ExportMaxImagesOf(routes []catalog.Route) int64 { return maxImagesOf(routes) }
+
+// ExportPeekedProbeBody is the JSON admission and pricing are handed for a
+// multipart edit request: the fields read ahead out of the stream, and nothing
+// else. The upstream still receives the original multipart body.
+func ExportPeekedProbeBody(p PeekedMultipart) []byte { return peekedProbeBody(p) }

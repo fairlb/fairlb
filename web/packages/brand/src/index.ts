@@ -1,11 +1,45 @@
-import { DEFAULT_BRAND_PROFILE, type BrandProfileV1 } from "./profile";
+import { DEFAULT_BRAND_PROFILE, RUNTIME_PROFILE_ELEMENT_ID, type BrandProfileV1 } from "./profile";
 
 declare const __FAIRLB_BRAND_PROFILE__: BrandProfileV1 | undefined;
 
-export const BRAND_PROFILE =
-  typeof __FAIRLB_BRAND_PROFILE__ === "undefined"
-    ? DEFAULT_BRAND_PROFILE
-    : __FAIRLB_BRAND_PROFILE__;
+/**
+ * The profile the server put in the page.
+ *
+ * Module scripts are deferred, so the document is fully parsed by the time this
+ * module initializes and the island is always readable here. Returning
+ * `undefined` therefore means "nobody put one there", not "not yet".
+ */
+function runtimeProfile(): BrandProfileV1 | undefined {
+  if (typeof document === "undefined") return undefined;
+  const island = document.getElementById(RUNTIME_PROFILE_ELEMENT_ID);
+  const body = island?.textContent?.trim();
+  if (!body) return undefined;
+  return JSON.parse(body) as BrandProfileV1;
+}
+
+/**
+ * Three sources, in the order they are authoritative.
+ *
+ * 1. `__FAIRLB_BRAND_PROFILE__` — the build-time define. **Only marketing sets
+ *    it.** A static site has no runtime: its brand has to be resolved while the
+ *    pages are being rendered, so the profile is a build input there and stays
+ *    one (ADR-0214).
+ * 2. The JSON island — how console, operations and the Community admin get
+ *    theirs. One image serves every brand; the server fills the island from
+ *    whatever profile bundle is mounted, so nothing brand-specific is compiled
+ *    in.
+ * 3. `DEFAULT_BRAND_PROFILE` — node tests, which have no document to read.
+ *
+ * **The fallback cannot mask a misconfigured deployment.** The server refuses to
+ * start when `BRAND_PROFILE_DIR` names a bundle it cannot load, so a browser
+ * that gets a page at all gets one with the island filled in. That is where
+ * fail-closed belongs: at the boundary the configuration crosses, not in a
+ * bundle that also has to run under vitest.
+ */
+export const BRAND_PROFILE: BrandProfileV1 =
+  typeof __FAIRLB_BRAND_PROFILE__ !== "undefined"
+    ? __FAIRLB_BRAND_PROFILE__
+    : (runtimeProfile() ?? DEFAULT_BRAND_PROFILE);
 export const BRAND_NAME = BRAND_PROFILE.identity.name;
 export const BRAND_MARK_URL = BRAND_PROFILE.identity.assets.markSvg;
 

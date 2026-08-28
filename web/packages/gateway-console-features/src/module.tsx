@@ -1,15 +1,20 @@
 import { ORG_CAPABILITIES } from "@fairlb/api-client";
 import type { ConsoleModule, ConsoleRoute, Provider } from "@fairlb/app-composition";
 import { pickStrings } from "@fairlb/ui";
-import { ChartLineIcon, CubeIcon, ListMagnifyingGlassIcon, PlayIcon } from "@phosphor-icons/react";
+import {
+  ChartLineIcon,
+  CubeIcon,
+  FilmSlateIcon,
+  ListMagnifyingGlassIcon,
+} from "@phosphor-icons/react";
 import { lazy, type FunctionComponent, type ReactNode } from "react";
 import { GatewayConsoleHostProvider, type GatewayConsoleHost } from "./host";
 import { useKeyModelOptions } from "./key-models";
 import {
   MODEL_SEARCH_KEYS,
-  PLAYGROUND_SEARCH_KEYS,
   REQUEST_SEARCH_KEYS,
   USAGE_SEARCH_KEYS,
+  VIDEO_SEARCH_KEYS,
 } from "./search-keys";
 
 /**
@@ -22,8 +27,8 @@ import {
  */
 const ORG_PATHS = {
   models: "/models",
-  playground: "/playground",
   requests: "/requests",
+  videos: "/videos",
   usage: "/usage",
   providerKeys: "/settings/provider-keys",
 } as const;
@@ -50,11 +55,11 @@ export function createGatewayConsoleModule(host: GatewayConsoleHost): ConsoleMod
   const ModelsPage = lazy(() =>
     import("./models").then((module) => ({ default: module.ModelsPage })),
   );
-  const PlaygroundPage = lazy(() =>
-    import("./playground").then((module) => ({ default: module.PlaygroundPage })),
-  );
   const RequestsPage = lazy(() =>
     import("./requests").then((module) => ({ default: module.RequestsPage })),
+  );
+  const VideosPage = lazy(() =>
+    import("./videos").then((module) => ({ default: module.VideosPage })),
   );
   const UsagePage = lazy(() => import("./usage").then((module) => ({ default: module.UsagePage })));
   const SettingsProviderKeysPage = lazy(() =>
@@ -79,8 +84,14 @@ export function createGatewayConsoleModule(host: GatewayConsoleHost): ConsoleMod
     onboardingSteps: {
       first_request: {
         label: "obStepFirstRequest",
-        to: "/orgs/$orgId/playground",
-        capability: ORG_CAPABILITIES.playgroundUse,
+        // 落点是模型目录：发第一个请求前真正要做的事是查到模型 slug。
+        //
+        // 能力门禁是 `keysManage` 而不是目录页的可达性——这个 capability 决定的是
+        // **这一步出不出现在清单里**，不是链接点不点得开（目录人人可见）。判据与
+        // 它的前置步骤 `create_key` 同一条：拿不到 key 的人发不出请求，把这一步
+        // 摆给他看就是一条永远划不掉的欠账。
+        to: "/orgs/$orgId/models",
+        capability: ORG_CAPABILITIES.keysManage,
         prerequisites: ["create_key", "top_up"],
       },
     },
@@ -96,21 +107,24 @@ export function createGatewayConsoleModule(host: GatewayConsoleHost): ConsoleMod
         sidebar: { group: "build", icon: CubeIcon },
       },
       {
-        id: "playground",
-        path: ORG_PATHS.playground,
-        scope: "organization",
-        order: 40,
-        labelKey: "playTitle",
-        capability: ORG_CAPABILITIES.playgroundUse,
-        sidebar: { group: "build", icon: PlayIcon },
-      },
-      {
         id: "requests",
         path: ORG_PATHS.requests,
         scope: "organization",
         order: 60,
         labelKey: "logsTitle",
         sidebar: { group: "observe", icon: ListMagnifyingGlassIcon },
+      },
+      {
+        // Between the request log and usage, because it answers a question
+        // between theirs: the log answers "what happened to the call I made",
+        // usage answers "what did the month cost", and this answers "where is
+        // the clip I asked for, and what did it cost me".
+        id: "videos",
+        path: ORG_PATHS.videos,
+        scope: "organization",
+        order: 65,
+        labelKey: "videosTitle",
+        sidebar: { group: "observe", icon: FilmSlateIcon },
       },
       {
         id: "usage",
@@ -137,8 +151,8 @@ export function createGatewayConsoleModule(host: GatewayConsoleHost): ConsoleMod
     ],
     routes: [
       orgRoute(ORG_PATHS.models, ModelsPage, MODEL_SEARCH_KEYS),
-      orgRoute(ORG_PATHS.playground, PlaygroundPage, PLAYGROUND_SEARCH_KEYS),
       orgRoute(ORG_PATHS.requests, RequestsPage, REQUEST_SEARCH_KEYS),
+      orgRoute(ORG_PATHS.videos, VideosPage, VIDEO_SEARCH_KEYS),
       orgRoute(ORG_PATHS.usage, UsagePage, USAGE_SEARCH_KEYS),
     ],
     orgPanels: [OrgDashboard],

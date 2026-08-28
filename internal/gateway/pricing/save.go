@@ -16,14 +16,42 @@ import (
 // warning, or a value the rules do not allow.
 var ErrInvalid = errors.New("pricing: invalid write")
 
-var bucketToDB = map[Bucket]string{
-	BucketIn: "in", BucketOut: "out",
-	BucketCacheRead: "cache_read", BucketCacheWrite: "cache_write",
-	BucketAudioIn: "audio_in", BucketAudioOut: "audio_out",
-}
+// bucketToDB is built from KnownBuckets rather than written out beside it.
+//
+// A bucket missing here is not a silently unpriced dimension -- it is a save
+// refused as "unknown pricing bucket", which is how image input came to be
+// unwritable while the column accepted it. Deriving the map removes the way
+// that happened: there is no second place to forget.
+//
+// The two vocabularies are identical by construction, which is what the map was
+// there to guarantee in the first place; it survives as a map because the
+// lookup is on a hot-ish write path and because a missing key is the error
+// signal both readers already handle.
+var bucketToDB = func() map[Bucket]string {
+	out := make(map[Bucket]string, len(KnownBuckets()))
+	for _, b := range KnownBuckets() {
+		out[b] = string(b)
+	}
+	return out
+}()
 
 func rateColumn(r RateInput) pgtype.Int8 {
 	return pgtype.Int8{Int64: r.Nano, Valid: r.Set}
+}
+
+// tokenRateColumn is rateColumn with the unit family's exception.
+//
+// NULL means "unknown" throughout this schema and fails closed, which is right
+// for a token model whose rate nobody has filled in. A unit-priced model's text
+// rate is not unknown -- it does not exist -- and zero is the honest spelling
+// of that. Writing NULL instead would trip the completeness constraint and make
+// a per-second model unrepresentable, which is the state this family was added
+// to fix.
+func tokenRateColumn(family PricingFamily, r RateInput) pgtype.Int8 {
+	if family == FamilyUnits && !r.Set {
+		return pgtype.Int8{Int64: 0, Valid: true}
+	}
+	return rateColumn(r)
 }
 
 // SaveModelPricing writes a model's price. Saving is publishing: there is no
@@ -74,10 +102,11 @@ func (w *Writer) SaveModelPricing(
 	if _, err := q.UpsertModelPricing(ctx, gwdb.UpsertModelPricingParams{
 		ModelID:            pgID(modelID),
 		BillingMode:        string(in.BillingMode),
-		UpstreamIn:         rateColumn(in.Official.Input),
-		UpstreamOut:        rateColumn(in.Official.Output),
-		UpstreamCacheRead:  rateColumn(in.Official.CacheRead),
-		UpstreamCacheWrite: rateColumn(in.Official.CacheWrite),
+		PricingFamily:      familyOrTokens(in.Family),
+		UpstreamIn:         tokenRateColumn(in.Family, in.Official.Input),
+		UpstreamOut:        tokenRateColumn(in.Family, in.Official.Output),
+		UpstreamCacheRead:  tokenRateColumn(in.Family, in.Official.CacheRead),
+		UpstreamCacheWrite: tokenRateColumn(in.Family, in.Official.CacheWrite),
 		MultiplierBps:      in.MultiplierBps,
 		SourceName:         in.SourceName,
 		SourceUrl:          in.SourceURL,
@@ -87,6 +116,21 @@ func (w *Writer) SaveModelPricing(
 		UpdatedBy:          in.Actor,
 	}); err != nil {
 		return ModelPricing{}, err
+	}
+
+	if in.UnitRates != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM model_price_unit_rates WHERE model_id=$1`, modelID); err != nil {
+			return ModelPricing{}, err
+		}
+		for _, u := range *in.UnitRates {
+			if _, err := q.UpsertModelPriceUnitRate(ctx, gwdb.UpsertModelPriceUnitRateParams{
+				ModelID: pgID(modelID), Unit: u.Unit,
+				Resolution: u.Resolution, Audio: u.Audio, Variant: u.Variant,
+				ServiceTier: tierOrStandard(u.ServiceTier), NanoPerUnit: u.NanoPerUnit,
+			}); err != nil {
+				return ModelPricing{}, err
+			}
+		}
 	}
 
 	var replaced ReplacedRates
@@ -182,9 +226,30 @@ func (w *Writer) assessRisks(
 	}
 	// Blocker: a paid model with all four rates at zero would merge
 	// "deliberately free" and "price never filled in" into one state.
-	if in.BillingMode == BillingPaid && in.Official.AllZero() {
+	//
+	// Not for a unit-priced model: its four token rates are legitimately zero
+	// because it has no token price to give, and its own pricedness is decided
+	// by its unit rates below. This is the third place that rule lives -- the
+	// column constraint, the admission check and here -- and each of the three
+	// has to know about the family or a per-second model is unrepresentable at
+	// that layer.
+	if in.BillingMode == BillingPaid && in.Family != FamilyUnits && in.Official.AllZero() {
 		add(SeverityBlocker, "paid_all_zero",
 			"a paid model with all four rates at zero: use billing_mode=free to make the whole model free")
+	}
+	// The unit family's own version of the same rule: a paid model billed by
+	// unit with no unit rate cannot be charged for, and admission would refuse
+	// every request against it.
+	//
+	// Only an explicit clear is blocked. A nil set means "leave the existing
+	// rates alone", so treating it as "no rates" would refuse every save that
+	// touches anything else about a unit-priced model. The remaining case -- a
+	// model that has never had a rate and is saved without one -- is caught at
+	// admission, which refuses it as unpriced and tells the operator.
+	if in.BillingMode == BillingPaid && in.Family == FamilyUnits &&
+		in.UnitRates != nil && len(*in.UnitRates) == 0 {
+		add(SeverityBlocker, "units_without_rates",
+			"a unit-priced model needs at least one per-unit rate; without one every request is refused as unpriced")
 	}
 	// Warning: switching to free changes what customers are charged.
 	if in.BillingMode == BillingFree && prev.Priced && prev.BillingMode == BillingPaid {
@@ -246,4 +311,21 @@ func requireAcknowledged(risks []Risk, acked []string) error {
 			ErrInvalid, strings.Join(unacked, "; "))
 	}
 	return nil
+}
+
+// familyOrTokens defaults an unset family to tokens, so every caller that
+// predates the unit family keeps writing what it always wrote.
+func familyOrTokens(f PricingFamily) string {
+	if f == FamilyUnits {
+		return string(FamilyUnits)
+	}
+	return string(FamilyTokens)
+}
+
+// tierOrStandard fills in the service tier the way the column's default does.
+func tierOrStandard(tier string) string {
+	if tier == "" {
+		return "standard"
+	}
+	return tier
 }

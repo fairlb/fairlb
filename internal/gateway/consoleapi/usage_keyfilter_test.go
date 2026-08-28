@@ -2,11 +2,14 @@ package gwconsoleapi_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/fairlb/fairlb/foundation/errcode"
+	"github.com/fairlb/fairlb/foundation/httpx"
 	"github.com/fairlb/fairlb/foundation/publicid"
 	gwconsoleapi "github.com/fairlb/fairlb/internal/gateway/consoleapi"
 )
@@ -149,5 +152,28 @@ func TestUsageWithoutKeyFilterStillSeesEverything(t *testing.T) {
 	}
 	if rep.Groups == nil || len(*rep.Groups) != 2 {
 		t.Fatalf("unfiltered there should be 2 model groups, got %+v", rep.Groups)
+	}
+}
+
+// An unrecognised group_by is a 400, not a 500.
+//
+// The spec declares `enum: [model, api_key]`, but oapi-codegen binds the raw
+// string and never calls the generated `Valid()`, and no request-validator
+// middleware is mounted — so the value really does reach the handler. This was
+// a 500 for exactly as long as the read model's own switch was doing the
+// rejecting; the test pins which layer answers.
+func TestUnknownGroupByIsAValidationError(t *testing.T) {
+	f := newFixture(t)
+	s := newConsoleServer(f.pool, allowAll{})
+	bogus := gwconsoleapi.GetUsageParamsGroupBy("banana")
+	_, err := s.GetUsage(context.Background(), gwconsoleapi.GetUsageRequestObject{
+		OrgId: orgParam(f.orgA),
+		Params: gwconsoleapi.GetUsageParams{
+			From: dayAgo(1), To: time.Now().Add(time.Hour), GroupBy: &bogus,
+		},
+	})
+	var coded *httpx.CodeError
+	if !errors.As(err, &coded) || coded.Code != errcode.CommonValidation {
+		t.Fatalf("group_by=banana = %v, want a validation error", err)
 	}
 }

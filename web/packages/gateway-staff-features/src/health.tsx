@@ -20,6 +20,47 @@ export function GatewayHealthPage() {
   return <HealthContent />;
 }
 
+/**
+ * The repair queue: jobs that reached a terminal state while their reservation
+ * never moved.
+ *
+ * Three states, and they are three different sentences. Absent means the count
+ * could not be read — rendered as such, never as zero, because on this question
+ * "we could not tell" wearing the face of "nothing is stuck" is exactly how the
+ * queue goes unwatched. Zero is an explicit all-clear, which is worth a line:
+ * it says the check ran. Anything above zero is money sitting still on somebody's
+ * account, so it is an Alert and not a statistic.
+ */
+function StuckMoneyCard({
+  stuck,
+  loading,
+}: {
+  stuck?: GatewayStaffTypes.GatewayStuckMoney;
+  loading: boolean;
+}) {
+  const { t } = useI18n();
+  const displayDate = useDisplayDate();
+  if (loading) return null;
+  return (
+    <Card className="space-y-2">
+      <SectionHeading>{t("gwStuckMoneyTitle")}</SectionHeading>
+      {!stuck ? (
+        <p className="text-base text-kumo-subtle">{t("gwStuckMoneyUnknown")}</p>
+      ) : stuck.jobs === 0 ? (
+        <p className="text-base">{t("gwStuckMoneyClear")}</p>
+      ) : (
+        <Alert variant="error">
+          {t("gwStuckMoneyFound", { jobs: stuck.jobs })}
+          {stuck.oldest_terminal_at
+            ? ` ${t("gwStuckMoneyOldest", { time: displayDate(stuck.oldest_terminal_at) })}`
+            : ""}
+        </Alert>
+      )}
+      <p className="text-base text-kumo-subtle">{t("gwStuckMoneyHint")}</p>
+    </Card>
+  );
+}
+
 function HealthContent() {
   const { t } = useI18n();
   const health = gatewayStaffApi.useGetGatewayHealth({ query: { refetchInterval: 15_000 } });
@@ -41,6 +82,8 @@ function HealthContent() {
       <PageHeader title={t("navGatewayHealth")} description={t("staffGatewayHealthDesc")} />
 
       <KillSwitchCard counts={h?.switch_counts} />
+
+      <StuckMoneyCard stuck={h?.stuck_money} loading={!h} />
 
       <Card className="space-y-2">
         <SectionHeading>{t("gwRetryBudget")}</SectionHeading>

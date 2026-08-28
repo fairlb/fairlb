@@ -1,9 +1,10 @@
 package settings
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 
 	"github.com/fairlb/fairlb/foundation/money"
@@ -159,7 +160,7 @@ func (r *Registry) SectionKeys(section string) []Spec {
 			out = append(out, s)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	slices.SortFunc(out, func(a, b Spec) int { return cmp.Compare(a.Key, b.Key) })
 	return out
 }
 
@@ -174,7 +175,7 @@ func (r *Registry) Sections() []string {
 	for s := range r.rules {
 		out = append(out, s)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -210,15 +211,19 @@ func (r *Registry) rulesTouching(sections map[string]bool) (rules []SectionRule,
 	for s := range loadSet {
 		load = append(load, s)
 	}
-	sort.Strings(load)
+	slices.Sort(load)
 	// A section's own rule runs before the rules that read it: "this channel's
 	// private key does not parse" is the error to show before "the selling
 	// channel is not configured", which is only its consequence.
-	sort.SliceStable(rules, func(i, j int) bool {
-		if (len(rules[i].Reads) == 0) != (len(rules[j].Reads) == 0) {
-			return len(rules[i].Reads) == 0
+	slices.SortStableFunc(rules, func(a, b SectionRule) int {
+		// 布尔键没有 cmp.Compare，显式两支：没有 Reads 的排前面。
+		if (len(a.Reads) == 0) != (len(b.Reads) == 0) {
+			if len(a.Reads) == 0 {
+				return -1
+			}
+			return 1
 		}
-		return rules[i].Section < rules[j].Section
+		return cmp.Compare(a.Section, b.Section)
 	})
 	return rules, load
 }

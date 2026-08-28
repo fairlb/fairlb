@@ -45,6 +45,27 @@ import (
 type HoldInput = settle.HoldInput
 type SettleInput = settle.SettleInput
 
+// ArtifactStore is where finished video output lives.
+//
+// An alias rather than a second declaration, for the reason the settlement port
+// gives: the request path is written against the internal type, and two
+// identical interfaces would let the public port and the internal one drift
+// apart while both still compile.
+//
+// Leaving it nil binds the no-custody store: the deployment still serves video,
+// it proxies the bytes from the upstream on read for as long as the upstream
+// has them (ADR-0222).
+type ArtifactStore = proxy.Artifacts
+
+// ArtifactRef and ArtifactInfo are the deployment-neutral messages that cross
+// that port.
+type ArtifactRef = proxy.ArtifactRef
+type ArtifactInfo = proxy.ArtifactInfo
+
+// ErrArtifactGone tells the data plane an artifact is past its retention, which
+// is a normal outcome rather than a fault.
+var ErrArtifactGone = proxy.ErrArtifactGone
+
 // Settlement is the accounting port. Community records key spend; Cloud also
 // owns reservations, wallet balance and ledger postings.
 //
@@ -100,8 +121,9 @@ type Dependencies struct {
 	RateLimit          ratelimit.Limiter
 	Breaker            breaker.Store
 	Jobs               *river.Client[pgx.Tx]
-	HTTPClient         *http.Client // nil uses the hardened shared transport
-	ProbeTrace         bool         // may expose plaintext credentials; dev/staging only
+	Artifacts          ArtifactStore // nil takes no custody of video output
+	HTTPClient         *http.Client  // nil uses the hardened shared transport
+	ProbeTrace         bool          // may expose plaintext credentials; dev/staging only
 }
 
 // Planes are already-protected subrouters supplied by the host application.
@@ -115,8 +137,14 @@ type Planes struct {
 	// the wrong shape, which that SDK reads as "this deployment serves no
 	// models" and reports without an error.
 	DataPlaneV1Beta chi.Router
-	Console         chi.Router
-	Admin           chi.Router
+	// DataPlaneVideoNative carries the vendor compatibility surfaces, which sit
+	// at the API root rather than under a version prefix: each vendor's own
+	// paths carry their own version segment and no two of them agree
+	// (/v1, /api/v3, /v1beta, /api/v1). A caller switching over sets their base
+	// URL to <this>/video/<vendor> and their SDK appends the rest unchanged.
+	DataPlaneVideoNative chi.Router
+	Console              chi.Router
+	Admin                chi.Router
 }
 
 // Module is an immutable, fully wired gateway product.
@@ -151,7 +179,7 @@ func NewModule(deps Dependencies) (*Module, error) {
 	probes := routeprobe.NewService(deps.Database, deps.Jobs)
 	pipeline := proxy.NewPipeline(proxy.PipelineConfig{
 		Pool: deps.Database, Gateway: gw, Catalog: cat,
-		Authenticator: auth, Guard: guard, Settlement: deps.Settlement,
+		Authenticator: auth, Guard: guard, Settlement: deps.Settlement, Artifacts: deps.Artifacts,
 		Cipher: deps.Cipher, HTTPClient: deps.HTTPClient,
 		BreakerStore: deps.Breaker, RateLimit: deps.RateLimit,
 		Alerter: deps.AlertSink,
@@ -165,6 +193,11 @@ func NewModule(deps Dependencies) (*Module, error) {
 	console := gwconsoleapi.NewServer(gwconsoleapi.ServerConfig{
 		Pool: deps.Database, OrganizationAccess: deps.OrganizationAccess,
 		Catalog: cat, Cipher: deps.Cipher, ProbeClient: deps.HTTPClient,
+		// The console reads and cancels video jobs through the pipeline's own
+		// job surface rather than a second implementation of it: what a cancel
+		// means, and whether it leaves the customer charged, has to be one
+		// answer (ADR-0225).
+		VideoJobs: pipeline.VideoJobs(),
 	})
 	admin := gwstaffapi.NewServer(gwstaffapi.ServerConfig{
 		Pool: deps.Database, Catalog: cat, Breaker: deps.Breaker,
@@ -223,13 +256,23 @@ func validateDependencies(d Dependencies) error {
 
 // Mount registers all gateway HTTP surfaces on the supplied protected planes.
 func (m *Module) Mount(p Planes) error {
-	if p.DataPlane == nil || p.DataPlaneV1Beta == nil || p.Console == nil || p.Admin == nil {
-		return errors.New("gateway: DataPlane, DataPlaneV1Beta, Console and Admin planes are required")
+	if p.DataPlane == nil || p.DataPlaneV1Beta == nil || p.DataPlaneVideoNative == nil ||
+		p.Console == nil || p.Admin == nil {
+		return errors.New("gateway: DataPlane, DataPlaneV1Beta, DataPlaneVideoNative, " +
+			"Console and Admin planes are required")
 	}
 	p.DataPlane.Get("/public/models", m.catalog.PublicModelsHandler())
 	p.DataPlane.Get("/models", proxy.ModelsHandler(m.auth, m.guard, m.catalog))
 	m.pipeline.Mount(p.DataPlane)
 	m.pipeline.MountGemini(p.DataPlaneV1Beta)
+	// The video job plane. Idempotency is a property of the job resource rather
+	// than middleware here -- see MountVideos for why the shared one could not
+	// carry it (ADR-0172, ADR-0220).
+	m.pipeline.MountVideos(p.DataPlane)
+	// The same jobs reached at each vendor's own paths, so that a caller who
+	// already wrote against one of them switches by changing a base URL. Not
+	// passthrough: the shapes are theirs, the job is ours.
+	m.pipeline.MountVideoNative(p.DataPlaneVideoNative)
 
 	gwconsoleapi.HandlerFromMux(
 		gwconsoleapi.NewStrictHandlerWithOptions(m.console,
@@ -266,6 +309,11 @@ func PeriodicJobs() []*river.PeriodicJob {
 		gwusage.AnomalyPeriodicJob(),
 		gwusage.AffinityGCPeriodicJob(),
 		routeprobe.SweepPeriodicJob(),
+		// The reconciler for asynchronous jobs. Nothing else observes a video
+		// job's end: the request that created it returned in seconds, and the
+		// caller may never come back (ADR-0220).
+		proxy.VideoScanPeriodicJob(),
+		proxy.VideoSweepPeriodicJob(),
 	}
 }
 
@@ -279,6 +327,8 @@ func (m *Module) RegisterWorkers(workers *river.Workers) error {
 	river.AddWorker(workers, gwusage.NewProbeWorker(m.pool, m.gw, m.alerts))
 	river.AddWorker(workers, routeprobe.NewWorker(m.pool, m.box, m.jobs))
 	river.AddWorker(workers, routeprobe.NewSweepWorker(m.pool, m.jobs))
+	river.AddWorker(workers, proxy.NewVideoScanWorker(m.pipeline))
+	river.AddWorker(workers, proxy.NewVideoSweepWorker(m.pipeline))
 	river.AddWorker(workers, gwusage.NewUnsettledWorker(m.pool, m.settle, m.alerts))
 	river.AddWorker(workers, gwusage.NewRevenueReconWorker(m.pool, m.alerts))
 	river.AddWorker(workers, gwusage.NewAnomalyWorker(m.pool, m.settings, m.alerts))

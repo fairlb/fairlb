@@ -62,6 +62,7 @@ const (
 	KeyHintBearer            = "bearer"
 	KeyHintAWSKeypairJSON    = "aws_keypair_json"
 	KeyHintGCPServiceAccount = "gcp_service_account_json"
+	KeyHintKlingKeypairJSON  = "kling_keypair_json"
 )
 
 // Metering fidelity, per protocol. It is a *declaration about the endpoint*,
@@ -124,8 +125,29 @@ type Vendor struct {
 	// dataset, empty when it has none or when the dataset splits the vendor
 	// across ids that only the base URL can tell apart.
 	RefdataProvider string
-	DocsURL         string
-	ModelIDExample  string
+	// Creator is the model-creator segment for the models this platform
+	// publishes as a first party -- the first segment of their catalog slug,
+	// as in the "openai" of "openai/gpt-5.6-sol".
+	//
+	// Empty for platforms and aggregators, and that emptiness is the point:
+	// they carry other people's models, so they cannot answer "who made this",
+	// and a prefix guessed from the platform's own name would write the
+	// routing dimension into the catalog key. A caller that cannot get a
+	// creator here has to ask a person rather than fall back to something.
+	//
+	// Three fields on this struct now look alike and answer different
+	// questions. They never stand in for one another:
+	//
+	//   Creator         who made the model      -- the slug's first segment
+	//   RefdataProvider who prices it           -- a dataset scope
+	//   ModelIDExample  how the upstream spells it -- placeholder text
+	//
+	// xAI is the illustration: its creator segment and its dataset id are both
+	// "x-ai" while its own slug is "xai", so any two of the three agreeing is
+	// a coincidence rather than a rule.
+	Creator        string
+	DocsURL        string
+	ModelIDExample string
 }
 
 // Vendors returns the registry.
@@ -143,6 +165,7 @@ func Vendors() []Vendor {
 			ModelListing:    true,
 			Fidelity:        map[string]string{ProtocolOpenAI: FidelityFull},
 			RefdataProvider: "openai",
+			Creator:         "openai",
 			DocsURL:         "https://platform.openai.com/docs/api-reference",
 			ModelIDExample:  "gpt-4o-mini",
 		},
@@ -154,6 +177,7 @@ func Vendors() []Vendor {
 			ModelListing:    true,
 			Fidelity:        map[string]string{ProtocolAnthropic: FidelityFull},
 			RefdataProvider: "anthropic",
+			Creator:         "anthropic",
 			DocsURL:         "https://docs.anthropic.com/en/api/messages",
 			ModelIDExample:  "claude-sonnet-4-20250514",
 		},
@@ -169,7 +193,9 @@ func Vendors() []Vendor {
 			// why this entry does not try to prefill both at once. The recipe is
 			// in the documentation.
 			Slug: "google", Label: "Google Gemini", Kind: VendorFirstParty,
-			Protocols:        []string{ProtocolGemini, ProtocolOpenAI},
+			// Also the video job plane: Veo is served from the same host on
+			// its own long-running-operation API.
+			Protocols:        []string{ProtocolGemini, ProtocolOpenAI, ProtocolVideo},
 			DefaultProtocols: []string{ProtocolGemini},
 			BaseURLs:         []VendorBaseURL{{URL: "https://generativelanguage.googleapis.com"}},
 			KeyHint:          KeyHintBearer,
@@ -179,6 +205,7 @@ func Vendors() []Vendor {
 				ProtocolOpenAI: FidelityPartial,
 			},
 			RefdataProvider: "google",
+			Creator:         "google",
 			DocsURL:         "https://ai.google.dev/gemini-api/docs",
 			ModelIDExample:  "gemini-2.5-flash",
 		},
@@ -257,6 +284,7 @@ func Vendors() []Vendor {
 			ModelListing:    true,
 			Fidelity:        map[string]string{ProtocolOpenAI: FidelityUnknown},
 			RefdataProvider: "x-ai",
+			Creator:         "x-ai",
 			DocsURL:         "https://docs.x.ai/docs/api-reference",
 			ModelIDExample:  "grok-4",
 		},
@@ -268,6 +296,7 @@ func Vendors() []Vendor {
 			ModelListing:    true,
 			Fidelity:        map[string]string{ProtocolOpenAI: FidelityUnknown},
 			RefdataProvider: "mistral",
+			Creator:         "mistralai",
 			DocsURL:         "https://docs.mistral.ai/api/",
 			ModelIDExample:  "mistral-large-latest",
 		},
@@ -309,19 +338,30 @@ func Vendors() []Vendor {
 				ProtocolAnthropic: FidelityUnknown,
 			},
 			RefdataProvider: "deepseek",
+			Creator:         "deepseek",
 			DocsURL:         "https://api-docs.deepseek.com/",
 			ModelIDExample:  "deepseek-chat",
 		},
 		{
+			// Two families behind two addresses. The text models speak
+			// OpenAI's dialect under /compatible-mode; Wan's video task API is
+			// native and sits at the host root. One record cannot carry both --
+			// the base URL is a property of the record -- so a Wan channel is a
+			// second provider record, the same shape Vertex and Bedrock need.
+			// The recipe is in the documentation.
 			Slug: "alibaba", Label: "阿里云百炼 (Alibaba Model Studio)", Kind: VendorFirstParty,
-			Protocols: []string{ProtocolOpenAI}, DefaultProtocols: []string{ProtocolOpenAI},
+			Protocols:        []string{ProtocolOpenAI, ProtocolVideo},
+			DefaultProtocols: []string{ProtocolOpenAI},
 			BaseURLs: []VendorBaseURL{
 				{Label: "China", URL: "https://dashscope.aliyuncs.com/compatible-mode"},
 				{Label: "International", URL: "https://dashscope-intl.aliyuncs.com/compatible-mode"},
+				{Label: "China (video)", URL: "https://dashscope.aliyuncs.com"},
+				{Label: "International (video)", URL: "https://dashscope-intl.aliyuncs.com"},
 			},
 			KeyHint:        KeyHintBearer,
 			ModelListing:   true,
 			Fidelity:       map[string]string{ProtocolOpenAI: FidelityTotalsOnly},
+			Creator:        "qwen",
 			DocsURL:        "https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope",
 			ModelIDExample: "qwen-plus",
 		},
@@ -340,6 +380,7 @@ func Vendors() []Vendor {
 				ProtocolAnthropic: FidelityUnknown,
 			},
 			RefdataProvider: "moonshotai",
+			Creator:         "moonshotai",
 			DocsURL:         "https://platform.moonshot.cn/docs/api-reference",
 			ModelIDExample:  "kimi-k2-0905-preview",
 		},
@@ -371,6 +412,7 @@ func Vendors() []Vendor {
 				ProtocolOpenAI:    FidelityTotalsOnly,
 				ProtocolAnthropic: FidelityUnknown,
 			},
+			Creator:        "z-ai",
 			DocsURL:        "https://docs.bigmodel.cn/api-reference",
 			ModelIDExample: "glm-4.6",
 		},
@@ -380,7 +422,9 @@ func Vendors() []Vendor {
 			// the model id or an endpoint id, depending on how the account is
 			// set up.
 			Slug: "volcengine", Label: "火山方舟 (Volcengine Ark)", Kind: VendorFirstParty,
-			Protocols: []string{ProtocolOpenAI}, DefaultProtocols: []string{ProtocolOpenAI},
+			// Also the video job plane: Seedance is served from the same
+			// account and base URL, on this vendor's own task API.
+			Protocols: []string{ProtocolOpenAI, ProtocolVideo}, DefaultProtocols: []string{ProtocolOpenAI},
 			BaseURLs: []VendorBaseURL{
 				{Label: "China", URL: "https://ark.cn-beijing.volces.com/api/v3"},
 				{Label: "International", URL: "https://ark.ap-southeast.bytepluses.com/api/v3"},
@@ -389,10 +433,30 @@ func Vendors() []Vendor {
 				PathChat:       "/chat/completions",
 				PathEmbeddings: "/embeddings",
 				PathModels:     "/models",
+				// Seedream is served from this same base URL in OpenAI's own
+				// image shape. Without this override the request is addressed
+				// to <base>/v1/images/generations -- the base URL already ends
+				// in /api/v3 -- and the upstream answers 404, which reads as
+				// "the model is not there" rather than "the path is wrong".
+				//
+				// The edits path is deliberately not overridden: this vendor
+				// has no separate edits endpoint, it takes an input image on
+				// the generations call. Leaving it out lets the probe record
+				// `unsupported` for edits, which is the truth.
+				//
+				// That sentence was false when it was written, and it is worth
+				// saying why rather than quietly fixing it: generations and
+				// edits shared one capability key, and only generations was
+				// ever probed. So nothing recorded anything about edits, and a
+				// route verified here became a candidate for an endpoint that
+				// answers 404 on every request. `images_edits` is a surface of
+				// its own now, and the sentence is true.
+				PathImagesGenerate: "/images/generations",
 			}},
 			KeyHint:        KeyHintBearer,
 			ModelListing:   true,
 			Fidelity:       map[string]string{ProtocolOpenAI: FidelityUnknown},
+			Creator:        "bytedance",
 			DocsURL:        "https://www.volcengine.com/docs/82379",
 			ModelIDExample: "doubao-seed-1-6",
 		},
@@ -408,6 +472,7 @@ func Vendors() []Vendor {
 			KeyHint:        KeyHintBearer,
 			ModelListing:   true,
 			Fidelity:       map[string]string{ProtocolOpenAI: FidelityUnknown},
+			Creator:        "baidu",
 			DocsURL:        "https://cloud.baidu.com/doc/qianfan-api/index.html",
 			ModelIDExample: "ernie-4.5-turbo-128k",
 		},
@@ -418,12 +483,37 @@ func Vendors() []Vendor {
 			KeyHint:        KeyHintBearer,
 			ModelListing:   true,
 			Fidelity:       map[string]string{ProtocolOpenAI: FidelityUnknown},
+			Creator:        "tencent",
 			DocsURL:        "https://cloud.tencent.com/document/product/1729/111007",
 			ModelIDExample: "hunyuan-turbos-latest",
 		},
 		{
+			// The first vendor in the registry that speaks *only* the video
+			// plane. It is a useful shape to have: it proves the protocol axis
+			// really is orthogonal rather than an add-on to a text vendor.
+			Slug: "kuaishou", Label: "可灵 (Kling)", Kind: VendorFirstParty,
+			Protocols:        []string{ProtocolVideo},
+			DefaultProtocols: []string{ProtocolVideo},
+			BaseURLs:         []VendorBaseURL{{URL: "https://api-beijing.klingai.com"}},
+			// This platform authenticates with a JWT the caller signs, valid for
+			// half an hour. Pasting one in as a static key works until it
+			// expires and then answers 401 on every request, so what is stored
+			// is the key pair and the token is minted per request.
+			Transport:      Transport{Auth: AuthKlingJWT},
+			KeyHint:        KeyHintKlingKeypairJSON,
+			ModelListing:   false,
+			Creator:        "kuaishou",
+			DocsURL:        "https://app.klingai.com/global/dev/document-api",
+			ModelIDExample: "kling-v2-master",
+		},
+		{
+			// Also the video job plane: Hailuo is served from the same host and
+			// the same account as the text models, so one record carries both --
+			// unlike Wan, whose video API is at a different address from its
+			// text one.
 			Slug: "minimax", Label: "MiniMax", Kind: VendorFirstParty,
-			Protocols: []string{ProtocolOpenAI, ProtocolAnthropic}, DefaultProtocols: []string{ProtocolOpenAI, ProtocolAnthropic},
+			Protocols:        []string{ProtocolOpenAI, ProtocolAnthropic, ProtocolVideo},
+			DefaultProtocols: []string{ProtocolOpenAI, ProtocolAnthropic},
 			BaseURLs: []VendorBaseURL{
 				{Label: "China", URL: "https://api.minimaxi.com"},
 				{Label: "International", URL: "https://api.minimax.io"},
@@ -436,6 +526,7 @@ func Vendors() []Vendor {
 				ProtocolAnthropic: FidelityUnknown,
 			},
 			RefdataProvider: "minimax",
+			Creator:         "minimax",
 			DocsURL:         "https://platform.minimax.io/docs/api-reference",
 			ModelIDExample:  "MiniMax-M2",
 		},
@@ -444,7 +535,7 @@ func Vendors() []Vendor {
 			// list of known platforms ending in "something else" reads the way
 			// the choice actually works.
 			Slug: VendorCustom, Label: "Custom (OpenAI- or Anthropic-compatible)", Kind: VendorKindCustom,
-			Protocols:        KnownProtocols(),
+			Protocols:        WireProtocols(),
 			DefaultProtocols: []string{ProtocolOpenAI},
 			KeyHint:          KeyHintBearer,
 			ModelListing:     true,

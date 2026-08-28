@@ -1,10 +1,10 @@
 {
   "dataset": "genai-prices",
   "source_url": "https://github.com/pydantic/genai-prices",
-  "file_url": "https://raw.githubusercontent.com/pydantic/genai-prices/d492ce0fecbb0d0f74bf3119b867a1a051d4087b/prices/new_data/v2/data_slim.json",
-  "upstream_commit": "d492ce0fecbb0d0f74bf3119b867a1a051d4087b",
-  "upstream_date": "2026-08-13",
-  "snapshot_date": "2026-08-17",
+  "file_url": "https://raw.githubusercontent.com/pydantic/genai-prices/47df840a5ab10bbcffb8e5ac01b9899032245d1b/prices/new_data/v2/data_slim.json",
+  "upstream_commit": "47df840a5ab10bbcffb8e5ac01b9899032245d1b",
+  "upstream_date": "2026-08-21",
+  "snapshot_date": "2026-08-24",
   "license": "MIT",
-  "sha256": "d3c403b55134d8f17b82d445c21baa2967d5874d47b6cfd11ba2689f4ee7612b"
+  "sha256": "ac1aba22231146c98fbdf57b8f1fc25098c1c85db544cdeca6a0fcc1fd3293e4"
 }

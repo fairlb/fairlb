@@ -45,6 +45,7 @@ func vendorOut(v catalog.Vendor) GatewayVendor {
 		DocsUrl:          strutil.Ptr(v.DocsURL),
 		ModelIdExample:   strutil.Ptr(v.ModelIDExample),
 		RefdataProvider:  strutil.Ptr(v.RefdataProvider),
+		Creator:          strutil.Ptr(v.Creator),
 	}
 	// Not omitted when empty: the field is required, and an absent array reads
 	// to a client as "not sent" rather than as "this vendor prefills nothing".

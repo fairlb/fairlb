@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { glob } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
@@ -181,63 +180,4 @@ test("unmounted pages really are outside the scan, or the test above proves noth
   // The tiers page, by contrast, is now mounted, so it *is* in the scan — and
   // the assertion above is what proves its links resolve.
   expect(scanned.some((f) => f.endsWith("tiers.tsx"))).toBe(true);
-});
-
-/**
- * Every path the other feature package asks `canAccess` about must be a path
- * this app can answer for.
- *
- * # Why the criterion lives here
- *
- * Pages in that package hide an entry point when its destination is not
- * reachable, and they delegate that decision to the host's `canAccess`. This
- * host answers it by looking the path up in the registry — so the moment the
- * package adds a destination, this app silently decides it is unreachable. The
- * entry point simply stops appearing: no error, no build failure, a UI that
- * looks entirely normal with one feature missing.
- *
- * This test extracts those literals and asks the registry about each one. A
- * missing one means either mounting the page or recording it in
- * `DELIBERATELY_ABSENT` below with the reason. Either is fine; what is not
- * allowed is nobody knowing.
- */
-const CONSOLE_PACKAGE_SRC = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../../../packages/gateway-console-features/src",
-);
-
-/** Destinations deliberately not mounted: an entry here means somebody looked
- * at it and decided. */
-const DELIBERATELY_ABSENT = new Set<string>();
-
-test("every destination the other feature package asks about is one this app can answer for", async () => {
-  const files: string[] = [];
-  for await (const rel of glob("**/*.{ts,tsx}", { cwd: CONSOLE_PACKAGE_SRC })) files.push(rel);
-  expect(
-    files.length,
-    "no source file found in the other feature package; wrong path?",
-  ).toBeGreaterThan(5);
-
-  const dests = new Set<string>();
-  for (const rel of files) {
-    const src = readFileSync(join(CONSOLE_PACKAGE_SRC, rel), "utf8");
-    for (const m of src.matchAll(/canAccess\(\s*\w+\s*,\s*["'](\/[^"']+)["']\s*\)/g)) {
-      dests.add(m[1]!);
-    }
-  }
-  // Zero-match guard: with nothing extracted this test is vacuously true, and
-  // that is exactly what its failure mode looks like.
-  expect(
-    dests.size,
-    "no canAccess destination was extracted; the pattern no longer matches how the package writes them",
-  ).toBeGreaterThan(0);
-
-  const missing = [...dests].filter(
-    (d) => resolveAdminPage(d) === undefined && !DELIBERATELY_ABSENT.has(d),
-  );
-  expect(
-    missing,
-    `the other feature package asks whether these destinations are reachable, and registry.ts has none of them: ${missing.join(", ")}. ` +
-      "Mount the page, or record it in DELIBERATELY_ABSENT with the reason.",
-  ).toEqual([]);
 });

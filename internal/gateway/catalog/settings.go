@@ -32,6 +32,7 @@ const (
 	// Stateful upstream response/interaction ids are retained only long enough
 	// to route follow-up operations back to their creating credential.
 	KeyResourceAffinityTTLDays = "gateway.resource_affinity_ttl_days"
+	KeyVideoRetentionHours     = "gateway.video_retention_hours"
 	// There is likewise no pricing-engine-mode key: with a single set of
 	// prices, "which set wins" is not a question. Its registration had to go
 	// with it -- left in the registry, the settings page would still render a
@@ -87,6 +88,22 @@ func Specs() []settings.Spec {
 		DescriptionKey: "settingDescResourceAffinityTtlDays",
 		Group:          settings.GroupRetention, Impact: settings.ImpactHigh,
 		Default: json.RawMessage(`60`),
+	})
+
+	out = append(out, settings.Spec{
+		Key: KeyVideoRetentionHours, Kind: settings.KindInt,
+		Range: &settings.Range{Min: 1, Max: 720},
+		// How long a finished video stays fetchable. Bounded at the read site
+		// too, so a corrupt value cannot promise retention the deployment
+		// cannot keep -- and on a deployment that takes no custody of the
+		// bytes, this is the window in which the upstream is still likely to
+		// have them (ADR-0222).
+		Description:    "How many hours a generated video stays available through the gateway before it is deleted.",
+		DescriptionKey: "settingDescVideoRetentionHours",
+		// Retention, not billing: shrinking this deletes customer content
+		// irreversibly, which is what that group means.
+		Group: settings.GroupRetention, Impact: settings.ImpactHigh,
+		Default: json.RawMessage(`168`),
 	})
 	return out
 }
@@ -212,4 +229,27 @@ func (s *Settings) KillSwitch(ctx context.Context) bool {
 		return false
 	}
 	return v
+}
+
+const (
+	defaultVideoRetentionHours = 168
+	minVideoRetentionHours     = 1
+	maxVideoRetentionHours     = 720
+)
+
+// VideoRetention is how long a finished video stays fetchable.
+//
+// Bounded at the read site as well as at the write site, for the same reason
+// ResourceAffinityTTL is: a value that got past the writer must not be able to
+// promise retention nobody agreed to.
+func (s *Settings) VideoRetention(ctx context.Context) time.Duration {
+	var hours int64
+	found, err := s.store.Get(ctx, KeyVideoRetentionHours, &hours)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to read the video retention window, falling back to the default", "error", err)
+	}
+	if err != nil || !found || hours < minVideoRetentionHours || hours > maxVideoRetentionHours {
+		hours = defaultVideoRetentionHours
+	}
+	return time.Duration(hours) * time.Hour
 }

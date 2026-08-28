@@ -426,7 +426,7 @@ func TestConnectivityProbeSendsTheEnvelopedBody(t *testing.T) {
 		Body: &gwstaffapi.GatewayProviderInput{Vendor: &vendorCustom,
 			Slug:      &slug,
 			Protocols: &[]gwstaffapi.GatewayProviderInputProtocols{"anthropic"},
-			BaseUrl:   ptr(up.URL),
+			BaseUrl:   new(up.URL),
 			Transport: &profile,
 		},
 	})
@@ -739,7 +739,7 @@ func TestProviderTransportProfileRefusedOnSave(t *testing.T) {
 				Body: &gwstaffapi.GatewayProviderInput{Vendor: &vendorCustom,
 					Slug:      &slug,
 					Protocols: &[]gwstaffapi.GatewayProviderInputProtocols{"openai"},
-					BaseUrl:   ptr("https://up.test"),
+					BaseUrl:   new("https://up.test"),
 					Transport: &profile,
 				},
 			})
@@ -772,7 +772,7 @@ func TestProviderTransportProfileRefusedOnSave(t *testing.T) {
 		Body: &gwstaffapi.GatewayProviderInput{Vendor: &vendorCustom,
 			Slug:      &slug,
 			Protocols: &[]gwstaffapi.GatewayProviderInputProtocols{"openai"},
-			BaseUrl:   ptr("https://res.openai.azure.test"),
+			BaseUrl:   new("https://res.openai.azure.test"),
 			Transport: &good,
 		},
 	})
@@ -816,7 +816,7 @@ func TestProviderTransportProfileRefusedOnSave(t *testing.T) {
 		Body: &gwstaffapi.GatewayProviderInput{Vendor: &vendorCustom,
 			Slug:      &bedrockSlug,
 			Protocols: &[]gwstaffapi.GatewayProviderInputProtocols{"anthropic"},
-			BaseUrl:   ptr("https://bedrock-runtime.us-east-1.amazonaws.test"),
+			BaseUrl:   new("https://bedrock-runtime.us-east-1.amazonaws.test"),
 			Transport: &signing,
 		},
 	})

@@ -17,7 +17,19 @@ import { createRoot } from "react-dom/client";
 export interface MountAppOptions {
   root: HTMLElement;
   app: ReactNode;
-  appNameKey?: MessageKey;
+  /**
+   * The message key holding this application's display name.
+   *
+   * Required, and that is the fix for a real defect rather than a tightening for
+   * its own sake: it used to be optional, two of the three shells omitted it,
+   * and they read correctly only because the context's fallback happens to be
+   * the operations surface's name. A fourth shell would have been named after
+   * the operations console with nothing reporting it. `useAppName` is documented
+   * as the single source for the sidebar brand, the authentication pages and the
+   * document title, and a single source that a caller may silently decline is
+   * not one.
+   */
+  appNameKey: MessageKey;
   loadingLabel?: string;
 }
 
@@ -48,12 +60,6 @@ export function mountApp({ root, app, appNameKey, loadingLabel = "Loading…" }:
   const queryClient = createAppQueryClient((message) =>
     toastManager.add({ variant: "error", title: message }),
   );
-  const namedApp = appNameKey ? (
-    <AppNameProvider messageKey={appNameKey}>{app}</AppNameProvider>
-  ) : (
-    app
-  );
-
   createRoot(root).render(
     <StrictMode>
       <ThemeProvider>
@@ -62,7 +68,9 @@ export function mountApp({ root, app, appNameKey, loadingLabel = "Loading…" }:
             <LinkProvider component={AppLink}>
               <Toasty toastManager={toastManager}>
                 <RootErrorBoundary>
-                  <Suspense fallback={<LoadingState label={loadingLabel} />}>{namedApp}</Suspense>
+                  <Suspense fallback={<LoadingState label={loadingLabel} />}>
+                    <AppNameProvider messageKey={appNameKey}>{app}</AppNameProvider>
+                  </Suspense>
                 </RootErrorBoundary>
               </Toasty>
             </LinkProvider>

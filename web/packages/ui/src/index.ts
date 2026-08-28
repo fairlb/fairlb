@@ -51,7 +51,6 @@ export {
   AppNameProvider,
   useAppName,
   Centered,
-  LangThemeToggle,
   type AppShellProps,
 } from "./shell";
 export { AuthShell, type AuthShellProps } from "./auth-shell";
@@ -91,6 +90,7 @@ export {
   formatMoney,
   formatNano,
   formatNanoFixed,
+  formatNanoInput,
   nanoToMain,
   mainToNano,
   amountSchema,
@@ -137,7 +137,14 @@ export { RecordNav, type RecordNavItem, type RecordNavProps } from "./record-nav
 // Which item of a navigation the URL is on, and the segment-boundary rule it
 // rests on. Both navigations and the route registry read the same one.
 export { isPathUnder, resolveNavValue } from "./nav-path";
-export { RecordPage, SectionPage } from "./record-layout";
+export { ContentsLayout, ListPage, RecordPage, SectionPage } from "./record-layout";
+export {
+  CommandPalette,
+  SidebarSearchRow,
+  useCommandPalette,
+  type PaletteNavItem,
+  type PaletteSource,
+} from "./command-palette";
 // The one implementation of "the row title is the navigation". Both applications
 // and the shared feature packages use this same copy; see the note at the top of
 // row-title-link.tsx.

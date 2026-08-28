@@ -5,16 +5,20 @@ package upstreamprobe
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httputil"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/fairlb/fairlb/internal/gateway/catalog"
 	"github.com/fairlb/fairlb/internal/gateway/proxy"
+	"github.com/fairlb/fairlb/internal/gateway/video"
 )
 
 const (
@@ -27,9 +31,21 @@ type Spec struct {
 	Surface  catalog.Surface
 	Path     string
 	Body     []byte
+	// ContentType is set only when the body is not JSON. The image edits
+	// endpoint is the one such probe: its request is a multipart upload, so it
+	// is sent as written instead of going through RewriteRequest -- which is
+	// safe here and only here, because a probe already addresses the upstream's
+	// own model id and has nothing to rewrite.
+	ContentType string
 }
 
-func SpecForEndpoint(endpoint, model string) (Spec, bool) {
+// SpecForEndpoint builds the smallest request that proves an endpoint works.
+//
+// vendor is consulted for the video plane only. Every other endpoint is a
+// dialect endpoint whose request shape follows from the protocol, and on those
+// the vendor stays inert -- which is ADR-0140's rule, still in force
+// everywhere except the one plane ADR-0219 carved out.
+func SpecForEndpoint(endpoint, model, vendor string) (Spec, bool) {
 	protocol, ok := catalog.ProtocolForEndpoint(endpoint)
 	if !ok {
 		return Spec{}, false
@@ -37,6 +53,9 @@ func SpecForEndpoint(endpoint, model string) (Spec, bool) {
 	surface, ok := catalog.SurfaceForEndpoint(endpoint)
 	if !ok {
 		return Spec{}, false
+	}
+	if endpoint == "video" {
+		return videoSpec(model, vendor)
 	}
 	body := map[string]any{"model": model}
 	var path string
@@ -92,6 +111,8 @@ func SpecForEndpoint(endpoint, model string) (Spec, bool) {
 		body["prompt"] = "a dot"
 		body["n"] = 1
 		body["size"] = "1024x1024"
+	case "images_edits":
+		return imagesEditSpec(protocol, surface, model)
 	default:
 		return Spec{}, false
 	}
@@ -114,7 +135,7 @@ func DefaultEndpoint(protocol string) string {
 }
 
 func SpecForProtocol(protocol proxy.Protocol, model string) (Spec, bool) {
-	return SpecForEndpoint(DefaultEndpoint(string(protocol)), model)
+	return SpecForEndpoint(DefaultEndpoint(string(protocol)), model, "")
 }
 
 type Input struct {
@@ -148,21 +169,34 @@ type Result struct {
 
 func Run(ctx context.Context, in Input) Result {
 	out := Result{CheckedAt: time.Now().UTC()}
-	body, err := proxy.RewriteRequest(in.Spec.Surface, in.Spec.Body, in.Model, false, in.Transport)
-	if err != nil {
-		out.Message = "Could not build the probe body: " + err.Error()
-		return out
+	body := in.Spec.Body
+	if in.Spec.ContentType == "" {
+		// JSON: the model name still goes through the one function allowed to
+		// edit a body. A multipart probe skips it because there is nothing to
+		// rewrite -- the spec was built with the upstream's own model id.
+		var err error
+		if body, err = proxy.RewriteRequest(in.Spec.Surface, in.Spec.Body, in.Model, false, in.Transport); err != nil {
+			out.Message = "Could not build the probe body: " + err.Error()
+			return out
+		}
 	}
 	if in.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, in.Timeout)
 		defer cancel()
 	}
-	req, err := proxy.BuildRequest(ctx, proxy.Target{
+	target := proxy.Target{
 		Protocol: in.Spec.Protocol, BaseURL: in.BaseURL, APIKey: in.APIKey,
 		Path: in.Spec.Path, Headers: in.Headers, Transport: in.Transport,
 		UpstreamModel: in.Model,
-	}, body)
+	}
+	var req *http.Request
+	var err error
+	if in.Spec.ContentType != "" {
+		req, err = proxy.BuildRequestStream(ctx, target, bytes.NewReader(body), in.Spec.ContentType)
+	} else {
+		req, err = proxy.BuildRequest(ctx, target, body)
+	}
 	if err != nil {
 		out.Message = "Could not build the request: " + err.Error()
 		return out
@@ -219,4 +253,92 @@ func Run(ctx context.Context, in Input) Result {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	out.Message = fmt.Sprintf("The upstream returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	return out
+}
+
+// videoSpec builds the probe body through the vendor's own mapper, so the probe
+// sends exactly the request the data plane would.
+//
+// A probe that built its own approximation would report its own mistake as the
+// provider's, which is the failure the transport profile is applied here to
+// avoid. The clip is the shortest and smallest the vendor's own envelope
+// allows: this endpoint is never probed automatically precisely because each
+// probe generates a real video, so the one an operator does ask for should cost
+// as little as it can.
+func videoSpec(model, vendor string) (Spec, bool) {
+	mapper, ok := video.MapperFor(vendor)
+	if !ok {
+		return Spec{}, false
+	}
+	envelope := mapper.Envelope(model)
+	req := video.Request{Prompt: "a dot", N: 1}
+	if len(envelope.DurationsSeconds) > 0 {
+		req.DurationSeconds = slices.Min(envelope.DurationsSeconds)
+	}
+	if len(envelope.Resolutions) > 0 {
+		req.Resolution = envelope.Resolutions[0]
+	}
+	if len(envelope.AspectRatios) > 0 {
+		req.AspectRatio = envelope.AspectRatios[0]
+	}
+	// Resolved the same way admission resolves it, so the probe asks for what
+	// this model actually does about sound rather than for a combination the
+	// upstream would refuse -- a refusal here reads as "the endpoint is not
+	// there", which is the one conclusion a probe must not reach by accident.
+	out, err := mapper.Submit(req, model, envelope.ResolveAudio(req))
+	if err != nil {
+		return Spec{}, false
+	}
+	return Spec{
+		Protocol: proxy.ProtocolVideo, Surface: catalog.SurfaceVideo,
+		Path: out.Path, Body: out.Body,
+	}, true
+}
+
+// probePNG is a one-pixel PNG, the smallest thing that can stand in for an
+// upload.
+const probePNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+// imagesEditSpec builds the smallest multipart edit request.
+//
+// It is the only probe whose body is not JSON, and the reason the endpoint gets
+// a probe of its own at all is that a vendor can serve image generation without
+// serving edits -- several take an input image on the generations call instead.
+// While the two shared one capability key that was unaskable, and a route
+// verified on generations answered every edit request with the upstream's 404.
+//
+// What it reliably answers is exactly that question: a vendor with no edits
+// path replies 404 or 405 and the verdict is `unsupported`. What it cannot
+// always answer is the other half -- an upstream that validates the upload
+// before the endpoint may reject one pixel with a 400, which reads as `failed`
+// rather than `ok`. That is the same treatment relays already get when they say
+// 400 where they mean unsupported, and the answer is the same one: an operator
+// marks it by hand. Sending a realistic image instead would mean shipping one,
+// and it would still be some other upstream's turn to dislike it.
+func imagesEditSpec(protocol string, surface catalog.Surface, model string) (Spec, bool) {
+	png, err := base64.StdEncoding.DecodeString(probePNG)
+	if err != nil {
+		return Spec{}, false
+	}
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.WriteField("model", model); err != nil {
+		return Spec{}, false
+	}
+	if err := w.WriteField("prompt", "a dot"); err != nil {
+		return Spec{}, false
+	}
+	part, err := w.CreateFormFile("image", "probe.png")
+	if err != nil {
+		return Spec{}, false
+	}
+	if _, err := part.Write(png); err != nil {
+		return Spec{}, false
+	}
+	if err := w.Close(); err != nil {
+		return Spec{}, false
+	}
+	return Spec{
+		Protocol: proxy.Protocol(protocol), Surface: surface,
+		Path: catalog.PathImagesEdit, Body: buf.Bytes(), ContentType: w.FormDataContentType(),
+	}, true
 }

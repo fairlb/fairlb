@@ -265,7 +265,7 @@ function OrgAccessContent({ withPricing }: { withPricing: boolean }) {
         {settings.isError && <Alert>{apiErrorMessage(settings.error)}</Alert>}
         {putAccess.isError && <Alert>{apiErrorMessage(putAccess.error)}</Alert>}
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-kumo-line bg-kumo-recessed p-4 text-base">
-          <span className="font-mono font-medium">{cur.tier_slug}</span>
+          <span className="font-mono text-[0.9em] font-medium">{cur.tier_slug}</span>
           {!cur.tier_explicit && (
             <StatusBadge tone="neutral">{t("orgAccessInherited")}</StatusBadge>
           )}

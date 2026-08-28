@@ -51,7 +51,7 @@ var endpoints = map[string]endpoint{
 
 // imageEditEndpoint is listed separately: it is multipart and takes a different
 // path from the JSON endpoints.
-var imageEditEndpoint = endpoint{surface: catalog.SurfaceImages, protocol: ProtocolOpenAI, path: catalog.PathImagesEdit}
+var imageEditEndpoint = endpoint{surface: catalog.SurfaceImagesEdit, protocol: ProtocolOpenAI, path: catalog.PathImagesEdit}
 
 // Mount registers the proxying endpoints on the dataplane subrouter.
 //

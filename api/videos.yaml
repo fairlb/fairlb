@@ -1,0 +1,532 @@
+openapi: 3.1.0
+info:
+  title: FairLB Video Jobs API
+  version: 1.0.0
+  description: |
+    The video job plane, at `/v1/videos`.
+
+    **This document describes a contract this gateway owns**, and it is the only
+    such document here. The inference data plane speaks OpenAI, Anthropic and
+    Gemini because their vendors published those protocols and others adopted
+    them; it forwards a request in the dialect its caller chose, and translating
+    it would be this gateway deciding what the caller meant. No video vendor has
+    published a protocol the others speak — the leading models are an LRO on one
+    side and half a dozen private shapes on the other — so there is nothing to
+    pass through faithfully. This gateway publishes its own vocabulary instead
+    and maps it onto each upstream (ADR-0218).
+
+    It lives in its own file for the same reason. `dataplane.yaml` is a mirror of
+    three native protocols; folding a normalised contract into it would blur the
+    one distinction that document exists to make.
+
+    **Refusal, never approximation.** The vocabulary below is closed: a field
+    outside it is a 400, not a field quietly dropped. A value outside what the
+    model has been declared to accept is a 400 taken *before* any hold, not a
+    shorter clip billed at the requested length. That is the premise the whole
+    design rests on rather than a strictness preference — every attempt here
+    costs real money.
+
+    **A job knows its price before it starts.** Duration, resolution, audio and
+    `n` are all in the request, so the charge is a pure function of them. The
+    amount held at submission is exactly the amount settled at completion; no
+    estimate is involved, and none of the "hold conservatively, refund later"
+    reasoning that applies to token billing applies here.
+
+    **Nothing is charged for a job that produced no film.** A failed job and a
+    cancelled one are both free, and both still leave a usage row — at zero —
+    because "why did my video fail" has to have an answer. Content refusals are
+    the ordinary failure on this plane, not an edge case.
+
+    **Errors** use the OpenAI error shape, with this gateway's stable `code`
+    inside it, so an existing SDK's error handling keeps working.
+servers:
+  - url: https://api.{domain}/
+    variables:
+      domain:
+        default: fairlb.example
+        description: The host this deployment is reachable at
+security:
+  - bearerAuth: []
+  - apiKeyAuth: []
+tags:
+  - name: video-jobs
+    description: |
+      Submitting, tracking and fetching video generation jobs. A job plane, not a
+      protocol surface: it is deliberately not one of the native protocols the
+      data plane speaks, and counting it as one would advertise a translation
+      layer as a native API.
+
+paths:
+  /v1/videos:
+    post:
+      operationId: createVideo
+      tags: [video-jobs]
+      summary: Submit a video job
+      description: |
+        Returns a job id immediately; the film exists a minute or two later.
+
+        `Idempotency-Key` is **required**, and a request without one is refused
+        rather than accepted unprotected. This is a paid create: a retry without
+        a key is a second charge, and the guarantee that matters most here cannot
+        be left to whether the client remembered. Repeat the same key and the
+        job it already created comes back; repeat it with a different body and
+        the request is refused rather than answered with somebody else's video.
+
+        The body is capped at 16 MiB, because reference images may arrive as data
+        URLs.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, maxLength: 255 }
+          description: |
+            A value the caller mints per logical submission, not per HTTP attempt.
+            It is stored on the job row under a uniqueness constraint, so a
+            duplicate is impossible rather than merely unlikely — two concurrent
+            retries would both pass a check-then-insert.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VideoRequest' }
+            examples:
+              textToVideo:
+                summary: Text to video
+                value:
+                  model: google/veo-3.1
+                  prompt: a cat asleep on a sunlit windowsill
+                  duration_seconds: 8
+                  resolution: 720p
+                  aspect_ratio: '16:9'
+              imageToVideo:
+                summary: Animate a first frame
+                value:
+                  model: kuaishou/kling-v2-master
+                  prompt: the camera pulls back slowly
+                  image: https://example.com/first-frame.jpg
+                  duration_seconds: 5
+                  resolution: 1080p
+      responses:
+        '202':
+          description: Accepted. The hold is taken and the upstream has the job.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Video' }
+        '200':
+          description: |
+            This idempotency key already created a job; that job is returned
+            unchanged and nothing further was charged.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Video' }
+        default:
+          $ref: '#/components/responses/OpenAIError'
+    get:
+      operationId: listVideos
+      tags: [video-jobs]
+      summary: List this key's organization's jobs, newest first
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: after
+          in: query
+          schema: { type: string }
+          description: The id of the last job on the previous page
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object: { type: string, const: list }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Video' }
+        default:
+          $ref: '#/components/responses/OpenAIError'
+
+  /v1/videos/models:
+    get:
+      operationId: listVideoModels
+      tags: [video-jobs]
+      summary: What each video model accepts, and what it costs
+      description: |
+        Not decoration. It is the half that makes a normalised vocabulary usable:
+        without it the only way to find the admissible set is to try, and on a
+        plane where every attempt is a real charge, trying is not a way to learn
+        anything. Refusals on the submit path name what would have been accepted
+        for the same reason.
+
+        What is published is the union across the routes that can actually serve
+        the model — the same union admission validates against — so "listed here"
+        and "accepted there" cannot come apart. A model no route has been
+        declared for is not listed at all, because an empty envelope would read
+        as "accepts anything", which is the opposite of what it means.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object: { type: string, const: list }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/VideoModel' }
+        default:
+          $ref: '#/components/responses/OpenAIError'
+
+  /v1/videos/{video_id}:
+    parameters:
+      - $ref: '#/components/parameters/VideoID'
+    get:
+      operationId: getVideo
+      tags: [video-jobs]
+      summary: One job
+      description: |
+        A pure read that never touches the upstream. Letting a caller's polling
+        drive upstream calls has two failure modes and both are real: a caller
+        who walks away leaves the hold outstanding forever, and a caller in a
+        tight loop turns this gateway into an amplifier pointed at the vendor.
+        A reconciler advances the job on its own schedule.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Video' }
+        default:
+          $ref: '#/components/responses/OpenAIError'
+    delete:
+      operationId: deleteVideo
+      tags: [video-jobs]
+      summary: Delete the job and the film this gateway holds
+      description: |
+        It deletes what this gateway holds and does not promise the upstream also
+        forgets. Saying more than that would be a promise it cannot keep.
+
+        Refused while the job is still running (`gateway.job_not_ready`): the row
+        is what the reservation points at, and removing it would strand the hold
+        until a sweeper reached it hours later while the upstream carried on
+        generating a clip this gateway is billed for.
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, object, deleted]
+                properties:
+                  id: { type: string }
+                  object: { type: string, const: video }
+                  deleted: { type: boolean, const: true }
+        default:
+          $ref: '#/components/responses/OpenAIError'
+
+  /v1/videos/{video_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/VideoID'
+    post:
+      operationId: cancelVideo
+      tags: [video-jobs]
+      summary: Stop a running job; nothing is charged for it
+      description: |
+        A cancelled job is never charged. That is a commercial decision, not a
+        technical consequence: some vendors do bill this gateway for work already
+        done on a job stopped mid-generation, and that cost is absorbed. What the
+        sentence "cancel it and you pay nothing" buys in trust is worth more than
+        a pro-rata billing machine.
+
+        How far a job can be stopped is a declared per-model capability, published
+        as `cancel` on `/v1/videos/models`. The vendors genuinely range from a
+        real cancel with its own terminal state, through cancel-while-queued-only,
+        to none documented at all. A model that cannot be stopped answers
+        `gateway.job_not_cancelable` and says so — it does not report a success
+        that did nothing, which on two thirds of a catalogue is a lie.
+
+        The upstream's verdict decides, not the fact that the call completed: a
+        vendor refusing because generation has begun answers over a perfectly
+        healthy connection, and marking the job cancelled anyway would void the
+        hold while the clip is still being made.
+      responses:
+        '200':
+          description: Cancelled, and the hold voided
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Video' }
+        default:
+          $ref: '#/components/responses/OpenAIError'
+
+  /v1/videos/{video_id}/content:
+    parameters:
+      - $ref: '#/components/parameters/VideoID'
+    get:
+      operationId: getVideoContent
+      tags: [video-jobs]
+      summary: The film itself
+      description: |
+        The bytes come from this gateway. No upstream URL ever appears in a
+        response here, and none is redirected to: one vendor's link needs that
+        vendor's credentials to fetch at all, the rest are presigned links
+        expiring somewhere between an hour and a week, and every one of them
+        names the upstream and cannot be renewed or revoked from here.
+
+        There are no presigned links out of this gateway either, and no bucket
+        CORS. Both are tempting — they would move bytes off the application host
+        — and both split authorisation across two places and invent a second
+        expiry semantics beside the retention window.
+
+        Ranges are not served: the response carries `Accept-Ranges: none`.
+
+        Past its retention window the film is gone, and that is a normal ending
+        rather than a fault, so it is `410 gateway.artifact_gone`. **What the
+        retention window guarantees differs by product line**, and the difference
+        is real rather than editorial: a deployment with object storage keeps the
+        film for the whole window, while one without proxies it from the upstream
+        on read and can only promise it "for as long as the upstream still has
+        it".
+      responses:
+        '200':
+          description: The film
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+        '410':
+          description: Past its retention window
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OpenAIError' }
+        default:
+          $ref: '#/components/responses/OpenAIError'
+
+components:
+  parameters:
+    VideoID:
+      name: video_id
+      in: path
+      required: true
+      schema: { type: string }
+      description: The job id, as returned — prefixed `vid_`. The bare UUID is accepted too.
+
+  responses:
+    OpenAIError:
+      description: Error, in the OpenAI error shape
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/OpenAIError' }
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: 'A data-plane API key: `Authorization: Bearer <key>`'
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: The same key, in the header some SDKs send instead.
+
+  schemas:
+    VideoRequest:
+      type: object
+      required: [model, prompt]
+      additionalProperties: false
+      description: |
+        The whole vocabulary, and it is closed — `additionalProperties: false`
+        here is the contract, not a linting choice. A gateway that silently
+        dropped an unrecognised parameter would produce a clip the caller did not
+        ask for, bill them for it, and give them no way to find out.
+
+        The fields were chosen against the published contracts of the leading
+        vendors rather than guessed at. Every one appears, under some spelling,
+        in at least two of them.
+
+        A parameter belonging to exactly one upstream — one vendor's camera
+        control, another's person-generation policy — is not here and has no
+        escape hatch here either. It is reached on that vendor's own
+        compatibility surface, where it is a first-class parameter rather than a
+        wrapped one, and where the job is still ours: same admission, same hold,
+        same ledger, same artifact custody.
+      properties:
+        model:
+          type: string
+          description: A catalog slug, e.g. `google/veo-3.1`
+        prompt:
+          type: string
+          description: What to generate
+        negative_prompt:
+          type: string
+          description: |
+            What to keep out. Whether a model accepts one is declared per model
+            and published, rather than assumed: it is near-universal but not
+            universal, and dropping it silently would charge the caller for a
+            clip that ignored half of what they asked for.
+        duration_seconds:
+          type: integer
+          minimum: 1
+          description: |
+            The clip length, and the primary billing quantity. The admissible
+            values are per model and have almost nothing in common between
+            vendors — 4/6/8, 5/10 and 4/8/12 are three real ones — so a value
+            outside the set is refused rather than rounded to the nearest.
+        resolution:
+          type: string
+          description: |
+            The quality tier: `480p`, `720p`, `1080p`, `4k`. Named as a
+            resolution because that is what a caller wants to choose. One vendor
+            has no resolution field at all and expresses the same choice as a
+            mode; its mapper turns the requested resolution into the mode that
+            produces it.
+        aspect_ratio:
+          type: string
+          description: '`16:9`, `9:16`, `1:1`, and more on some models'
+        audio:
+          type: [boolean, 'null']
+          description: |
+            Absent means whatever this model does by default, and the three
+            states are distinct because the vendors are: one generates sound
+            natively with no parameter, one has a switch defaulting to off, one
+            has none. It is resolved against the model's declared behaviour
+            before pricing, because a scored clip and a silent one can cost
+            different amounts.
+        image:
+          type: string
+          description: The first frame to animate from, as an https or data URL
+        last_frame:
+          type: string
+          description: |
+            The frame to interpolate towards. A field of its own rather than a
+            second entry in a list, because it is a separate field upstream too
+            and is separately gated — one vendor accepts an end frame only in its
+            pro mode. A single list would leave the mapper guessing which entry
+            meant which, and this plane refuses rather than guesses.
+        reference_images:
+          type: array
+          maxItems: 3
+          description: |
+            Images that steer the subject or the look without being frames of the
+            output. Typed rather than bare URLs because one vendor asks what each
+            one is for, and a URL on its own cannot answer.
+          items:
+            type: object
+            required: [url, type]
+            additionalProperties: false
+            properties:
+              url: { type: string }
+              type:
+                type: string
+                enum: [asset, style]
+                description: '`asset` keeps this subject; `style` makes it look like this'
+        seed:
+          type: [integer, 'null']
+          format: int64
+        n:
+          type: integer
+          minimum: 1
+          description: How many clips to produce. Absent means one.
+
+    Video:
+      type: object
+      required: [id, object, model, status, progress, created_at, expires_at]
+      description: |
+        A job. The upstream's own identifier never appears: it names the vendor,
+        and upstream anonymity is an explicit property of this gateway. The id a
+        caller sees is this gateway's.
+      properties:
+        id: { type: string, example: vid_01a03c62-27e6-7b63-94f8-b526a686000d }
+        object: { type: string, const: video }
+        model: { type: string }
+        status:
+          type: string
+          enum: [queued, in_progress, completed, failed, canceled, expired]
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        duration_seconds: { type: integer }
+        resolution: { type: string }
+        created_at: { type: integer, format: int64, description: Unix seconds }
+        expires_at:
+          type: integer
+          format: int64
+          description: |
+            Unix seconds. When this job and its film are removed — a retention
+            setting of the deployment, not a property of any vendor's link.
+        error:
+          type: object
+          required: [code, message]
+          description: |
+            Present on a failed job. The upstream's own words are kept verbatim:
+            a content refusal rendered as a bare code is a support ticket, and
+            content refusals are the ordinary failure here.
+          properties:
+            code:
+              type: string
+              example: gateway.video_content_rejected
+            message: { type: string }
+
+    VideoModel:
+      type: object
+      required: [id, object, max_n, cancel]
+      properties:
+        id: { type: string, description: The catalog slug }
+        object: { type: string, const: video_model }
+        durations_seconds: { type: array, items: { type: integer } }
+        resolutions: { type: array, items: { type: string } }
+        aspect_ratios: { type: array, items: { type: string } }
+        audio:
+          type: string
+          enum: [never, optional, always]
+          description: '`always` is native sound with no parameter; `optional` is a switch; `never` is silent.'
+        max_n: { type: integer }
+        supports_image_to_video: { type: boolean }
+        supports_last_frame: { type: boolean }
+        max_reference_images: { type: integer }
+        supports_negative_prompt: { type: boolean }
+        cancel:
+          type: string
+          enum: [never, queued_only, anytime]
+          description: |
+            How far a job of this model can be stopped. Published because it
+            genuinely differs, and a client that assumes it can stop a job needs
+            to know before it builds a stop button.
+        pricing:
+          type: array
+          description: |
+            The rate card in the caller's own currency, so the cost of a clip is
+            knowable before it is asked for — which is true on this plane in a way
+            it is not on the token plane. An empty `resolution` or `audio` means
+            the rate does not vary on that axis.
+          items:
+            type: object
+            required: [unit, nano_per_unit]
+            properties:
+              unit: { type: string, enum: [second, call] }
+              resolution: { type: string }
+              audio: { type: string, enum: ['', 'on', 'off'] }
+              nano_per_unit: { type: integer, format: int64 }
+
+    OpenAIError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type: { type: string }
+            code:
+              type: [string, 'null']
+              description: |
+                This gateway's stable machine-readable code. On this plane:
+                `gateway.video_params_unsupported` (400, outside the vocabulary or
+                outside the model's declared envelope — taken before any hold),
+                `gateway.job_not_cancelable` (409), `gateway.job_not_ready` (409),
+                `gateway.artifact_gone` (410), `gateway.model_unpriced` (503) and
+                `gateway.request_too_large` (413).
+            param: { type: [string, 'null'] }

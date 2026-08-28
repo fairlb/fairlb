@@ -3,28 +3,28 @@ import { useI18n, type MessageKey } from "@fairlb/i18n";
 import {
   Alert,
   Button,
-  Card,
   CheckboxGroupField,
   ConfirmDialog,
   DataTable,
   Field,
-  FormRow,
   FormDialog,
+  FormRow,
   InlineEmpty,
   Input,
+  ListPage,
+  LoadMoreButton,
   LoadingState,
   PageHeader,
+  RowTitleLink,
   SectionHeading,
   Select,
   StatusBadge,
-  LoadMoreButton,
-  RowTitleLink,
   Textarea,
   VendorMark,
   useAdminTitle,
   useCursorList,
-  useScopedCursor,
   useDebounced,
+  useScopedCursor,
 } from "@fairlb/ui";
 import { useKumoToastManager } from "@cloudflare/kumo/components/toast";
 import { keepPreviousData, useQueryClient } from "@tanstack/react-query";
@@ -134,25 +134,15 @@ function ProvidersContent() {
   };
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title={t("navGatewayProviders")}
-        description={t("staffGatewayProvidersDesc")}
-        actions={<Button onClick={() => setCreating(true)}>{t("gwNewProvider")}</Button>}
-      />
-      {update.isError && <Alert>{apiErrorMessage(update.error)}</Alert>}
-
-      <CreateProviderDialog
-        open={creating}
-        onOpenChange={setCreating}
-        onCreated={() => refresh()}
-      />
-
-      {/* A single-card page does not repeat the card's title: the page title
-          already says it. */}
-      <Card className="space-y-3">
-        {/* The toolbar sits inside the list card: a filter belongs to the table it
-            filters. */}
+    <ListPage
+      header={
+        <PageHeader
+          title={t("navGatewayProviders")}
+          description={t("staffGatewayProvidersDesc")}
+          actions={<Button onClick={() => setCreating(true)}>{t("gwNewProvider")}</Button>}
+        />
+      }
+      filters={
         <FormRow className="sm:grid-cols-[minmax(16rem,1fr)]">
           <FormRow.Item>
             <Field label={t("gwProviderSearch")} htmlFor="provider-search">
@@ -166,130 +156,140 @@ function ProvidersContent() {
             </Field>
           </FormRow.Item>
         </FormRow>
-        <DataTable caption={t("navGatewayProviders")}>
-          <DataTable.Header>
-            <DataTable.Row>
-              <DataTable.Head>{t("gwColSlug")}</DataTable.Head>
-              <DataTable.Head>{t("gwColVendor")}</DataTable.Head>
-              <DataTable.Head>{t("gwColProtocols")}</DataTable.Head>
-              <DataTable.Head>{t("gwColBaseUrl")}</DataTable.Head>
-              <DataTable.Head>{t("gwColKeys")}</DataTable.Head>
-              <DataTable.Head>{t("gwColRoutes")}</DataTable.Head>
-              <DataTable.Head>{t("gwColStatus")}</DataTable.Head>
-              <DataTable.Head />
-            </DataTable.Row>
-          </DataTable.Header>
-          <DataTable.Body>
-            {data.map((p) => (
-              <DataTable.Row key={p.id} interactive>
-                {/* `relative` is what lets the row title link cover the whole cell. */}
-                <DataTable.Cell className="relative">
-                  <span className="font-mono">
-                    <RowTitleLink to="/gateway/providers/$providerId" params={{ providerId: p.id }}>
-                      {p.slug}
-                    </RowTitleLink>
-                  </span>
-                  {/* The display name was shown on **no screen at all**, while the
+      }
+      overlays={
+        <>
+          <CreateProviderDialog
+            open={creating}
+            onOpenChange={setCreating}
+            onCreated={() => refresh()}
+          />
+          <ConfirmDialog
+            open={toggling !== null}
+            onOpenChange={(o) => !o && setToggling(null)}
+            destructive={toggling?.enabled ?? true}
+            title={toggling?.enabled ? t("gwDisableConfirmTitle") : t("gwEnableConfirmTitle")}
+            description={
+              toggling?.enabled
+                ? t("gwDisableConfirmBody", { slug: toggling?.slug ?? "" })
+                : t("gwEnableConfirmBody", { slug: toggling?.slug ?? "" })
+            }
+            confirmLabel={toggling?.enabled ? t("gwDisable") : t("gwEnable")}
+            pending={update.isPending}
+            onConfirm={doToggle}
+          />
+        </>
+      }
+    >
+      {update.isError && <Alert>{apiErrorMessage(update.error)}</Alert>}
+      <DataTable caption={t("navGatewayProviders")}>
+        <DataTable.Header>
+          <DataTable.Row>
+            <DataTable.Head>{t("gwColSlug")}</DataTable.Head>
+            <DataTable.Head>{t("gwColVendor")}</DataTable.Head>
+            <DataTable.Head>{t("gwColProtocols")}</DataTable.Head>
+            <DataTable.Head>{t("gwColBaseUrl")}</DataTable.Head>
+            <DataTable.Head>{t("gwColKeys")}</DataTable.Head>
+            <DataTable.Head>{t("gwColRoutes")}</DataTable.Head>
+            <DataTable.Head>{t("gwColStatus")}</DataTable.Head>
+            <DataTable.Head />
+          </DataTable.Row>
+        </DataTable.Header>
+        <DataTable.Body>
+          {data.map((p) => (
+            <DataTable.Row key={p.id} interactive>
+              {/* `relative` is what lets the row title link cover the whole cell. */}
+              <DataTable.Cell className="relative">
+                <span className="font-mono">
+                  <RowTitleLink to="/gateway/providers/$providerId" params={{ providerId: p.id }}>
+                    {p.slug}
+                  </RowTitleLink>
+                </span>
+                {/* The display name was shown on **no screen at all**, while the
                       hint under that field in the create dialog promised "shown in
                       operator views" — the interface telling the operator something
                       untrue. The slug stays the primary identifier: it is the detail
                       page title, the route, and how the provider is referred to
                       everywhere. The name goes on a second line, because the whole
                       point of it is answering "which account is openai-main". */}
-                  {p.name && <div className="text-kumo-subtle">{p.name}</div>}
-                </DataTable.Cell>
-                <DataTable.Cell>
-                  {/* The tile is decorative: the label is right beside it, so
+                {p.name && <div className="text-kumo-subtle">{p.name}</div>}
+              </DataTable.Cell>
+              <DataTable.Cell>
+                {/* The tile is decorative: the label is right beside it, so
                       announcing the vendor twice would be the only thing it added. */}
-                  <span className="flex items-center gap-2">
-                    <VendorMark id={p.vendor} size="sm" aria-hidden="true" />
-                    <span className="min-w-0 truncate">{vendorLabel(p.vendor, vendors)}</span>
-                  </span>
-                </DataTable.Cell>
-                <DataTable.Cell>
-                  {p.protocols.map((f) => t(protocolLabel(f))).join(" + ")}
-                </DataTable.Cell>
-                <DataTable.Cell className="max-w-[18rem] truncate font-mono">
-                  {p.base_url}
-                </DataTable.Cell>
-                <DataTable.Cell className="space-x-2 whitespace-nowrap">
-                  <span>{p.key_count ?? 0}</span>
-                  {/* Without this, a provider with no key looks exactly like a
+                <span className="flex items-center gap-2">
+                  <VendorMark id={p.vendor} size="sm" aria-hidden="true" />
+                  <span className="min-w-0 truncate">{vendorLabel(p.vendor, vendors)}</span>
+                </span>
+              </DataTable.Cell>
+              <DataTable.Cell>
+                {p.protocols.map((f) => t(protocolLabel(f))).join(" + ")}
+              </DataTable.Cell>
+              <DataTable.Cell className="max-w-[18rem] truncate font-mono">
+                {p.base_url}
+              </DataTable.Cell>
+              <DataTable.Cell className="space-x-2 whitespace-nowrap">
+                <span>{p.key_count ?? 0}</span>
+                {/* Without this, a provider with no key looks exactly like a
                       configured one and you have to open it to find out. It is an
                       operator hint, not a routing predicate: the provider can still
                       serve traffic for customers who bring their own key. */}
-                  {(p.key_count ?? 0) === 0 && (
-                    <StatusBadge tone="danger">{t("gwNoKeysBadge")}</StatusBadge>
-                  )}
-                </DataTable.Cell>
-                {/* How many models it serves. With only a key count on the row, the
+                {(p.key_count ?? 0) === 0 && (
+                  <StatusBadge tone="danger">{t("gwNoKeysBadge")}</StatusBadge>
+                )}
+              </DataTable.Cell>
+              {/* How many models it serves. With only a key count on the row, the
                     quantity that actually decides whether to open a provider — what
                     it is serving — was missing. The count includes enabled routes
                     only, as the contract states, and matches the readiness
                     checklist. */}
-                <DataTable.Cell>{p.route_count ?? 0}</DataTable.Cell>
-                <DataTable.Cell>
-                  <ProviderStatusBadge enabled={p.enabled} autoDisabled={p.auto_disabled} />
-                </DataTable.Cell>
-                {/* The end of a row carries only actions that change state; opening
+              <DataTable.Cell>{p.route_count ?? 0}</DataTable.Cell>
+              <DataTable.Cell>
+                <ProviderStatusBadge enabled={p.enabled} autoDisabled={p.auto_disabled} />
+              </DataTable.Cell>
+              {/* The end of a row carries only actions that change state; opening
                     the detail page is the job of the slug at the head of it. A
                     "configure" link here pointed at exactly the same destination. */}
-                <DataTable.Cell className="text-right whitespace-nowrap">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setToggling(p)}
-                    disabled={update.isPending}
-                  >
-                    {p.enabled ? t("gwDisable") : t("gwEnable")}
-                  </Button>
-                </DataTable.Cell>
-              </DataTable.Row>
-            ))}
-            {/* No empty state while the query is pending: "there are no providers"
+              <DataTable.Cell className="text-right whitespace-nowrap">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setToggling(p)}
+                  disabled={update.isPending}
+                >
+                  {p.enabled ? t("gwDisable") : t("gwEnable")}
+                </Button>
+              </DataTable.Cell>
+            </DataTable.Row>
+          ))}
+          {/* No empty state while the query is pending: "there are no providers"
                 and "we have not looked yet" are different facts, and defaulting the
                 data to an empty array lets the first speak for the second. */}
-            {providers.isPending ? (
+          {providers.isPending ? (
+            <DataTable.Row>
+              <DataTable.Cell colSpan={7}>
+                <LoadingState label={t("loading")} />
+              </DataTable.Cell>
+            </DataTable.Row>
+          ) : (
+            data.length === 0 && (
               <DataTable.Row>
                 <DataTable.Cell colSpan={7}>
-                  <LoadingState label={t("loading")} />
+                  <InlineEmpty
+                    title={settledSearch ? t("gwNoProviderMatch") : t("gwNoProviders")}
+                  />
                 </DataTable.Cell>
               </DataTable.Row>
-            ) : (
-              data.length === 0 && (
-                <DataTable.Row>
-                  <DataTable.Cell colSpan={7}>
-                    <InlineEmpty
-                      title={settledSearch ? t("gwNoProviderMatch") : t("gwNoProviders")}
-                    />
-                  </DataTable.Cell>
-                </DataTable.Row>
-              )
-            )}
-          </DataTable.Body>
-        </DataTable>
-        <LoadMoreButton
-          onClick={nextCursor ? () => setCursor(nextCursor) : undefined}
-          pending={providers.isFetching}
-          label={t("loadMore")}
-        />
-      </Card>
-
-      <ConfirmDialog
-        open={toggling !== null}
-        onOpenChange={(o) => !o && setToggling(null)}
-        destructive={toggling?.enabled ?? true}
-        title={toggling?.enabled ? t("gwDisableConfirmTitle") : t("gwEnableConfirmTitle")}
-        description={
-          toggling?.enabled
-            ? t("gwDisableConfirmBody", { slug: toggling?.slug ?? "" })
-            : t("gwEnableConfirmBody", { slug: toggling?.slug ?? "" })
-        }
-        confirmLabel={toggling?.enabled ? t("gwDisable") : t("gwEnable")}
-        pending={update.isPending}
-        onConfirm={doToggle}
+            )
+          )}
+        </DataTable.Body>
+      </DataTable>
+      <LoadMoreButton
+        onClick={nextCursor ? () => setCursor(nextCursor) : undefined}
+        pending={providers.isFetching}
+        label={t("loadMore")}
       />
-    </div>
+    </ListPage>
   );
 }
 

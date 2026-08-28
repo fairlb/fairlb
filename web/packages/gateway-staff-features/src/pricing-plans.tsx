@@ -12,6 +12,7 @@ import {
   Alert,
   Button,
   Card,
+  Combobox,
   ConfirmDialog,
   DataTable,
   Field,
@@ -20,25 +21,25 @@ import {
   FormRow,
   InlineEmpty,
   Input,
+  ListPage,
+  LoadMoreButton,
   LoadingState,
   PageHeader,
   RecordPage,
-  resolveNavValue,
   RowTitleLink,
   SectionHeading,
   Select,
   StatusBadge,
   Textarea,
+  resolveNavValue,
   useAdminTitle,
   useCursorList,
-  useScopedCursor,
   useDebounced,
-  Combobox,
-  LoadMoreButton,
+  useScopedCursor,
 } from "@fairlb/ui";
 import { Outlet, useBlocker, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useQueryClient, keepPreviousData } from "@tanstack/react-query";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { adjustmentLabel } from "./adjustment-label";
 import { multiplyRate } from "./pricing-math";
 import { useCurrentStaffRole, useRecordBreadcrumb } from "./host";
@@ -126,16 +127,15 @@ export function GatewayPricingPlansPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title={t("navGatewayPricingPlans")}
-        description={t("gwPricingPlanNotSubscription")}
-        actions={<Button onClick={() => setCreating(true)}>{t("gwCreatePricingPlan")}</Button>}
-      />
-      {plans.isError && <Alert>{apiErrorMessage(plans.error)}</Alert>}
-      <Card className="space-y-3">
-        {/* Filters live in the list card's toolbar. The card has no heading of its
-            own, because it would only repeat the page title. */}
+    <ListPage
+      header={
+        <PageHeader
+          title={t("navGatewayPricingPlans")}
+          description={t("gwPricingPlanNotSubscription")}
+          actions={<Button onClick={() => setCreating(true)}>{t("gwCreatePricingPlan")}</Button>}
+        />
+      }
+      filters={
         <div className="max-w-md">
           <Field label={t("gwSearchPricingPlans")} htmlFor="plan-search">
             <Input
@@ -146,79 +146,83 @@ export function GatewayPricingPlansPage() {
             />
           </Field>
         </div>
-        <DataTable caption={t("navGatewayPricingPlans")}>
-          <DataTable.Header>
-            <DataTable.Row>
-              <DataTable.Head>{t("name")}</DataTable.Head>
-              <DataTable.Head>{t("gwDefaultAdjustment")}</DataTable.Head>
-              <DataTable.Head className="text-right">{t("gwColOrgs")}</DataTable.Head>
-              {/* The status here is whether the plan can still be assigned to new
+      }
+      overlays={
+        <>
+          <CreatePricingPlanDialog
+            open={creating}
+            onOpenChange={setCreating}
+            onCreated={(plan) => {
+              refreshPlans();
+              void navigate({
+                to: "/gateway/pricing-plans/$pricingPlanId",
+                params: { pricingPlanId: plan.id },
+              });
+            }}
+          />
+        </>
+      }
+    >
+      {plans.isError && <Alert>{apiErrorMessage(plans.error)}</Alert>}
+      <DataTable caption={t("navGatewayPricingPlans")}>
+        <DataTable.Header>
+          <DataTable.Row>
+            <DataTable.Head>{t("name")}</DataTable.Head>
+            <DataTable.Head>{t("gwDefaultAdjustment")}</DataTable.Head>
+            <DataTable.Head className="text-right">{t("gwColOrgs")}</DataTable.Head>
+            {/* The status here is whether the plan can still be assigned to new
                   customers — not a draft-versus-published state, of which there is
                   none. There is no actions column: opening the detail page is the
                   job of the plan name at the head of the row. */}
-              <DataTable.Head>{t("gwColStatus")}</DataTable.Head>
+            <DataTable.Head>{t("gwColStatus")}</DataTable.Head>
+          </DataTable.Row>
+        </DataTable.Header>
+        <DataTable.Body>
+          {filtered.map((plan) => (
+            <DataTable.Row key={plan.id} interactive>
+              {/* `relative` is what lets the row title link cover the whole cell. */}
+              <DataTable.Cell className="relative">
+                <RowTitleLink
+                  to="/gateway/pricing-plans/$pricingPlanId"
+                  params={{ pricingPlanId: plan.id }}
+                >
+                  {plan.name}
+                </RowTitleLink>
+                <div className="mt-1 font-mono text-[0.9em] text-kumo-subtle">{plan.slug}</div>
+              </DataTable.Cell>
+              <DataTable.Cell className="font-mono">
+                {multiplierLabel(plan.default_adjustment?.multiplier_bps)}
+              </DataTable.Cell>
+              <DataTable.Cell className="text-right tabular-nums">{plan.org_count}</DataTable.Cell>
+              <DataTable.Cell>
+                <div className="flex flex-wrap gap-1.5">
+                  <StatusBadge tone={plan.status === "active" ? "success" : "neutral"}>
+                    {plan.status === "active" ? t("gwEnabled") : t("gwDisabledDone")}
+                  </StatusBadge>
+                  {plan.is_default && (
+                    <StatusBadge tone="neutral">{t("gwDefaultPlan")}</StatusBadge>
+                  )}
+                </div>
+              </DataTable.Cell>
             </DataTable.Row>
-          </DataTable.Header>
-          <DataTable.Body>
-            {filtered.map((plan) => (
-              <DataTable.Row key={plan.id} interactive>
-                {/* `relative` is what lets the row title link cover the whole cell. */}
-                <DataTable.Cell className="relative">
-                  <RowTitleLink
-                    to="/gateway/pricing-plans/$pricingPlanId"
-                    params={{ pricingPlanId: plan.id }}
-                  >
-                    {plan.name}
-                  </RowTitleLink>
-                  <div className="mt-1 font-mono text-[0.9em] text-kumo-subtle">{plan.slug}</div>
-                </DataTable.Cell>
-                <DataTable.Cell className="font-mono">
-                  {multiplierLabel(plan.default_adjustment?.multiplier_bps)}
-                </DataTable.Cell>
-                <DataTable.Cell className="text-right tabular-nums">
-                  {plan.org_count}
-                </DataTable.Cell>
-                <DataTable.Cell>
-                  <div className="flex flex-wrap gap-1.5">
-                    <StatusBadge tone={plan.status === "active" ? "success" : "neutral"}>
-                      {plan.status === "active" ? t("gwEnabled") : t("gwDisabledDone")}
-                    </StatusBadge>
-                    {plan.is_default && (
-                      <StatusBadge tone="neutral">{t("gwDefaultPlan")}</StatusBadge>
-                    )}
-                  </div>
-                </DataTable.Cell>
-              </DataTable.Row>
-            ))}
-            {filtered.length === 0 && (
-              <DataTable.Row>
-                <DataTable.Cell colSpan={4}>
-                  <InlineEmpty
-                    title={settledSearch ? t("gwNoPricingPlanMatch") : t("gwNoPricingPlans")}
-                  />
-                </DataTable.Cell>
-              </DataTable.Row>
-            )}
-          </DataTable.Body>
-        </DataTable>
-        <LoadMoreButton
-          onClick={nextCursor ? () => setCursor(nextCursor) : undefined}
-          pending={plans.isFetching}
-          label={t("loadMore")}
-        />
-      </Card>
-      <CreatePricingPlanDialog
-        open={creating}
-        onOpenChange={setCreating}
-        onCreated={(plan) => {
-          refreshPlans();
-          void navigate({
-            to: "/gateway/pricing-plans/$pricingPlanId",
-            params: { pricingPlanId: plan.id },
-          });
-        }}
+          ))}
+          {filtered.length === 0 && (
+            <DataTable.Row>
+              <DataTable.Cell colSpan={4}>
+                <InlineEmpty
+                  title={settledSearch ? t("gwNoPricingPlanMatch") : t("gwNoPricingPlans")}
+                />
+              </DataTable.Cell>
+            </DataTable.Row>
+          )}
+        </DataTable.Body>
+      </DataTable>
+      <LoadMoreButton
+        onClick={nextCursor ? () => setCursor(nextCursor) : undefined}
+        pending={plans.isFetching}
+        label={t("loadMore")}
       />
-    </div>
+    </ListPage>
   );
 }
 
@@ -431,9 +435,7 @@ export function GatewayPricingPlanLayout() {
           <InlineEmpty title={t("gwPricingPlanNotFound")} />
         )}
       </div>
-      {plan.data && (
-        <CopyPricingPlanDialog plan={plan.data} open={copyOpen} onOpenChange={setCopyOpen} />
-      )}
+      <CopyPricingPlanDialog plan={plan.data ?? null} open={copyOpen} onOpenChange={setCopyOpen} />
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
@@ -903,7 +905,32 @@ function ModelOverridesEditor({
   );
 }
 
+/**
+ * Not rendered conditionally: it used to be guarded by `plan.data &&`, which is
+ * mounting standing in for opening. The plan is held here for as long as the
+ * dialog needs it — a refetch that briefly has no data must not pull the tree
+ * out from under a dialog that is closing, or the closing animation goes with
+ * it.
+ */
 function CopyPricingPlanDialog({
+  plan,
+  open,
+  onOpenChange,
+}: {
+  /** Null while the plan has not loaded; the dialog cannot be opened then. */
+  plan: GatewayStaffTypes.PricingPlan | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const shown = useRef(plan);
+  if (plan) shown.current = plan;
+  const target = shown.current;
+  return target ? (
+    <CopyPricingPlanForm plan={target} open={open} onOpenChange={onOpenChange} />
+  ) : null;
+}
+
+function CopyPricingPlanForm({
   plan,
   open,
   onOpenChange,

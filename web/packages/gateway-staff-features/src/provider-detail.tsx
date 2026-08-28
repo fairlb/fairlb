@@ -10,10 +10,10 @@ import {
   Alert,
   Button,
   ConfirmDialog,
+  ContentsLayout,
   FormColumn,
   InlineEmpty,
   LoadingState,
-  PageContentsNav,
   PageHeader,
   RecordPage,
   resolveNavValue,
@@ -223,15 +223,14 @@ export function GatewayProviderSettingsPage() {
     { href: "#provider-cost" as const, label: t("gwProviderCostScalar") },
   ];
   return (
-    <div className="flex min-w-0 flex-col gap-6 2xl:flex-row 2xl:items-start 2xl:gap-10">
-      <FormColumn className="min-w-0 flex-1">
+    <ContentsLayout contents={items}>
+      <FormColumn>
         <ProviderConfigPanel
           provider={provider}
           onSaved={refreshProvider}
           onDirtyChange={setConfigDirty}
         />
       </FormColumn>
-      <PageContentsNav items={items} />
-    </div>
+    </ContentsLayout>
   );
 }

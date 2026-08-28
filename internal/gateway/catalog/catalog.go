@@ -43,6 +43,18 @@ const (
 	SurfaceMessages   Surface = "messages"
 	SurfaceEmbeddings Surface = "embeddings"
 	SurfaceImages     Surface = "images"
+	// SurfaceImagesEdit is the image edits endpoint, and it is a surface of its
+	// own rather than a second path of the one above.
+	//
+	// The precedent is directly above: responses_compact is separate from
+	// responses because "an upstream that serves Responses is not necessarily
+	// able to compact". That sentence is true here word for word. Several
+	// vendors serving images have no edits endpoint at all -- they take an
+	// input image on the generations call -- and while the two shared one
+	// capability key, a route verified on generations was automatically a
+	// candidate for edits and answered every edit request with the upstream's
+	// 404.
+	SurfaceImagesEdit Surface = "images_edits"
 	// SurfaceResponses is a fourth surface in the openai protocol. It shares
 	// that protocol's wire format and credentials and differs only in the shape
 	// of the request, the response and the usage report. "The protocol is the
@@ -68,6 +80,16 @@ const (
 	SurfaceGeminiEmbedContent       Surface = "gemini_embed_content"
 	SurfaceGeminiBatchEmbedContents Surface = "gemini_batch_embed_contents"
 	SurfaceGeminiInteractions       Surface = "gemini_interactions"
+	// SurfaceVideo is the video job plane's single surface (ADR-0218). Unlike
+	// every surface above it, it is not a dialect's endpoint: the contract is
+	// this gateway's own, and the provider's vendor selects how a request is
+	// shaped for that upstream.
+	//
+	// One surface covers the whole plane. Retrieval, cancel and artifact
+	// fetch do not resolve candidates -- they ride the route and credential
+	// pinned on the job row -- so a second, derived surface for them would be
+	// a name nothing reads (ADR-0155).
+	SurfaceVideo Surface = "video"
 )
 
 // The surface alone determines both protocol and endpoint. endpoint is the key
@@ -75,13 +97,15 @@ const (
 func (s Surface) protocol() (string, bool) {
 	switch s {
 	case SurfaceChat, SurfaceResponses, SurfaceResponsesCompact, SurfaceResponsesResources,
-		SurfaceResponsesInputTokens, SurfaceEmbeddings, SurfaceImages:
+		SurfaceResponsesInputTokens, SurfaceEmbeddings, SurfaceImages, SurfaceImagesEdit:
 		return ProtocolOpenAI, true
 	case SurfaceGenerateContent, SurfaceGeminiCountTokens, SurfaceGeminiEmbedContent,
 		SurfaceGeminiBatchEmbedContents, SurfaceGeminiInteractions:
 		return ProtocolGemini, true
 	case SurfaceMessages, SurfaceMessagesCountTokens:
 		return ProtocolAnthropic, true
+	case SurfaceVideo:
+		return ProtocolVideo, true
 	default:
 		return "", false
 	}
@@ -97,6 +121,8 @@ func (s Surface) endpoint() (string, bool) {
 		return "embeddings", true
 	case SurfaceImages:
 		return "images", true
+	case SurfaceImagesEdit:
+		return "images_edits", true
 	case SurfaceResponses:
 		return "responses", true
 	case SurfaceResponsesCompact:
@@ -117,6 +143,8 @@ func (s Surface) endpoint() (string, bool) {
 		return "gemini_batch_embed_contents", true
 	case SurfaceGeminiInteractions:
 		return "gemini_interactions", true
+	case SurfaceVideo:
+		return "video", true
 	default:
 		return "", false
 	}
@@ -126,6 +154,75 @@ func (s Surface) endpoint() (string, bool) {
 // probe rows -- exported for the data plane, which has a surface in hand when
 // it needs to name the endpoint a route failed on.
 func (s Surface) Endpoint() (string, bool) { return s.endpoint() }
+
+// Modality is what a model produces (ADR-0226).
+//
+// It is the third axis, and it answers a different question from the two beside
+// it: a surface says how a model is called, a protocol says which dialect it is
+// called in, and a modality says what comes back. The three do not line up --
+// Gemini's image models are reached on generate_content, the same surface as
+// its text models -- so a modality cannot be derived from either of the others
+// and is declared on the model row instead.
+type Modality string
+
+const (
+	ModalityText  Modality = "text"
+	ModalityImage Modality = "image"
+	ModalityVideo Modality = "video"
+)
+
+// KnownModalities is every modality a model may declare, in a stable order. It
+// matches the CHECK on models.output_modalities.
+func KnownModalities() []Modality { return []Modality{ModalityText, ModalityImage, ModalityVideo} }
+
+// ValidModality reports whether a stored or submitted value names a modality.
+func ValidModality(v string) bool { return slices.Contains(KnownModalities(), Modality(v)) }
+
+// BillingFamily is which family of rates charges a model.
+//
+// It is an attribute of the *price row*, not of the surface (ADR-0227). A
+// surface says which families it is able to serve, and the price row says which
+// one actually charges this model: on the images surface gpt-image is billed
+// per token while Seedream is billed per produced image, and no single value
+// attached to that endpoint can be right for both.
+type BillingFamily string
+
+const (
+	// FamilyTokens bills from what the upstream reports it consumed.
+	FamilyTokens BillingFamily = "tokens"
+	// FamilyUnits bills from what the caller asked for -- seconds of output,
+	// images produced, or generations -- which is known before the upstream is
+	// called at all (ADR-0220).
+	FamilyUnits BillingFamily = "units"
+)
+
+// billingFamilies is the one table: which rate families a surface can serve.
+//
+// A surface absent here serves tokens only. `images` is what made this a set
+// rather than a value: the same endpoint carries token-billed and
+// per-image-billed models at once, and pinning one family to the endpoint made
+// a correctly configured per-image model answer 404 to every request.
+func (s Surface) billingFamilies() []BillingFamily {
+	switch s {
+	case SurfaceVideo:
+		return []BillingFamily{FamilyUnits}
+	case SurfaceImages, SurfaceImagesEdit:
+		return []BillingFamily{FamilyTokens, FamilyUnits}
+	default:
+		return []BillingFamily{FamilyTokens}
+	}
+}
+
+// BillingFamilies is the set of rate families this surface can serve.
+//
+// The request path asks ServesFamily below; this exists so a test can enumerate
+// the table rather than restate it, which is the same reason AllSurfaces does.
+func (s Surface) BillingFamilies() []BillingFamily { return s.billingFamilies() }
+
+// ServesFamily reports whether this surface can bill by that family.
+func (s Surface) ServesFamily(f BillingFamily) bool {
+	return slices.Contains(s.billingFamilies(), f)
+}
 
 // ProbeMode says how a route's capability on a surface is established. It is
 // an attribute of the surface table, and everything that treats one endpoint
@@ -154,7 +251,12 @@ const (
 // probeMode is the one table. A surface absent here is ProbeAuto.
 func (s Surface) probeMode() ProbeMode {
 	switch s {
-	case SurfaceImages:
+	case SurfaceImages, SurfaceImagesEdit, SurfaceVideo:
+		// All of them cost real money to probe. Video costs more than images by an
+		// order of magnitude -- one probe generates a whole clip -- so the
+		// reasoning ADR-0209 gave for images applies with more force, not
+		// less: an endpoint the gateway refuses to observe on its own is
+		// opt-in, never tried on live traffic.
 		return ProbeManual
 	case SurfaceResponsesResources:
 		return ProbeDerived
@@ -178,9 +280,18 @@ func ProbeModeForEndpoint(endpoint string) (ProbeMode, bool) {
 var allSurfaces = []Surface{
 	SurfaceChat, SurfaceMessages, SurfaceMessagesCountTokens,
 	SurfaceResponses, SurfaceResponsesCompact, SurfaceResponsesResources, SurfaceResponsesInputTokens,
-	SurfaceEmbeddings, SurfaceImages, SurfaceGenerateContent, SurfaceGeminiCountTokens,
+	SurfaceEmbeddings, SurfaceImages, SurfaceImagesEdit, SurfaceGenerateContent, SurfaceGeminiCountTokens,
 	SurfaceGeminiEmbedContent, SurfaceGeminiBatchEmbedContents, SurfaceGeminiInteractions,
+	SurfaceVideo,
 }
+
+// AllSurfaces is every surface the gateway serves, in registration order.
+//
+// Exported so that tests in other packages can enumerate the set rather than
+// restate it. Several switches elsewhere document "every surface must appear
+// here by name" and had nothing holding them to it; enumerating from one place
+// is what turns those sentences into gates.
+func AllSurfaces() []Surface { return slices.Clone(allSurfaces) }
 
 // ProtocolForEndpoint returns the protocol that serves an endpoint. It is
 // what configuration-time validation checks against.
@@ -287,6 +398,27 @@ func KnownProtocols() []string {
 	return out
 }
 
+// WireProtocols is every protocol that is a dialect on the wire, which is every
+// known protocol except the video job plane.
+//
+// The distinction exists for exactly one caller: the custom vendor. Point a
+// custom channel at any OpenAI- or Anthropic-compatible endpoint and this
+// gateway forwards bytes, because those three are protocols in the ordinary
+// sense. Video is not one (ADR-0219 decision one): reaching a video upstream
+// needs a parameter mapper written for that vendor, and this build either has
+// one or it does not. Offering `video` on the custom vendor would let an
+// operator save a channel that can never serve and shows as configured, which
+// is the configuration-time refusal ADR-0178 asks for.
+func WireProtocols() []string {
+	out := make([]string, 0, len(KnownProtocols()))
+	for _, p := range KnownProtocols() {
+		if p != ProtocolVideo {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // Service is the entry point for catalog reads.
 type Service struct {
 	q         *gwdb.Queries
@@ -338,8 +470,13 @@ type Resolution struct {
 // change during a streaming request is not applied retroactively -- this
 // request already read its copy.
 type ModelPricingSnapshot struct {
-	Priced        bool
-	BillingMode   string
+	Priced      bool
+	BillingMode string
+	// Family says which rate family actually charges this model. A `units`
+	// model legitimately has four zero token buckets, so pricedness has to be
+	// judged against the family rather than against those four columns
+	// (ADR-0220).
+	Family        BillingFamily
 	Upstream      Price
 	MultiplierBps int64
 	UpdatedAt     pgtype.Timestamptz
@@ -350,6 +487,7 @@ type ModelPricingSnapshot struct {
 // make already-cached prices unreadable.
 type modelPricingCachePayload struct {
 	BillingMode   string    `json:"billing_mode"`
+	Family        string    `json:"pricing_family,omitempty"`
 	Upstream      Price     `json:"upstream"`
 	MultiplierBps int64     `json:"multiplier_bps"`
 	UpdatedAt     time.Time `json:"updated_at,omitempty"`
@@ -378,6 +516,22 @@ type Route struct {
 	// different limits on different relays.
 	ContextWindow   int32
 	MaxOutputTokens int32
+	// VideoEnvelope is this deployment's declared video capability envelope,
+	// carried out as stored rather than parsed here: parsing it needs the video
+	// plane's vocabulary, and that package imports this one. Admission unions
+	// these across candidates to decide what the model accepts, then uses them
+	// to filter candidates (ADR-0221). Empty on every non-video route.
+	VideoEnvelope []byte
+	// MaxImages is the most images one request to this route can come back
+	// with; 0 means the column is unset and one is assumed.
+	//
+	// It is the image plane's whole envelope, and it exists for the hold. A
+	// per-image charge is settled from how many images the response actually
+	// contains -- the only count every vendor on this surface agrees on -- so
+	// the reservation has to be taken against the most a request could produce.
+	// Reserving one and settling fifteen would let an organization spend past a
+	// budget the check had already approved.
+	MaxImages int32
 	// IgnoresMaxOutputTokens marks an upstream that does not honour the output
 	// limit in the request -- one relay was measured returning 94 tokens for a
 	// requested 16. The pre-authorization estimate therefore refuses to treat
@@ -496,7 +650,7 @@ func (s *Service) ResolveFor(
 	// query: an incomplete configuration must not consume upstream resources,
 	// and the caller must not be told "there is no route" when the truth is
 	// "nobody has set a price yet".
-	if err := checkPriced(modelPricing); err != nil {
+	if err := checkPriced(modelPricing, surface); err != nil {
 		return Resolution{}, err
 	}
 
@@ -534,6 +688,8 @@ func (s *Service) ResolveFor(
 			Transport:              transport,
 			ContextWindow:          r.ContextWindow.Int32,
 			MaxOutputTokens:        r.MaxOutputTokens.Int32,
+			VideoEnvelope:          r.VideoEnvelope,
+			MaxImages:              r.MaxImages.Int32,
 			IgnoresMaxOutputTokens: quirkBool(ctx, r.Quirks, quirkIgnoresMaxOutput),
 			Procurement:            ProcurementPricingSnapshot{MultiplierBps: noDiscountBps},
 			Capacity: ProviderCapacity{
@@ -649,6 +805,7 @@ func modelPricingSnapshot(v gwdb.ModelPricing) (ModelPricingSnapshot, error) {
 	return ModelPricingSnapshot{
 		Priced:      true,
 		BillingMode: v.BillingMode,
+		Family:      BillingFamily(v.PricingFamily),
 		Upstream: Price{
 			InNanoPerMTok:         v.UpstreamInNanoPerMtok.Int64,
 			OutNanoPerMTok:        v.UpstreamOutNanoPerMtok.Int64,
@@ -684,7 +841,8 @@ func (s *Service) cachedModelPricing(ctx context.Context, modelID pgtype.UUID) (
 
 func cachePayload(snapshot ModelPricingSnapshot) modelPricingCachePayload {
 	payload := modelPricingCachePayload{
-		BillingMode: snapshot.BillingMode, Upstream: snapshot.Upstream,
+		BillingMode: snapshot.BillingMode, Family: string(snapshot.Family),
+		Upstream:      snapshot.Upstream,
 		MultiplierBps: snapshot.MultiplierBps,
 	}
 	if snapshot.UpdatedAt.Valid {
@@ -695,7 +853,8 @@ func cachePayload(snapshot ModelPricingSnapshot) modelPricingCachePayload {
 
 func (p modelPricingCachePayload) snapshot() ModelPricingSnapshot {
 	snapshot := ModelPricingSnapshot{
-		Priced: true, BillingMode: p.BillingMode, Upstream: p.Upstream,
+		Priced: true, BillingMode: p.BillingMode, Family: BillingFamily(p.Family),
+		Upstream:      p.Upstream,
 		MultiplierBps: p.MultiplierBps,
 	}
 	if !p.UpdatedAt.IsZero() {
@@ -831,6 +990,11 @@ func (s *Service) InvalidateModelPricing(ctx context.Context, modelID pgtype.UUI
 type PublicModel struct {
 	Slug        string
 	DisplayName string
+	// OutputModalities is what this model produces: text, image, video, or
+	// several at once. Declared on the model row rather than derived from
+	// Endpoints, because the two do not line up -- Gemini's image models are
+	// reached on the same endpoint as its text models (ADR-0226).
+	OutputModalities []string
 	// Protocols is the set of protocols the verified endpoints belong to. It
 	// is derived from Endpoints, never from the providers' declared protocol
 	// sets: a declaration is a claim, and the catalog publishes observations.
@@ -883,6 +1047,36 @@ type PublicModel struct {
 	SourceName string
 	SourceURL  string
 	VerifiedAt pgtype.Timestamptz
+	// BillingUnit is what charges this model: "token", "second" or "call".
+	//
+	// It has to travel with the row because the four rates above cannot say it.
+	// A model billed by the second stores explicit zeros in them -- its token
+	// price is absent, not unknown -- and a reader with only those four numbers
+	// concludes "unpriced" about a model that is priced, or "free" about one
+	// that is not. Both were on screen before this field existed.
+	BillingUnit string
+	// UnitRates is the rate card for a model not billed by token, at this
+	// organization's own multipliers. Empty for a token-billed model.
+	UnitRates []PublicUnitRate
+}
+
+// PublicUnitRate is one line of a per-unit rate card as a caller sees it. An
+// empty axis means the rate does not vary on it and matches anything.
+type PublicUnitRate struct {
+	Unit       string
+	Resolution string
+	Audio      string
+	// Variant is the axis an image rate varies on where a video rate uses
+	// Audio: the quality tier the upstream sells. Carried here because without
+	// it a model priced at two quality tiers renders two identical-looking
+	// lines with different numbers, which reads as a bug in the price list.
+	Variant     string
+	NanoPerUnit int64
+	// OfficialNanoPerUnit is the upstream's own rate for this line, the same
+	// comparison anchor the four token rates publish as official_price. Keeping
+	// it for one billing family and not the other would make "the official rate
+	// is shown next to ours" true only for token-billed models.
+	OfficialNanoPerUnit int64
 }
 
 // PublicModels returns the public catalog: public visibility, enabled, and at
@@ -931,14 +1125,15 @@ func (s *Service) modelsFor(ctx context.Context, tierID, orgID pgtype.UUID) ([]P
 			name = r.Slug
 		}
 		m := PublicModel{
-			Slug:            r.Slug,
-			DisplayName:     name,
-			Protocols:       r.Protocols,
-			ContextWindow:   r.ContextWindow,
-			MaxOutputTokens: r.MaxOutputTokens,
-			Endpoints:       PublishedEndpoints(r.Endpoints),
-			Capabilities:    r.Capabilities,
-			Currency:        r.PriceCurrency,
+			Slug:             r.Slug,
+			DisplayName:      name,
+			OutputModalities: r.OutputModalities,
+			Protocols:        r.Protocols,
+			ContextWindow:    r.ContextWindow,
+			MaxOutputTokens:  r.MaxOutputTokens,
+			Endpoints:        PublishedEndpoints(r.Endpoints),
+			Capabilities:     r.Capabilities,
+			Currency:         r.PriceCurrency,
 			// The rates and the free flag are deliberately left unset: no
 			// price row means no price, not a price of zero. Zeroing them
 			// would make "unpriced" and "deliberately free" identical
@@ -956,6 +1151,7 @@ func (s *Service) modelsFor(ctx context.Context, tierID, orgID pgtype.UUID) ([]P
 			m.PriceCacheRead = r.CurrentUpstreamCacheReadNanoPerMtok.Int64
 			m.PriceCacheWrite = r.CurrentUpstreamCacheWriteNanoPerMtok.Int64
 			m.IsFree = r.CurrentBillingMode.String == "free"
+			m.BillingUnit = billingUnitOfFamily(r.CurrentPricingFamily, r.CurrentUnitRates)
 			m.ModelMultiplierBps = int64(r.CurrentModelMultiplierBps.Int32)
 			m.PriceUpdatedAt = r.CurrentModelPriceEffectiveAt
 			m.SourceName = r.CurrentPriceSourceName.String
@@ -990,9 +1186,87 @@ func (s *Service) modelsFor(ctx context.Context, tierID, orgID pgtype.UUID) ([]P
 				"catalog: model %s resolves to no active pricing plan (was the default plan disabled or deleted?)",
 				m.Slug)
 		}
+		// The unit card is priced at the same multipliers as the token rates
+		// beside it, through the same function: a card computed some other way
+		// is a second answer to "what do we charge".
+		if m.UnitBilled() {
+			m.UnitRates = orgUnitRates(r.CurrentUnitRates, RatesForOrgModel(m, Rates{}))
+		}
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// BillingUnitToken is what a model on the token family is billed by. Named
+// rather than spelled inline because "not token" is the interesting test and a
+// typo in it renders a priced model as unpriced.
+const BillingUnitToken = "token"
+
+// UnitBilled reports whether this row is charged from a per-unit rate card.
+//
+// An unset BillingUnit reads as token, which is what billingUnitOfFamily
+// answers for everything not on the unit family. Testing `!= BillingUnitToken`
+// directly instead makes a row that never went through that function -- an
+// unpriced one, or one a caller assembled -- render as unit-billed with an
+// empty card, which is how an ordinary paid model came out of the renderer with
+// no price on it at all.
+func (m PublicModel) UnitBilled() bool {
+	return m.BillingUnit != "" && m.BillingUnit != BillingUnitToken
+}
+
+// billingUnitOfFamily says what charges a model, in the vocabulary a caller
+// reads rather than the schema's.
+//
+// The `units` family is one column and two answers -- per second and per
+// generation -- so the rate card is what distinguishes them. A units model with
+// no rates at all cannot be charged and admission refuses it; it is reported as
+// token-billed here so that it renders as the unpriced model it effectively is,
+// rather than as a priced one with an empty card.
+func billingUnitOfFamily(family string, rawRates []byte) string {
+	if family != "units" {
+		return BillingUnitToken
+	}
+	rates := decodeUnitRates(rawRates)
+	if len(rates) == 0 {
+		return BillingUnitToken
+	}
+	return rates[0].Unit
+}
+
+type storedUnitRate struct {
+	Unit        string `json:"unit"`
+	Resolution  string `json:"resolution"`
+	Audio       string `json:"audio"`
+	Variant     string `json:"variant"`
+	NanoPerUnit int64  `json:"nano_per_unit"`
+}
+
+func decodeUnitRates(raw []byte) []storedUnitRate {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []storedUnitRate
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// orgUnitRates renders the card at this organization's multipliers.
+func orgUnitRates(raw []byte, rates Rates) []PublicUnitRate {
+	stored := decodeUnitRates(raw)
+	if len(stored) == 0 {
+		return nil
+	}
+	out := make([]PublicUnitRate, 0, len(stored))
+	for _, r := range stored {
+		out = append(out, PublicUnitRate{
+			Unit: r.Unit, Resolution: r.Resolution, Audio: r.Audio, Variant: r.Variant,
+			NanoPerUnit:         OrgPriceNano(r.NanoPerUnit, rates),
+			OfficialNanoPerUnit: r.NanoPerUnit,
+		})
+	}
+	return out
 }
 
 // ErrModelUnpriced means the price row is missing one of the four upstream
@@ -1012,12 +1286,35 @@ var ErrModelUnpriced = errors.New("catalog: model has no pricing configured")
 // a cache-oriented entry may carry only cache rates. Judging on any single
 // bucket would reject those perfectly normal configurations. Only all four at
 // zero really means nothing was set.
-func checkPriced(p ModelPricingSnapshot) error {
+func checkPriced(p ModelPricingSnapshot, surface Surface) error {
 	if !p.Priced {
 		return ErrModelUnpriced // there is no price row at all
 	}
+	// The surface has to be able to serve the family the price row names.
+	//
+	// Without this, the FamilyUnits arm below would exempt a unit-priced model
+	// from the four-zero test on *every* surface, so the same model reached on
+	// a token-only surface would resolve with an all-zero rate card and bill
+	// nothing at all. A model priced one way and called on a surface that
+	// cannot bill that way is not available there, and 404 is what "not
+	// available" already means here.
+	//
+	// Set membership rather than equality, because one surface can legitimately
+	// carry both families (ADR-0227): images does.
+	if !surface.ServesFamily(p.Family) {
+		return ErrModelUnavailable
+	}
 	if p.BillingMode == "free" {
 		return nil // explicitly declared free
+	}
+	if p.Family == FamilyUnits {
+		// A unit-priced model's four token buckets are legitimately zero: it
+		// has no token price to give. Whether it is actually priced is decided
+		// by its unit rate rows, which live in another table -- so it is
+		// checked where those rows are read, at LockedUnitPriceTable, and not
+		// here. Applying the four-zero test to it would make every per-second
+		// model permanently unpriced.
+		return nil
 	}
 	if p.Upstream.InNanoPerMTok == 0 && p.Upstream.OutNanoPerMTok == 0 &&
 		p.Upstream.CacheReadNanoPerMTok == 0 && p.Upstream.CacheWriteNanoPerMTok == 0 {

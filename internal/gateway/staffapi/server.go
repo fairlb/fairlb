@@ -427,6 +427,7 @@ func (s *Server) modelOut(ctx context.Context, r catalogadmin.AdminModel) Gatewa
 		Id: r.ID, Slug: r.Slug, Enabled: r.Enabled,
 		Visibility: GatewayModelVisibility(r.Visibility),
 		Endpoints:  r.Endpoints, Protocols: r.Protocols,
+		OutputModalities: r.OutputModalities,
 		// The staff UI tells "deliberately free" from "nobody set a price"
 		// using the free flag below. Without it a perfectly healthy free model
 		// is labelled "unpriced, refusing traffic" -- an outage that does not
@@ -496,6 +497,11 @@ func (s *Server) GetGatewayHealth(ctx context.Context, _ GetGatewayHealthRequest
 			ProvidersTotal: c.ProvidersTotal, ProvidersDisabled: c.ProvidersDisabled,
 			ModelsTotal: c.ModelsTotal, ModelsDisabled: c.ModelsDisabled,
 		}
+	}
+	// Left absent when it could not be read, never zeroed: on the repair queue
+	// "we could not tell" must not arrive looking like "nothing is stuck".
+	if m := snap.StuckMoney; m != nil {
+		resp.StuckMoney = &GatewayStuckMoney{Jobs: m.Jobs, OldestTerminalAt: m.Oldest}
 	}
 	return GetGatewayHealth200JSONResponse(resp), nil
 }

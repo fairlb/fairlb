@@ -2,6 +2,9 @@ package pricing
 
 import (
 	"math"
+	"os"
+	"regexp"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -64,24 +67,83 @@ func TestPublishedRefusesOnOverflow(t *testing.T) {
 	}
 }
 
-// The map is the only thing standing between the column's six values and a
-// price that cannot be described. A missing entry makes ModelPricing refuse the
-// whole model, so the map being total over the CHECK is a real invariant.
-func TestBucketMapCoversTheColumn(t *testing.T) {
-	// Kept as a literal, not derived from bucketFromDB: a test that reads its
-	// expectation out of the thing under test asserts nothing.
-	columnValues := []string{"in", "out", "cache_read", "cache_write", "audio_in", "audio_out"}
-	if len(bucketFromDB) != len(columnValues) {
-		t.Fatalf("map has %d entries, the column allows %d", len(bucketFromDB), len(columnValues))
+// KnownBuckets is the single list, and this is what makes it single: it has to
+// be exactly what the column accepts.
+//
+// The expectation is read out of the migration rather than written here as a
+// literal. A literal is what this test used to hold, and it went stale the day
+// `image_in` was added to the column: the test kept passing on six values while
+// the column allowed seven, and every image-input rate the reference import
+// produced was refused as an unknown bucket with nothing to say so. Reading the
+// migration is not "taking the expectation from the thing under test" -- the
+// migration *is* the column, and the Go list is what is under test.
+//
+// The two round-trip maps are built from KnownBuckets, so this one assertion
+// covers all three. That they really are built from it, rather than written out
+// beside it, is asserted below.
+func TestKnownBucketsMatchTheColumn(t *testing.T) {
+	columnValues := bucketCheckValues(t)
+	known := KnownBuckets()
+	if len(known) != len(columnValues) {
+		t.Fatalf("KnownBuckets has %d entries, the column allows %d (%v)",
+			len(known), len(columnValues), columnValues)
 	}
 	for _, v := range columnValues {
-		bucket, ok := bucketFromDB[v]
-		if !ok {
-			t.Errorf("column value %q has no bucket", v)
-			continue
-		}
-		if string(bucket) != v {
-			t.Errorf("bucket for %q is %q -- the two vocabularies must stay identical", v, bucket)
+		if !slices.Contains(known, Bucket(v)) {
+			t.Errorf("column value %q is not in KnownBuckets, so nothing can write it", v)
 		}
 	}
+}
+
+// The maps are derived, not restated. Asserted rather than assumed, because
+// "derived" is a property of two lines of code that a later edit can quietly
+// turn back into a literal -- which is the shape the drift above started from.
+func TestBucketMapsAreTotalOverKnownBuckets(t *testing.T) {
+	known := KnownBuckets()
+	if len(bucketToDB) != len(known) || len(bucketFromDB) != len(known) {
+		t.Fatalf("maps have %d and %d entries against %d known buckets",
+			len(bucketToDB), len(bucketFromDB), len(known))
+	}
+	for _, b := range known {
+		stored, ok := bucketToDB[b]
+		if !ok {
+			t.Errorf("%q has no stored name, so saving that rate is refused as unknown", b)
+			continue
+		}
+		if stored != string(b) {
+			t.Errorf("stored name for %q is %q -- the two vocabularies must stay identical", b, stored)
+		}
+		if back, ok := bucketFromDB[stored]; !ok || back != b {
+			t.Errorf("%q does not round-trip: read back as %q (present=%v)", b, back, ok)
+		}
+	}
+}
+
+// bucketCheckValues reads the accepted bucket names out of the migration's
+// CHECK constraint. Failing to find it is a test failure rather than an empty
+// list: an empty expectation would make the assertion above vacuous, which is
+// the one outcome worse than a wrong one.
+func bucketCheckValues(t *testing.T) []string {
+	t.Helper()
+	const migration = "../../../migrations/0002_gateway.sql"
+	sql, err := os.ReadFile(migration)
+	if err != nil {
+		t.Fatalf("read %s: %v", migration, err)
+	}
+	// The constraint spans lines, so the region is located first and the
+	// literals are pulled out of it.
+	re := regexp.MustCompile(`(?s)bucket\s+text NOT NULL CHECK \(\s*bucket IN \((.*?)\)`)
+	m := re.FindSubmatch(sql)
+	if m == nil {
+		t.Fatalf("no bucket CHECK found in %s; this test cannot assert anything", migration)
+	}
+	values := regexp.MustCompile(`'([a-z_]+)'`).FindAllStringSubmatch(string(m[1]), -1)
+	if len(values) == 0 {
+		t.Fatalf("bucket CHECK in %s lists no values", migration)
+	}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		out = append(out, v[1])
+	}
+	return out
 }

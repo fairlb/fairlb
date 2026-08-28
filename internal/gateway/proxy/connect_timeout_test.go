@@ -78,12 +78,12 @@ func TestFailureRowRecordsAttemptsAndProvider(t *testing.T) {
 	ctx := context.Background()
 	plaintext, _, org := f.seedKey(t, apikeys.CreateInput{})
 	f.topup(t, org, 1_000_000_000)
-	f.seedCatalog(t, "openai", "m", "m-up", []string{"chat"})
+	f.seedCatalog(t, "openai", "openai/m", "m-up", []string{"chat"})
 
 	if _, gerr := f.pipeline.Run(ctx, proxy.Request{
 		Surface: catalog.SurfaceChat, Protocol: proxy.ProtocolOpenAI,
 		UpstreamPath: "/v1/chat/completions",
-		Body:         []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`),
+		Body:         []byte(`{"model":"openai/m","messages":[{"role":"user","content":"hi"}]}`),
 		Credential:   plaintext,
 	}); gerr == nil {
 		t.Fatal("an upstream answering 503 should fail the request")

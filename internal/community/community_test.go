@@ -611,8 +611,8 @@ func TestCommunitySettingsSurface(t *testing.T) {
 
 	put := func(reason string) error {
 		body := communitystaffapi.SettingsBatch{Changes: []struct {
-			Key   string      `json:"key"`
-			Value interface{} `json:"value"`
+			Key   string `json:"key"`
+			Value any    `json:"value"`
 		}{{Key: "gateway.byok_fee_bps", Value: 750}}}
 		if reason != "" {
 			body.Reason = &reason

@@ -58,8 +58,18 @@ type Point struct {
 	Requests    int64
 	TokensIn    int64
 	TokensOut   int64
-	ChargedNano int64
-	Errors      int64
+	// BilledSeconds, BilledCalls and BilledImages are the quantities for
+	// surfaces not billed by token, kept apart because they are different
+	// dimensions: a second of video, a prepaid generation and a produced image
+	// added together give a number that denotes nothing, the same reason none
+	// of them is added into the token counters above. A bucket can carry all
+	// three -- an hour usually mixes several kinds of request -- which is
+	// exactly why one field could not have held them.
+	BilledSeconds int64
+	BilledCalls   int64
+	BilledImages  int64
+	ChargedNano   int64
+	Errors        int64
 }
 
 // Group is one row of the breakdown.
@@ -68,22 +78,28 @@ type Group struct {
 	Label string
 	// RawKey is the api-key uuid when grouping by key; the transport formats
 	// it. Grouping by model has no uuid, and Key already carries the slug.
-	RawKey      pgtype.UUID
-	Requests    int64
-	TokensIn    int64
-	TokensOut   int64
-	ChargedNano int64
+	RawKey        pgtype.UUID
+	Requests      int64
+	TokensIn      int64
+	TokensOut     int64
+	BilledSeconds int64
+	BilledCalls   int64
+	BilledImages  int64
+	ChargedNano   int64
 }
 
 // Totals is the period summary.
 type Totals struct {
-	Requests    int64
-	TokensIn    int64
-	TokensOut   int64
-	ChargedNano int64
-	Errors      int64
-	Currency    string
-	Latency     LatencyStats
+	Requests      int64
+	TokensIn      int64
+	TokensOut     int64
+	BilledSeconds int64
+	BilledCalls   int64
+	BilledImages  int64
+	ChargedNano   int64
+	Errors        int64
+	Currency      string
+	Latency       LatencyStats
 }
 
 // Report is the whole answer.
@@ -137,8 +153,9 @@ func (r *ReportReader) series(ctx context.Context, orgID pgtype.UUID, in ReportQ
 		for _, row := range rows {
 			out = append(out, Point{
 				BucketStart: row.Bucket.Time, Requests: row.Requests,
-				TokensIn: row.TokensIn, TokensOut: row.TokensOut,
-				ChargedNano: row.ChargedNano, Errors: row.Errors,
+				TokensIn: row.TokensIn, TokensOut: row.TokensOut, BilledSeconds: row.BilledSeconds, BilledCalls: row.BilledCalls,
+				BilledImages: row.BilledImages,
+				ChargedNano:  row.ChargedNano, Errors: row.Errors,
 			})
 		}
 		return out, nil
@@ -153,8 +170,9 @@ func (r *ReportReader) series(ctx context.Context, orgID pgtype.UUID, in ReportQ
 	for _, row := range rows {
 		out = append(out, Point{
 			BucketStart: row.Bucket.Time, Requests: row.Requests,
-			TokensIn: row.TokensIn, TokensOut: row.TokensOut,
-			ChargedNano: row.ChargedNano, Errors: row.Errors,
+			TokensIn: row.TokensIn, TokensOut: row.TokensOut, BilledSeconds: row.BilledSeconds, BilledCalls: row.BilledCalls,
+			BilledImages: row.BilledImages,
+			ChargedNano:  row.ChargedNano, Errors: row.Errors,
 		})
 	}
 	return out, nil
@@ -169,23 +187,50 @@ func (r *ReportReader) series(ctx context.Context, orgID pgtype.UUID, in ReportQ
 // series, not the groups), but the spec offers both parameters to any
 // management key: nobody having hit it is not the same as it not being broken.
 func (r *ReportReader) groups(ctx context.Context, orgID pgtype.UUID, in ReportQuery) ([]Group, error) {
+	// Both axes are spelled. It used to be `if ByAPIKey { … }` and then fall
+	// through, which made ByModel the silent default -- the constant was never
+	// written anywhere in Go, and any value that got past the boundary became a
+	// model grouping.
+	//
+	// The default is a backstop, not the boundary. It briefly *was* the boundary
+	// and that was a bug: the spec's enum is not enforced at bind time (see
+	// consoleapi.reportQuery), so `?group_by=banana` arrived here and this branch
+	// turned a client mistake into a 500. Validation now lives in the handler,
+	// which is where a user-controlled string becomes a 400.
+	switch in.GroupBy {
+	case ByAPIKey:
+		return r.groupsByKey(ctx, orgID, in)
+	case ByModel:
+		return r.groupsByModel(ctx, orgID, in)
+	default:
+		return nil, fmt.Errorf("usage: unknown grouping axis %q", in.GroupBy)
+	}
+}
+
+func (r *ReportReader) groupsByKey(ctx context.Context, orgID pgtype.UUID, in ReportQuery) ([]Group, error) {
 	f, t := stamps(in)
 	groups := []Group{}
-	if in.GroupBy == ByAPIKey {
-		rows, err := r.q.UsageGroupByKey(ctx, gwdb.UsageGroupByKeyParams{
-			OrgID: orgID, FromTs: f, ToTs: t, ApiKeyID: in.APIKeyID,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("usage: group by key: %w", err)
-		}
-		for _, row := range rows {
-			groups = append(groups, Group{
-				RawKey: row.Key, Label: row.Label, Requests: row.Requests,
-				TokensIn: row.TokensIn, TokensOut: row.TokensOut, ChargedNano: row.ChargedNano,
-			})
-		}
-		return groups, nil
+	rows, err := r.q.UsageGroupByKey(ctx, gwdb.UsageGroupByKeyParams{
+		OrgID: orgID, FromTs: f, ToTs: t, ApiKeyID: in.APIKeyID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("usage: group by key: %w", err)
 	}
+	for _, row := range rows {
+		groups = append(groups, Group{
+			RawKey: row.Key, Label: row.Label, Requests: row.Requests,
+			TokensIn: row.TokensIn, TokensOut: row.TokensOut,
+			BilledSeconds: row.BilledSeconds, BilledCalls: row.BilledCalls,
+			BilledImages: row.BilledImages,
+			ChargedNano:  row.ChargedNano,
+		})
+	}
+	return groups, nil
+}
+
+func (r *ReportReader) groupsByModel(ctx context.Context, orgID pgtype.UUID, in ReportQuery) ([]Group, error) {
+	f, t := stamps(in)
+	groups := []Group{}
 	rows, err := r.q.UsageGroupByModel(ctx, gwdb.UsageGroupByModelParams{
 		OrgID: orgID, FromTs: f, ToTs: t, ApiKeyID: in.APIKeyID,
 	})
@@ -202,7 +247,9 @@ func (r *ReportReader) groups(ctx context.Context, orgID pgtype.UUID, in ReportQ
 		}
 		groups = append(groups, Group{
 			Key: row.Key, Label: label, Requests: row.Requests,
-			TokensIn: row.TokensIn, TokensOut: row.TokensOut, ChargedNano: row.ChargedNano,
+			TokensIn: row.TokensIn, TokensOut: row.TokensOut,
+			BilledSeconds: row.BilledSeconds, BilledCalls: row.BilledCalls,
+			BilledImages: row.BilledImages, ChargedNano: row.ChargedNano,
 		})
 	}
 	return groups, nil
@@ -224,7 +271,9 @@ func (r *ReportReader) totals(ctx context.Context, orgID pgtype.UUID, in ReportQ
 	}
 	out := Totals{
 		Requests: row.Requests, TokensIn: row.TokensIn, TokensOut: row.TokensOut,
-		ChargedNano: row.ChargedNano, Errors: row.Errors, Currency: currency,
+		BilledSeconds: row.BilledSeconds, BilledCalls: row.BilledCalls,
+		BilledImages: row.BilledImages,
+		ChargedNano:  row.ChargedNano, Errors: row.Errors, Currency: currency,
 	}
 	if out.Latency, err = r.latency(ctx, orgID, in); err != nil {
 		return Totals{}, err

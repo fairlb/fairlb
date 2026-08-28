@@ -1,13 +1,16 @@
-![FairLB — One gateway. Native APIs. Automatic failover.](docs/assets/banner.png)
+![FairLB — Native where there is a protocol. One API where there isn't.](docs/assets/banner.png)
 
 # FairLB
 
-**One gateway. Native APIs. Automatic failover.**
+**Native where there is a protocol. One API where there isn't.**
 
-FairLB is an LLM gateway — native OpenAI, Anthropic and Gemini APIs in front of
-every major model provider, with automatic failover, per-key budgets, and usage
-accounting. Each protocol keeps its own paths, headers and streaming events;
-nothing is translated into a single dialect on the way through.
+FairLB is a multimodal AI model gateway. Text and images go through native
+OpenAI, Anthropic and Gemini APIs — each protocol keeps its own paths, headers
+and streaming events, and nothing is translated into a single dialect on the way
+through. Video has no such protocol to keep, because no video vendor publishes
+one the others speak, so FairLB publishes its own: one asynchronous job API
+across every video model it carries. Both planes share one key, one catalog,
+automatic failover, per-key budgets and one usage ledger.
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/fairlb/fairlb/main/docker-compose.yml

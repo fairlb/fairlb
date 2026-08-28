@@ -13,7 +13,6 @@ import {
   HeartbeatIcon,
   ListMagnifyingGlassIcon,
   GearIcon,
-  PlayIcon,
   PlugsIcon,
   ShieldCheckIcon,
   UsersThreeIcon,
@@ -23,7 +22,6 @@ import {
 // into the entry chunk just to name a few strings.
 import {
   REQUEST_SEARCH_KEYS,
-  PLAYGROUND_SEARCH_KEYS,
   USAGE_SEARCH_KEYS,
 } from "@fairlb/gateway-console-features/search-keys";
 import {
@@ -74,11 +72,6 @@ const UsagePage = lazy(() =>
 const RequestsPage = lazy(() =>
   import("@fairlb/gateway-console-features/requests").then((module) => ({
     default: module.RequestsPage,
-  })),
-);
-const PlaygroundPage = lazy(() =>
-  import("@fairlb/gateway-console-features/playground").then((module) => ({
-    default: module.PlaygroundPage,
   })),
 );
 
@@ -232,14 +225,6 @@ const registeredPages: RegisteredAdminPage[] = [
     icon: ListMagnifyingGlassIcon,
     validateSearch: (search) => pickStrings(search, REQUEST_SEARCH_KEYS),
   },
-  {
-    path: "/playground",
-    navKey: "playTitle",
-    section: "workspace",
-    component: PlaygroundPage,
-    icon: PlayIcon,
-    validateSearch: (search) => pickStrings(search, PLAYGROUND_SEARCH_KEYS),
-  },
   // The keys page is this app's own rather than a feature package's: managing
   // keys from the admin plane is a different page from managing them as an
   // organization member. What is reused are the shared UI components; what is
@@ -272,9 +257,9 @@ const toRoutes = (pages: readonly RegisteredAdminPage[]): AdminRoute[] => [...pa
  * registry's own note that this app is too small for collapsible groups is
  * right, and it stayed right — a collapsible group costs a click and buys back
  * vertical space this sidebar does not need. But that argument was applied to
- * the *labels* too, and the labels are free. The result was nine entries under
- * "Gateway", five of which — Requests, Usage, Playground, API keys, Teams — have
- * nothing to do with configuring the gateway.
+ * the *labels* too, and the labels are free. The result was every entry under
+ * "Gateway", including Requests, Usage, API keys and Teams — which have nothing
+ * to do with configuring the gateway.
  *
  * The three answer three different questions: how is the gateway set up, what
  * has it been doing, and what do I use it with.

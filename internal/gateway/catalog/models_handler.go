@@ -86,11 +86,12 @@ func (s *Service) WriteModelList(
 			Object:  "model",
 			Name:    m.DisplayName,
 			OwnedBy: ownerOf(m.Slug),
-			Pricing: pricing{Currency: m.Currency},
+			Pricing: pricing{Currency: m.Currency, BillingUnit: m.BillingUnit},
 			Meta: modelMeta{
 				BillingMode:         map[bool]string{true: "free", false: "paid"}[m.IsFree],
 				ContextWindow:       m.ContextWindow,
 				MaxOutputTokens:     m.MaxOutputTokens,
+				OutputModalities:    m.OutputModalities,
 				Endpoints:           m.Endpoints,
 				Protocols:           m.Protocols,
 				SupportedOperations: m.Endpoints,
@@ -99,11 +100,26 @@ func (s *Service) WriteModelList(
 				PriceUpdatedAt:      timestampString(m.PriceUpdatedAt),
 			},
 		}
+		if e.Meta.OutputModalities == nil {
+			// The contract requires the field. An empty array would say "this
+			// model produces nothing", so a row that somehow carries none falls
+			// back to the column's own default rather than to emptiness.
+			e.Meta.OutputModalities = []string{string(ModalityText)}
+		}
 		if e.Meta.Endpoints == nil {
 			e.Meta.Endpoints = []string{}
 		}
 		if e.Meta.SupportedOperations == nil {
 			e.Meta.SupportedOperations = []string{}
+		}
+		// A unit-billed model publishes its rate card and no token fields at
+		// all. Falling through to the token branch below is what put four zeros
+		// against every per-second model in the public catalog while it was
+		// perfectly well priced.
+		if m.UnitBilled() {
+			e.Pricing.UnitRates = unitRatesOf(m.UnitRates, m.IsFree)
+			list.Data = append(list.Data, e)
+			continue
 		}
 		if !m.IsFree {
 			e.Pricing.InputPerMTok = orgPricePerMTok(m.PriceIn, modelRates)
@@ -149,7 +165,24 @@ func orgPricePerMTok(nanoPerMTok int64, rates Rates) string {
 // It is exported so the console's organization catalog and the data plane's
 // /v1/models share one conversion, including both current multipliers.
 func OrgPriceNanoPerMTok(nanoPerMTok int64, rates Rates) int64 {
-	if nanoPerMTok <= 0 {
+	return applyOrgMultipliers(nanoPerMTok, rates)
+}
+
+// OrgPriceNano is the same arithmetic for a rate that is quoted per one of
+// something -- a second of video, a generation -- rather than per million.
+//
+// A separate name rather than a second caller of the per-million one, for the
+// reason the per-unit parser gives: every reader of a per-million rate divides
+// by a million, and a rate that borrowed that name would eventually be divided
+// too.
+func OrgPriceNano(nano int64, rates Rates) int64 {
+	return applyOrgMultipliers(nano, rates)
+}
+
+// applyOrgMultipliers applies the model and plan multipliers to one rate. The
+// unit is the caller's business; this only multiplies.
+func applyOrgMultipliers(rate int64, rates Rates) int64 {
+	if rate <= 0 {
 		return 0
 	}
 	// The exchange rate is fixed at "1": the catalog's currency is carried by
@@ -159,7 +192,7 @@ func OrgPriceNanoPerMTok(nanoPerMTok int64, rates Rates) int64 {
 	// The catalog shows the organization-facing price, which has nothing to do with
 	// upstream cost, so the same table is passed for both arguments; the cost
 	// figure Compute produces is unused here.
-	listed := Price{InNanoPerMTok: nanoPerMTok}
+	listed := Price{InNanoPerMTok: rate}
 	q, err := Compute(Flat(listed), Flat(listed), Tokens{In: tokensPerMTok}, rates)
 	if err != nil {
 		return 0
@@ -248,16 +281,50 @@ type modelEntry struct {
 }
 
 type pricing struct {
-	Currency          string `json:"currency"`
-	InputPerMTok      string `json:"input_per_mtok"`
-	OutputPerMTok     string `json:"output_per_mtok"`
+	Currency string `json:"currency"`
+	// BillingUnit says what the numbers beside it count: `token`, `second`,
+	// `call` or `image`.
+	//
+	// It travels with the block because the rates cannot say it, and a reader
+	// with only the four token fields draws the wrong conclusion twice over: a
+	// per-image model has no token price, so those fields are absent, and
+	// "absent" read as "zero" renders a paid model as free. That is what the
+	// catalog did to every per-second model until this field existed.
+	BillingUnit string `json:"billing_unit"`
+	// The four token rates. Omitted entirely, not zeroed, for a model billed by
+	// unit: it has no token price, and an explicit zero would be the claim that
+	// it does and that the claim is "free".
+	InputPerMTok      string `json:"input_per_mtok,omitempty"`
+	OutputPerMTok     string `json:"output_per_mtok,omitempty"`
 	CacheReadPerMTok  string `json:"cache_read_per_mtok,omitempty"`
 	CacheWritePerMTok string `json:"cache_write_per_mtok,omitempty"`
+	// UnitRates is the rate card for a model billed by unit, and empty for a
+	// token-billed one. Exactly one of this and the four fields above is
+	// populated, which is what BillingUnit tells the reader in advance.
+	UnitRates []publishedUnitRate `json:"unit_rates,omitempty"`
 	// OfficialPrice is the upstream's own published rate in USD per million.
 	// It is the comparison anchor that lets a client show "official $3, here
 	// $2.55". It is omitted for a free model, so the retained official rate is
-	// not disclosed.
+	// not disclosed, and for a unit-billed one, whose official rates travel on
+	// each line of UnitRates instead.
 	OfficialPrice *officialPrice `json:"official_price,omitempty"`
+}
+
+// publishedUnitRate is one line of a per-unit rate card as published.
+//
+// The axes are emitted only when they narrow the rate. A model with one flat
+// price per image is a single line naming just the unit, and a reader does not
+// have to work out that three empty strings mean "always".
+type publishedUnitRate struct {
+	Unit       string `json:"unit"`
+	Resolution string `json:"resolution,omitempty"`
+	Audio      string `json:"audio,omitempty"`
+	Variant    string `json:"variant,omitempty"`
+	// PricePerUnit is this deployment's price, and OfficialPricePerUnit the
+	// upstream's own -- the same pair the token family publishes, so the
+	// comparison a reader can make does not depend on how the model is billed.
+	PricePerUnit         string `json:"price_per_unit"`
+	OfficialPricePerUnit string `json:"official_price_per_unit,omitempty"`
 }
 
 type officialPrice struct {
@@ -277,9 +344,15 @@ type officialPrice struct {
 }
 
 type modelMeta struct {
-	BillingMode         string          `json:"billing_mode"`
-	ContextWindow       int32           `json:"context_window,omitempty"`
-	MaxOutputTokens     int32           `json:"max_output_tokens,omitempty"`
+	BillingMode     string `json:"billing_mode"`
+	ContextWindow   int32  `json:"context_window,omitempty"`
+	MaxOutputTokens int32  `json:"max_output_tokens,omitempty"`
+	// OutputModalities is what this model produces (ADR-0226). It is not
+	// derivable from Endpoints below -- Gemini serves its image models on
+	// generate_content, the same endpoint as its text models -- so a client
+	// grouping the catalog by modality has to be told rather than left to
+	// infer.
+	OutputModalities    []string        `json:"output_modalities"`
 	Endpoints           []string        `json:"endpoints"`
 	Protocols           []string        `json:"protocols"`
 	SupportedOperations []string        `json:"supported_operations"`
@@ -290,6 +363,31 @@ type modelMeta struct {
 	// choose between.
 	PricingPlanID  string `json:"pricing_plan_id,omitempty"`
 	PriceUpdatedAt string `json:"price_updated_at,omitempty"`
+}
+
+// unitRatesOf renders a per-unit rate card.
+//
+// A free model publishes zeros on the customer side and omits the upstream's
+// own rate, exactly as the token family does: free stops the charge, and the
+// retained official rate stays undisclosed.
+func unitRatesOf(rates []PublicUnitRate, free bool) []publishedUnitRate {
+	if len(rates) == 0 {
+		return nil
+	}
+	out := make([]publishedUnitRate, 0, len(rates))
+	for _, r := range rates {
+		line := publishedUnitRate{
+			Unit: r.Unit, Resolution: r.Resolution, Audio: r.Audio, Variant: r.Variant,
+			PricePerUnit: money.FormatNanoExact(max64(r.NanoPerUnit, 0)),
+		}
+		if free {
+			line.PricePerUnit = "0"
+		} else {
+			line.OfficialPricePerUnit = money.FormatNanoExact(max64(r.OfficialNanoPerUnit, 0))
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 var uuidStr = publicid.UUIDString
@@ -319,9 +417,15 @@ func writeOpenAIError(w http.ResponseWriter, status int, code, message string) {
 // ownerOf is the `owned_by` a catalog slug carries: the creator segment of a
 // `<creator>/<name>` slug (`openai/gpt-5.6-sol` → `openai`). The creator is
 // who trained the model, not which provider serves it — one slug can be
-// routed through several providers. A bare slug with no `/` has no creator
-// to report, and nothing else stands in for one -- a model owns no protocol
-// -- so the field is omitted rather than filled with a guess.
+// routed through several providers.
+//
+// models_slug_shape now makes a slug two segments, so the guard below no longer
+// fires for anything the catalog can hold. It stays because it is doing real
+// work for free: without it a name with no creator reports *itself* as the
+// creator, which is a wrong answer published to every client rather than a
+// missing one. A constraint is a good reason to stop handling a case in the
+// interface; it is not a reason to make a pure function answer wrongly if the
+// case ever arrives.
 func ownerOf(slug string) string {
 	if i := strings.IndexByte(slug, '/'); i > 0 {
 		return slug[:i]

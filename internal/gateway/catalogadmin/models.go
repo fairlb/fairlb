@@ -14,36 +14,46 @@ import (
 
 // Model is a catalog entry.
 type Model struct {
-	ID          uuid.UUID
-	Slug        string
-	DisplayName string
-	Enabled     bool
-	Visibility  string
+	ID               uuid.UUID
+	Slug             string
+	DisplayName      string
+	Enabled          bool
+	Visibility       string
+	OutputModalities []string
 }
 
 // ModelCreate is a new catalog entry. There is no protocol to state: a model
 // is reachable on whatever its routes' providers speak.
 type ModelCreate struct {
-	Slug            string
-	DisplayName     string
-	Visibility      string
-	ContextWindow   int32
-	MaxOutputTokens *int32
+	Slug        string
+	DisplayName string
+	Visibility  string
+	// OutputModalities is what the model produces. Empty means text, which is
+	// what the column defaults to -- a modality is stated only by the models
+	// that are not text (ADR-0226).
+	OutputModalities []string
+	ContextWindow    int32
+	MaxOutputTokens  *int32
 }
 
 // ModelPatch is a partial update; nil leaves a field alone.
 type ModelPatch struct {
-	DisplayName     *string
-	Enabled         *bool
-	Visibility      *string
-	ContextWindow   *int32
-	MaxOutputTokens *int32
+	DisplayName      *string
+	Enabled          *bool
+	Visibility       *string
+	OutputModalities []string
+	ContextWindow    *int32
+	MaxOutputTokens  *int32
 }
 
 func modelFrom(r gwdb.CreateModelRow) Model {
 	return Model{
 		ID: uuid.UUID(r.ID.Bytes), Slug: r.Slug, DisplayName: r.DisplayName,
 		Enabled: r.Enabled, Visibility: r.Visibility,
+		// Returned rather than echoed back from the request: the column decides
+		// what an unset list becomes, and a create that answered with what the
+		// caller sent would report an empty list for every text model.
+		OutputModalities: r.OutputModalities,
 	}
 }
 
@@ -67,14 +77,21 @@ func (s *Service) CreateModel(ctx context.Context, in ModelCreate) (Model, error
 	if in.MaxOutputTokens != nil {
 		maxOut = *in.MaxOutputTokens
 	}
+	if err := checkModalities(in.OutputModalities); err != nil {
+		return Model{}, err
+	}
 	row, err := s.q.CreateModel(ctx, gwdb.CreateModelParams{
 		Slug: in.Slug, DisplayName: in.DisplayName,
 		Enabled: false, Visibility: visibility,
 		ContextWindow: in.ContextWindow, MaxOutputTokens: maxOut,
+		OutputModalities: in.OutputModalities,
 	})
 	if err != nil {
 		if db.IsUniqueViolation(err) {
 			return Model{}, ConflictError{Message: "That slug is already taken"}
+		}
+		if err := slugShapeRefusal(err); err != nil {
+			return Model{}, err
 		}
 		return Model{}, fmt.Errorf("catalogadmin: create model: %w", err)
 	}
@@ -95,13 +112,17 @@ func (s *Service) UpdateModel(ctx context.Context, id uuid.UUID, in ModelPatch) 
 				"enabled provider route before enabling this model"}
 		}
 	}
+	if err := checkModalities(in.OutputModalities); err != nil {
+		return Model{}, err
+	}
 	row, err := s.q.UpdateModel(ctx, gwdb.UpdateModelParams{
-		ID:              pgID(id),
-		DisplayName:     textOrNull(in.DisplayName),
-		Enabled:         boolOrNull(in.Enabled),
-		Visibility:      textOrNull(in.Visibility),
-		ContextWindow:   int4(in.ContextWindow),
-		MaxOutputTokens: int4(in.MaxOutputTokens),
+		ID:               pgID(id),
+		DisplayName:      textOrNull(in.DisplayName),
+		Enabled:          boolOrNull(in.Enabled),
+		Visibility:       textOrNull(in.Visibility),
+		OutputModalities: in.OutputModalities,
+		ContextWindow:    int4(in.ContextWindow),
+		MaxOutputTokens:  int4(in.MaxOutputTokens),
 	})
 	if err != nil {
 		if db.IsNoRows(err) {
@@ -156,6 +177,9 @@ type AdminModel struct {
 	Visibility      string
 	ContextWindow   int32
 	MaxOutputTokens int32
+	// OutputModalities is what this model produces (ADR-0226). It is the
+	// catalog filter's modality axis, and the edit dialog prefills from it.
+	OutputModalities []string
 	// Metadata is configuration and display only. Malformed jsonb reads as
 	// empty rather than failing: one bad row must not make the page unopenable.
 	Metadata map[string]any
@@ -208,7 +232,42 @@ func adminModelFrom(r gwdb.ListModelsForAdminRow) AdminModel {
 		ID: r.ID.Bytes, Slug: r.Slug, DisplayName: r.DisplayName,
 		Enabled: r.Enabled, Visibility: r.Visibility,
 		ContextWindow: r.ContextWindow, MaxOutputTokens: r.MaxOutputTokens,
-		Metadata: decodeJSONObject(r.Metadata), Endpoints: catalog.PublishedEndpoints(r.Endpoints),
+		OutputModalities: r.OutputModalities,
+		Metadata:         decodeJSONObject(r.Metadata), Endpoints: catalog.PublishedEndpoints(r.Endpoints),
 		Protocols: r.Protocols, RouteCount: r.RouteCount,
 	}
+}
+
+// slugShapeRefusal turns the database's refusal of a malformed slug into a
+// message about the slug, or returns nil when the error is something else.
+//
+// The pattern itself lives in the migration and is not repeated here. A copy
+// in Go would be a second thing to keep in step, and the one that matters is
+// the one the database applies to every writer -- including a migration, a
+// psql session, and any future code path that forgets to ask.
+func slugShapeRefusal(err error) error {
+	if !db.IsCheckViolation(err) || db.ConstraintName(err) != "models_slug_shape" {
+		return nil
+	}
+	return invalid("A model slug is written as <creator>/<name>, for example " +
+		"\"openai/gpt-5.6-sol\": lowercase, and the part before the slash is who " +
+		"made the model rather than which provider serves it. A bare upstream " +
+		"name is not a slug -- the same name means different models on different " +
+		"upstreams, and a slug cannot be changed once it exists.")
+}
+
+// checkModalities refuses a modality the column would refuse anyway, so the
+// answer names the field instead of surfacing as a constraint violation.
+//
+// An empty list is not an error here: it means "unchanged" on the update path
+// and "text" on the create path, and both are decided in SQL so that the two
+// cannot answer differently.
+func checkModalities(v []string) error {
+	for _, m := range v {
+		if !catalog.ValidModality(m) {
+			return invalid(
+				"output_modalities: %q is not a modality; expected one of text, image, video", m)
+		}
+	}
+	return nil
 }

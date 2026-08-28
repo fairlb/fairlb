@@ -38,7 +38,7 @@ const partitionLookahead = 3
 
 func (w *PartitionWorker) Work(ctx context.Context, _ *river.Job[PartitionArgs]) error {
 	m0, _ := monthpartition.BoundsUTC(time.Now())
-	for i := 0; i < partitionLookahead; i++ {
+	for i := range partitionLookahead {
 		if err := ensurePartition(ctx, w.pool, m0.AddDate(0, i, 0)); err != nil {
 			return fmt.Errorf("audit: create partition ahead of time: %w", err)
 		}

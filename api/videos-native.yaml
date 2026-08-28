@@ -1,0 +1,338 @@
+openapi: 3.1.0
+info:
+  title: FairLB Video Vendor Compatibility Surfaces
+  version: 1.0.0
+  description: |
+    Five vendors' own video APIs, answered by this gateway, so that a caller who
+    already wrote against one of them switches by changing a base URL.
+
+    ```
+    https://api.<domain>/video/<vendor>   +   that vendor's own path
+    ```
+
+    A prefix per vendor, with no version segment of its own: each vendor's paths
+    carry theirs, and no two agree (`/v1`, `/api/v3`, `/v1beta`, `/api/v1`).
+    Point your SDK's base URL here, put your FairLB key where you put that
+    vendor's key, and change nothing else.
+
+    **This is not a passthrough, and calling it one would be a lie worth
+    avoiding.** The shapes below are each vendor's; the job underneath is this
+    gateway's. Every one of these APIs is asynchronous, so forwarding a submit
+    would create a job upstream that this gateway holds no record of — no hold
+    on your balance, no settlement, no usage line — and forwarding a poll would
+    hand back the upstream's own URL, which this gateway never returns. So the
+    identifier you get is ours, and the address you download from is ours. Both
+    are opaque strings to any client, which is why the substitution changes
+    nothing you have to write.
+
+    What you keep, unchanged from `/v1/videos`: admission, your balance, the
+    exact hold taken before generation starts, the refund on a failed job, the
+    usage line, and custody of the finished file.
+
+    **The shapes are not defined here.** Each operation below records what this
+    gateway answers and links to the vendor that owns the definition. Where a
+    vendor changes their contract, theirs is the one that moved.
+
+    **Idempotency.** `/v1/videos` requires an `Idempotency-Key` header, because a
+    retry without one is a second paid job. None of these vendors publishes such
+    a header, so on these surfaces the key is derived from the request itself,
+    your `X-End-User-Id` if you send one, and a one-minute window: an automatic
+    retry within that window returns the job it already created, and the same
+    request a minute later is a second job. If you need exact control, use
+    `POST /v1/videos` and supply your own key.
+
+    **Paths not listed here are refused in that vendor's own error shape**,
+    naming the path, rather than with a bare 404. A capability this gateway does
+    not offer should say so.
+
+    **A field this gateway does not recognise is forwarded, or the request is
+    refused naming it.** It is never dropped: a parameter silently discarded
+    produces a clip you did not ask for and are billed for anyway. Most
+    unrecognised fields travel to the upstream as written. The exceptions are
+    stated on the operations that have them.
+
+servers:
+  - url: https://api.example.com
+    description: Replace with your deployment's host
+
+security:
+  - vendorKey: []
+
+tags:
+  - name: google
+    description: |
+      Veo, through the Gemini API's long-running operations. The identifier is an
+      operation *name* (`models/<model>/operations/<id>`), which your client GETs
+      as a path — this gateway's job id is the last segment of it.
+      Definition: https://ai.google.dev/gemini-api/docs/video
+  - name: kuaishou
+    description: |
+      Kling. The task type is part of the address, so a job created at
+      `image2video` is read back there. Definition:
+      https://app.klingai.com/global/dev/document-api
+  - name: volcengine
+    description: |
+      Seedance, through Ark's content-generation tasks. Generation parameters
+      ride inside the prompt text as `--key value` commands, and this gateway
+      reads them back out. Definition: https://www.volcengine.com/docs/82379
+  - name: minimax
+    description: |
+      Hailuo. The finished file is fetched in two calls, and the file identifier
+      is an integer because this vendor's schema types it as one.
+      Definition: https://platform.minimax.io/docs/api-reference
+  - name: alibaba
+    description: |
+      Wan, through Model Studio's asynchronous tasks. The
+      `X-DashScope-Async: enable` header your client sends is accepted and
+      ignored: every job here is asynchronous already.
+      Definition: https://help.aliyun.com/zh/model-studio/
+
+paths:
+  /video/google/v1beta/models/{model}:predictLongRunning:
+    post:
+      tags: [google]
+      operationId: veoPredictLongRunning
+      summary: Start a Veo generation
+      description: |
+        This vendor's own create call. `instances` and `parameters` are read as
+        that vendor documents them; `parameters` this gateway does not price —
+        `personGeneration` and the like — are forwarded as written.
+
+        One instance per request. Several would be several jobs, and this gateway
+        prices one per job.
+
+        An unrecognised key *inside an instance* is refused rather than
+        forwarded. An instance is a fixed shape on this vendor and `parameters`
+        is where its knobs go, so a key there is a typo or a field this build has
+        not learned — and either way saying so beats generating without it.
+      parameters:
+        - { name: model, in: path, required: true, schema: { type: string }, example: veo-3.1-generate-preview }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200':
+          description: An operation whose `name` you poll.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/google/v1beta/{operation}:
+    get:
+      tags: [google]
+      operationId: veoGetOperation
+      summary: Poll a Veo operation by name
+      description: |
+        Give back the `name` the create call returned. Its model segment is this
+        gateway's name for the model rather than the one you sent; the shape and
+        the segment count are this vendor's.
+      parameters:
+        - { name: operation, in: path, required: true, schema: { type: string },
+            example: models/veo-3.1-generate-preview/operations/vid_01K... }
+      responses:
+        '200':
+          description: |
+            `done` false while it runs. When it finishes, the sample's `uri` is
+            this deployment's own address for the file.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/kuaishou/v1/videos/text2video:
+    post:
+      tags: [kuaishou]
+      operationId: klingText2Video
+      summary: Create a Kling text-to-video task
+      description: |
+        `model_name`, `prompt`, `mode`, `duration` and `aspect_ratio` are read as
+        that vendor documents them. `mode` is how this vendor asks for a
+        resolution tier, and it is priced as the tier it produces.
+        `camera_control`, `cfg_scale` and this vendor's other knobs are forwarded
+        as written.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200':
+          description: This vendor's envelope, with `data.task_id` carrying this gateway's job id.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/kuaishou/v1/videos/image2video:
+    post:
+      tags: [kuaishou]
+      operationId: klingImage2Video
+      summary: Create a Kling image-to-video task
+      description: As above, with `image` as the first frame and `image_tail` as the last.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200':
+          description: This vendor's envelope.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/kuaishou/v1/videos/text2video/{task_id}:
+    get:
+      tags: [kuaishou]
+      operationId: klingGetText2Video
+      summary: Read a Kling text-to-video task
+      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: |
+            `data.task_status` in this vendor's own vocabulary. On `succeed`, the
+            video's `url` is this deployment's own address for the file.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/kuaishou/v1/videos/image2video/{task_id}:
+    get:
+      tags: [kuaishou]
+      operationId: klingGetImage2Video
+      summary: Read a Kling image-to-video task
+      description: |
+        A separate path from the one above, because on this vendor it is: a job
+        created at `image2video` is not readable at `text2video`.
+      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: This vendor's envelope.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/volcengine/api/v3/contents/generations/tasks:
+    post:
+      tags: [volcengine]
+      operationId: arkCreateGenerationTask
+      summary: Create a Seedance generation task
+      description: |
+        The `content` array as that vendor documents it: a text item whose
+        `--key value` commands carry the generation parameters, and image items
+        with `first_frame` or `last_frame` roles. The commands this gateway
+        prices are read out of the text; anything else in the body — a callback
+        URL, this vendor's own switches — is forwarded as written.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200':
+          description: A task whose `id` is this gateway's job id.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/volcengine/api/v3/contents/generations/tasks/{task_id}:
+    get:
+      tags: [volcengine]
+      operationId: arkGetGenerationTask
+      summary: Read a Seedance generation task
+      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: |
+            `status` in this vendor's own vocabulary. On `succeeded`,
+            `content.video_url` is this deployment's own address for the file.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/minimax/v1/video_generation:
+    post:
+      tags: [minimax]
+      operationId: hailuoCreateVideoGeneration
+      summary: Create a Hailuo generation task
+      description: |
+        `model`, `prompt`, `duration`, `resolution` and `first_frame_image` are
+        read as that vendor documents them. `prompt_optimizer` is forwarded:
+        this gateway leaves it off when a request says nothing, and honours it
+        when a request asks for it.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200':
+          description: A task whose `task_id` is this gateway's job id.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/minimax/v1/query/video_generation:
+    get:
+      tags: [minimax]
+      operationId: hailuoQueryVideoGeneration
+      summary: Read a Hailuo generation task
+      parameters: [{ name: task_id, in: query, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: |
+            `status` in this vendor's own vocabulary. On `Success`, `file_id` is
+            an integer, as this vendor's schema types it — hand it to the file
+            call below.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/minimax/v1/files/retrieve:
+    get:
+      tags: [minimax]
+      operationId: hailuoRetrieveFile
+      summary: Read a Hailuo file record
+      description: |
+        A file record, not the bytes — which is what this vendor's own API
+        answers here. `download_url` is this deployment's own address, so your
+        next fetch lands here rather than upstream.
+
+        A job that produced nothing is refused rather than answered with a
+        success envelope and an empty URL.
+      parameters: [{ name: file_id, in: query, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        '200':
+          description: The file record.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/alibaba/api/v1/services/aigc/video-generation/video-synthesis:
+    post:
+      tags: [alibaba]
+      operationId: wanVideoSynthesis
+      summary: Create a Wan generation task
+      description: |
+        `input` and `parameters` as that vendor documents them, including the
+        typed `media` list for the first and last frames. `parameters` this
+        gateway does not price — `prompt_extend`, `watermark` — are forwarded as
+        written; the watermark is left off when a request says nothing.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200':
+          description: A task whose `output.task_id` is this gateway's job id.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+  /video/alibaba/api/v1/tasks/{task_id}:
+    get:
+      tags: [alibaba]
+      operationId: wanGetTask
+      summary: Read a Wan task
+      parameters: [{ name: task_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: |
+            `output.task_status` in this vendor's own vocabulary. On `SUCCEEDED`,
+            `output.video_url` is this deployment's own address for the file.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/VendorShapedError' }
+
+components:
+  securitySchemes:
+    vendorKey:
+      type: http
+      scheme: bearer
+      description: |
+        Your FairLB key, in whichever header that vendor's SDK puts it:
+        `Authorization: Bearer`, `x-api-key` or `x-goog-api-key` are all
+        accepted. That is what lets a client move without editing code.
+  responses:
+    VendorShapedError:
+      description: |
+        A refusal, in that vendor's own error shape — their envelope, their code
+        numbering, their field names — so that a client's existing error handling
+        and retry logic keep working.
+      content: { application/json: { schema: { type: object } } }

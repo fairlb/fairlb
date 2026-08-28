@@ -17,7 +17,7 @@ import {
  * instead of being compared against something derived from the registry, which
  * would only prove the two came from the same place.
  */
-test("the sidebar shows ten entries in three sections, and detail pages take no slot", () => {
+test("the sidebar shows nine entries in three sections, and detail pages take no slot", () => {
   // Spelled out per section rather than as one flat list, because the grouping
   // is the claim being made: each heading has to name what is under it.
   const inSection = (id: string) => navPages.filter((p) => p.section === id).map((p) => p.path);
@@ -32,7 +32,7 @@ test("the sidebar shows ten entries in three sections, and detail pages take no 
     "/settings",
   ]);
   expect(inSection("observe")).toEqual(["/usage", "/requests"]);
-  expect(inSection("workspace")).toEqual(["/playground", "/keys", "/teams"]);
+  expect(inSection("workspace")).toEqual(["/keys", "/teams"]);
   // No entry may fall outside a heading: a page with an unknown section is
   // routed and reachable but invisible in the sidebar, which reads as missing.
   const known = new Set(ADMIN_SECTIONS.map((s) => s.id));

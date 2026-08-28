@@ -529,6 +529,7 @@ paths:
                   - responses
                   - embeddings
                   - images
+                  - images_edits
                   - generate_content
                   - responses_compact
                   - messages_count_tokens
@@ -537,6 +538,7 @@ paths:
                   - gemini_batch_embed_contents
                   - gemini_interactions
                   - responses_input_tokens
+                  - video
                   description: 'Which endpoint to probe. The default is the canonical
                     endpoint for the
 
@@ -1398,6 +1400,62 @@ paths:
                       $ref: '#/components/schemas/GatewayVendor'
         default:
           $ref: '#/components/responses/Problem'
+  /gateway/vendors/{vendor}/video-envelope:
+    get:
+      operationId: getGatewayVendorVideoEnvelope
+      tags:
+      - gateway
+      summary: What this build records a vendor's video model as accepting, for prefilling
+        a route's envelope
+      description: |
+        A prefill source, and only that. It returns the envelope this build's vendor
+        mapper carries for the named upstream model — the durations, resolutions,
+        aspect ratios, audio behaviour and cancel semantics read out of that vendor's
+        published contract when the mapper was written.
+
+        It is not runtime truth and the response says so: `source` comes back
+        `declared`, because nothing here was observed. From the moment somebody saves
+        it, the person who saved it is the one answering for the configuration.
+
+        Nothing is stored by this call. It answers for a vendor and an upstream model
+        name, not for a route, because the mapper's answer varies by model — the same
+        vendor's fast and pro models accept different things.
+      parameters:
+      - name: vendor
+        in: path
+        required: true
+        schema:
+          type: string
+        description: A vendor slug from `/gateway/vendors`
+      - name: upstream_model
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description: The real upstream model name, the same value a route stores in
+          `provider_model_id`
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - envelope
+                properties:
+                  envelope:
+                    $ref: '#/components/schemas/VideoEnvelope'
+        '404':
+          description: This build has no video mapper for that vendor
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
   /gateway/kill-switch:
     get:
       operationId: getGatewayKillSwitch
@@ -1454,12 +1512,57 @@ paths:
         default:
           $ref: '#/components/responses/Problem'
   /gateway/providers/{provider_id}/discover-models:
+    get:
+      operationId: getProviderDiscoveredModels
+      tags:
+      - gateway
+      summary: The last catalogue this provider reported, reclassified against the
+        catalog as it stands now
+      description: 'Returns what the upstream said the last time somebody asked, with
+        the time it said it.
+
+        No upstream call, no cost.
+
+
+        `checked_at` is zero and `ok` is false when this provider has never been asked,
+        which is a
+
+        different fact from "asked, and it reported nothing" — the second comes back
+        with `ok` true.
+
+
+        The four states and the suggestions are recomputed on read rather than stored:
+        which models
+
+        exist locally, and whether they are priced and routed, changes without the
+        upstream saying
+
+        anything, so a stored verdict would go wrong on its own.
+
+        '
+      parameters:
+      - name: provider_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: The stored answer, or an empty one when this provider has never
+            been asked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoverModelsResult'
+        default:
+          $ref: '#/components/responses/Problem'
     post:
       operationId: discoverProviderModels
       tags:
       - gateway
       summary: Fetch the upstream model list and compare it with the local catalog
-        — read-only, nothing is stored
+        — costs an upstream call
       description: 'Calls the upstream model listing with this provider''s key and
         sorts every model id it
 
@@ -1482,16 +1585,27 @@ paths:
         it first |
 
 
-        Read-only, storing nothing: it exists to help check upstream model identity
-        and capabilities,
+        It exists to help check upstream model identity and capabilities, and it neither
+        reads nor
 
-        and it neither reads nor writes prices. In particular it never creates model
-        rows on its own —
+        writes prices. In particular it never creates model rows on its own — an unpriced
+        model
 
-        an unpriced model cannot be routed, so creating them automatically would produce
-        a batch of
+        cannot be routed, so creating them automatically would produce a batch of models
 
-        models guaranteed to fail.
+        guaranteed to fail.
+
+
+        The answer is stored, so that the GET on this path can return it without calling
+        upstream
+
+        again. Nothing on the data plane reads it: it is a record of what an upstream
+        said and when,
+
+        and it is discarded when the provider''s base URL or vendor changes, because
+        the record then
+
+        describes a different service.
 
 
         Matching is a heuristic suggestion, not an authoritative judgement: the criterion
@@ -1978,6 +2092,17 @@ components:
         and floating-point transport are not allowed. Configuration input is capped at
         92233720.368547758 so that the largest model price combined with a plan multiplier
         remains exactly representable.
+    DecimalUSDPerUnit:
+      type: string
+      pattern: ^(0|[1-9][0-9]*)(\.[0-9]{1,9})?$
+      example: '0.15'
+      description: >-
+        USD per billing unit -- one second of output, or one generation. Per
+        *unit*, never per million of them: the token rates beside this one are
+        quoted per million and are divided by a million on the way in, and a
+        rate that travelled through that conversion would be wrong by a factor
+        of a million. The unit belongs to the schema, not to a convention
+        somebody has to remember (ADR-0220).
     DiscoverModelsResult:
       type: object
       required:
@@ -2069,6 +2194,71 @@ components:
         model_slug:
           type: string
           description: The matched local slug; empty when the state is unknown
+        suggestion:
+          $ref: '#/components/schemas/ModelSuggestion'
+    ModelSuggestion:
+      type: object
+      required:
+      - slug
+      - source
+      description: 'The catalog entry an unknown upstream model would create. Present
+        only when the state
+
+        is `unknown`, and only when one can actually be derived — it is absent, rather
+        than
+
+        blank, whenever nothing here can name the model. On Azure, Bedrock and Vertex
+        the upstream
+
+        name is a deployment name or an ARN with no creator in it, and a prefix invented
+        for those
+
+        would be a guess wearing the shape of an answer, for a slug that can never
+        be changed
+
+        afterwards.
+
+
+        Every field is a starting point for a person to edit, never a decision. What
+        the source
+
+        says is how much is actually known behind it.
+
+        '
+      properties:
+        slug:
+          type: string
+          description: The proposed `<creator>/<name>` slug
+        display_name:
+          type: string
+          description: Empty unless the seeded catalog names this model
+        context_window:
+          type: integer
+          description: Zero when unknown, and also when the vendor publishes no limit
+            — as for image models, which are reached on endpoints that state none
+        max_output_tokens:
+          type: integer
+          description: Zero when unknown, on the same terms as context_window
+        manual_probe:
+          type: boolean
+          description: This model is reachable only on an endpoint the gateway will
+            not probe by itself (images), so it is not a routing candidate until an
+            operator probes it or records a verdict. Creating it without saying so
+            leaves an entry that looks finished and answers 404.
+        output_modalities:
+          $ref: '#/components/schemas/OutputModalities'
+        source:
+          type: string
+          enum:
+          - seed
+          - upstream
+          - vendor
+          description: 'seed — the seeded catalog names this model, so the display
+            name and both windows come from the vendor''s own documentation; upstream
+            — the upstream reports a two-part name already, as aggregators do, and
+            it is used as it stands; vendor — the slug was assembled from the vendor''s
+            creator segment and the upstream name, which makes it correctly shaped
+            and nothing more.'
     DraftTokenRatesUSDPerM:
       type: object
       required:
@@ -2142,6 +2332,35 @@ components:
           $ref: '#/components/schemas/GatewayRetryBudget'
         switch_counts:
           $ref: '#/components/schemas/GatewayKillSwitchCounts'
+        stuck_money:
+          $ref: '#/components/schemas/GatewayStuckMoney'
+    GatewayStuckMoney:
+      type: object
+      required:
+      - jobs
+      description: 'Asynchronous jobs that reached a terminal state while their reservation
+        never moved — settled neither onto the customer nor back off them.
+
+        Every row is a customer either overcharged or not charged at all, so this
+        is a repair queue rather than a statistic.
+
+        Absent when the count could not be read; that is not the same as zero, and
+        the interface must not render it as zero.
+
+        It carries no amount on purpose: a hold is denominated in its organisation''s
+        wallet currency, so one total across organisations would be a cross-currency
+        addition, and the wallet table is not readable from this module at all.
+
+        '
+      properties:
+        jobs:
+          type: integer
+          format: int64
+        oldest_terminal_at:
+          type: string
+          format: date-time
+          description: Absent when nothing is stuck. How long the oldest one has been
+            waiting is what separates a live incident from one stranded row.
     GatewayKillSwitchCounts:
       type: object
       required:
@@ -2181,6 +2400,7 @@ components:
       - enabled
       - visibility
       - endpoints
+      - output_modalities
       properties:
         id:
           type: string
@@ -2189,6 +2409,8 @@ components:
           type: string
         display_name:
           type: string
+        output_modalities:
+          $ref: '#/components/schemas/OutputModalities'
         protocols:
           type: array
           items:
@@ -2296,6 +2518,31 @@ components:
           type: integer
           description: The model's default output cap, used for the pre-authorisation
             estimate when a request carries no max_tokens
+        output_modalities:
+          $ref: '#/components/schemas/OutputModalities'
+    OutputModalities:
+      type: array
+      minItems: 1
+      description: >-
+        What the model produces. Declared rather than observed: no probe can
+        report whether the bytes coming back are words or pixels, and it cannot
+        be derived from the endpoint set either, because Gemini serves its image
+        models on the same `generate_content` endpoint as its text models.
+
+        An array because a model may genuinely produce more than one — Gemini's
+        image models return text and image parts in the same response.
+      items:
+        type: string
+        enum:
+        - text
+        - image
+        - video
+        # Named explicitly, for the same reason ModelPriceUnitRate.unit is:
+        # `text` and `image` are collidable identifiers in a growing package.
+        x-enum-varnames:
+        - ModalityText
+        - ModalityImage
+        - ModalityVideo
     GatewayProbeTrace:
       type: object
       description: 'The full exchange of one probe. Returned outside production only,
@@ -2442,6 +2689,28 @@ components:
           type: string
           description: This vendor's id in the bundled reference-price dataset, absent
             when it has none.
+        creator:
+          type: string
+          description: 'The creator segment of the catalog slug for the models this
+            platform publishes as a first party — the `openai` of `openai/gpt-5.6-sol`.
+
+
+            Absent for platforms and aggregators, and that absence carries information:
+            they serve other
+
+            people''s models, so they cannot say who made one, and a prefix taken from
+            the platform''s own
+
+            name would write the routing dimension into the catalog key.
+
+
+            Distinct from `refdata_provider`, which says who prices the model, and
+            from `model_id_example`,
+
+            which says how the upstream spells it. Any two of the three agreeing is
+            a coincidence: xAI
+
+            creates `x-ai` models, is priced under `x-ai`, and is itself `xai`.'
         docs_url:
           type: string
         model_id_example:
@@ -2486,6 +2755,7 @@ components:
             - openai
             - anthropic
             - gemini
+            - video
           description: 'Which protocols this provider speaks. An aggregating
             relay often exposes chat completions, messages and responses behind one
             base URL and one key,
@@ -2649,6 +2919,7 @@ components:
             - openai
             - anthropic
             - gemini
+            - video
           description: |
             Which protocols it speaks. Omitted at creation, it is the vendor's
             `default_protocols` — for a known vendor the protocol is already
@@ -2930,6 +3201,22 @@ components:
           - 'null'
           description: This upstream's output limit override; empty means use the
             model's own value
+        max_images:
+          type:
+          - integer
+          - 'null'
+          description: 'The most images one request to this route can come back with.
+            Empty means one.
+
+
+            It is the image plane''''s whole envelope, and what a per-image reservation
+            is taken against: how many images a request produces is not knowable until
+            it has been made, so the charge follows the response and the reservation
+            has to cover the most it could have returned. Left at one, an organisation
+            passes a budget check on the strength of one image and is then charged
+            for however many the upstream chose to return.
+
+            '
         quirks:
           type: object
           additionalProperties: true
@@ -2944,6 +3231,8 @@ components:
             upper bound on cost; otherwise the credit guard stops working.
 
             '
+        video_envelope:
+          $ref: '#/components/schemas/VideoEnvelope'
     GatewayRouteBatchCreate:
       type: object
       required:
@@ -3129,10 +3418,26 @@ components:
       properties:
         slug:
           type: string
-          description: The model's identity here. It cannot be changed once created,
-            so the interface has to let someone check it first.
+          description: The model's identity here. Written `<creator>/<name>`, lowercase,
+            where the creator is who made the model rather than which provider serves
+            it. It cannot be changed once created, so the interface has to let someone
+            check it first, and a bare upstream name is refused rather than stored.
         display_name:
           type: string
+        context_window:
+          type: integer
+          description: Omitted or zero leaves it unset, the same as creating the model
+            from the catalog page. It is here so a model created while wiring a provider
+            can be as complete as one created directly — otherwise every discovered
+            model arrives with a zero window and has to be finished one at a time on
+            its own page.
+        max_output_tokens:
+          type: integer
+          description: Omitted takes the same conservative default the catalog page
+            applies, because an output cap of zero degrades the pre-authorisation estimate
+            for requests that carry no max_tokens into an input-only one.
+        output_modalities:
+          $ref: '#/components/schemas/OutputModalities'
     GatewayRouteBatchResult:
       type: object
       required:
@@ -3185,6 +3490,22 @@ components:
           - 'null'
           description: This upstream's output limit override; empty means use the
             model's own value
+        max_images:
+          type:
+          - integer
+          - 'null'
+          description: 'The most images one request to this route can come back with.
+            Empty means one.
+
+
+            It is the image plane''''s whole envelope, and what a per-image reservation
+            is taken against: how many images a request produces is not knowable until
+            it has been made, so the charge follows the response and the reservation
+            has to cover the most it could have returned. Left at one, an organisation
+            passes a budget check on the strength of one image and is then charged
+            for however many the upstream chose to return.
+
+            '
         quirks:
           type: object
           additionalProperties: true
@@ -3199,6 +3520,19 @@ components:
             upper bound on cost; otherwise the credit guard stops working.
 
             '
+        video_envelope:
+          $ref: '#/components/schemas/VideoEnvelope'
+          description: >-
+            Supplied, it replaces the whole envelope; omitted, the existing one
+            is kept. `source` inside it is ignored — the write path always
+            records `declared`.
+
+
+            **An empty object unconfigures the route**, which is how a route
+            stops serving video. There is no null variant: the column is NOT
+            NULL, so "no envelope" and "an envelope that declares nothing" are
+            one stored state, and a second spelling of it would be one that
+            quietly did nothing.
     GatewayRouteProbeRequest:
       type: object
       properties:
@@ -3261,6 +3595,7 @@ components:
           - responses
           - embeddings
           - images
+          - images_edits
           - generate_content
           - responses_compact
           - messages_count_tokens
@@ -3269,6 +3604,7 @@ components:
           - gemini_batch_embed_contents
           - gemini_interactions
           - responses_input_tokens
+          - video
         probe_mode:
           type: string
           enum:
@@ -3305,6 +3641,24 @@ components:
           description: The upstream text, truncated and otherwise unaltered. It is
             the only clue separating a bad credential from a bad model name or an unsupported
             endpoint.
+        probe_enqueued_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+          description: >-
+            When a probe was queued, and null once its verdict has landed. It is
+            a field of its own and not a fifth `status`, because `status` is the
+            verdict and a re-probe must not erase the standing one: the
+            catalogue publishes endpoints found `ok`, so a pending value living
+            in `status` would take the route out of the catalogue for as long as
+            the re-probe ran (ADR-0224).
+
+
+            It is what lets the interface say "this is running" — which matters
+            most on the endpoints that are never probed automatically, because
+            each of those costs a real generation and the alternative to saying
+            so is an operator paying for it twice.
     GatewayTier:
       type: object
       required:
@@ -3417,6 +3771,8 @@ components:
           - cache_write
           - audio_input
           - audio_output
+          - image_input
+          - image_output
         service_tier:
           type: string
           enum:
@@ -3457,11 +3813,106 @@ components:
         rate_usd_per_call:
           $ref: '#/components/schemas/DecimalUSDPerCall'
       additionalProperties: false
+    ModelPriceUnitRate:
+      type: object
+      required:
+      - unit
+      - rate_usd_per_unit
+      description: >-
+        One rate in the per-unit family. `resolution`, `audio` and `variant` are
+        the axes a rate varies on, and an empty one means "this rate does not
+        vary on that axis" and matches any request -- the opposite direction
+        from the token rates, which walk *down* to a base rate. A model with one
+        flat per-unit price is a single row with every axis empty.
+
+        Which axes carry meaning depends on the unit: a video rate varies on
+        resolution and audio, an image rate on resolution (the requested size)
+        and variant (the quality tier the upstream sells).
+      properties:
+        unit:
+          type: string
+          enum:
+          - second
+          - call
+          - image
+          # Named explicitly. The generator prefixes an enum's constants only
+          # when they collide with another's, so `second` and `call` would
+          # otherwise become package-level `Second` and `Call` — two of the most
+          # collidable identifiers there are, in a package that keeps growing.
+          x-enum-varnames:
+          - UnitSecond
+          - UnitCall
+          - UnitImage
+          description: >-
+            `second` is per second of produced output. `image` is per produced
+            image. `call` is per generation regardless of how many outputs it
+            produced, for upstreams that sell prepaid generation packs rather
+            than time.
+
+            `image` and `call` count different things: a request for four images
+            is four units on the first and one on the second.
+        resolution:
+          type: string
+          maxLength: 40
+          default: ''
+          description: The output size this rate applies to; empty applies to every
+            resolution
+        audio:
+          type: string
+          enum:
+          - ''
+          - 'on'
+          - 'off'
+          default: ''
+          x-enum-varnames:
+          - AudioAxisAny
+          - AudioAxisOn
+          - AudioAxisOff
+          description: Whether this rate is the one with sound or without; empty applies
+            to both. Video only — an image rate leaves it empty.
+        variant:
+          type: string
+          maxLength: 40
+          default: ''
+          description: >-
+            A subdivision within the unit, such as the quality tier an image model
+            sells. Empty applies to every variant.
+        service_tier:
+          type: string
+          enum:
+          - standard
+          - priority
+          - batch
+          default: standard
+        rate_usd_per_unit:
+          $ref: '#/components/schemas/DecimalUSDPerUnit'
+      additionalProperties: false
+    PricingFamily:
+      type: string
+      enum:
+      - tokens
+      - units
+      default: tokens
+      # See ModelPriceUnitRate.unit for why these are named rather than left to
+      # the generator's collision heuristic.
+      x-enum-varnames:
+      - PricingFamilyTokens
+      - PricingFamilyUnits
+      description: >-
+        Which rates actually charge this model. `tokens` is the four-bucket
+        family every text model uses. `units` bills by second or by generation
+        and is what makes a video model representable at all: it never falls
+        back to a token rate, because falling back would bill a clip at the
+        price of a paragraph (ADR-0220).
+
+
+        A `units` model has no token price -- not an unknown one, an absent one
+        -- so its four token fields are stored as explicit zeros rather than
+        nulls, and `official_rates` is not required on input for it.
     ModelPricingInput:
       type: object
       required:
       - billing_mode
-      - official_rates
       - adjustment
       - source_name
       - checked_at
@@ -3474,6 +3925,13 @@ components:
 
         the previous value can be read when rolling back.
 
+
+        `official_rates` is required for the `tokens` family and refused for `units`:
+        a per-second model has no token price, and
+
+        making the caller send four zeros to say so would push an invariant the schema
+        cannot hold onto every client.
+
         '
       properties:
         billing_mode:
@@ -3481,6 +3939,8 @@ components:
           enum:
           - paid
           - free
+        pricing_family:
+          $ref: '#/components/schemas/PricingFamily'
         official_rates:
           $ref: '#/components/schemas/DraftTokenRatesUSDPerM'
         adjustment:
@@ -3523,6 +3983,17 @@ components:
             values are kept
           items:
             $ref: '#/components/schemas/ModelPriceToolRate'
+        unit_rates:
+          type: array
+          description: >-
+            Supplied, it replaces the whole group; omitted, the existing values
+            are kept. A paid `units` model whose rates are explicitly emptied is
+            refused with `units_without_rates`: it is a model that cannot be
+            charged for, and admission would answer 503 to every request against
+            it. Omitting the field is not the same instruction and is not
+            refused.
+          items:
+            $ref: '#/components/schemas/ModelPriceUnitRate'
       additionalProperties: false
     ModelPricingResource:
       type: object
@@ -3549,8 +4020,13 @@ components:
           enum:
           - paid
           - free
+        pricing_family:
+          $ref: '#/components/schemas/PricingFamily'
         official_rates:
           $ref: '#/components/schemas/DraftTokenRatesUSDPerM'
+          description: Absent on a `units` model. Its four token columns are stored
+            as explicit zeros, and returning them would show a priced model as costing
+            nothing per token — a true statement about a number that does not charge it.
         adjustment:
           $ref: '#/components/schemas/PricingAdjustment'
         public_rates:
@@ -3576,6 +4052,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ModelPriceToolRate'
+        unit_rates:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelPriceUnitRate'
       additionalProperties: false
     OrgGatewaySettings:
       type: object
@@ -3865,6 +4345,10 @@ components:
       enum:
       - missing_paid_rate
       - paid_all_zero
+      # A paid model in the `units` family whose unit rates were explicitly
+      # emptied. A blocker rather than a warning: it is not a commercial
+      # decision, it is a model admission answers 503 to.
+      - units_without_rates
       - unverified_price_source
       - missing_default_plan
       - multiplier_out_of_range
@@ -4074,6 +4558,122 @@ components:
           $ref: '#/components/schemas/DecimalUSDPerM'
         cache_write:
           $ref: '#/components/schemas/DecimalUSDPerM'
+      additionalProperties: false
+    VideoEnvelope:
+      type: object
+      description: >-
+        What one deployment of a video model accepts. It lives on the route
+        rather than the model because the same model on two channels can accept
+        different duration steps, and it is load-bearing: admission validates
+        against the union of the candidate routes' envelopes and refuses outside
+        it *before* any hold is taken (ADR-0221).
+
+
+        Declared, not observed -- the one deliberate exception to "capability is
+        observed". Answering "does this model accept a twelve-second clip" costs
+        a twelve-second clip, and the value space is duration x resolution x
+        aspect ratio x audio. What makes the exception safe is that neither
+        direction of drift bills anyone wrongly: declaring too little refuses at
+        admission having spent nothing, declaring too much ends in an upstream
+        refusal, a failed job and a voided hold.
+
+
+        Typed and closed rather than the free-form object the transport profile
+        beside it is. That one is the server's to judge; this one decides whether
+        money moves, and the schema is the only place its shape is stated.
+      properties:
+        durations_seconds:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 1
+          description: The clip lengths this deployment accepts. Nothing here is "roughly"
+            anything — 4/6/8, 5/10 and 4/8/12 are three real vendors, and a request outside
+            the set is refused rather than rounded.
+        resolutions:
+          type: array
+          items:
+            type: string
+            maxLength: 40
+        aspect_ratios:
+          type: array
+          items:
+            type: string
+            maxLength: 20
+        audio:
+          type: string
+          enum:
+          - never
+          - optional
+          - always
+          description: '`always` is a model whose sound is native and has no parameter;
+            `optional` is one with a switch; `never` is silent.'
+        max_n:
+          type: integer
+          format: int32
+          minimum: 0
+        supports_image_to_video:
+          type: boolean
+        supports_last_frame:
+          type: boolean
+          description: Separate from `supports_image_to_video` because upstreams gate
+            the two separately — one accepts an end frame only in its pro mode.
+        max_reference_images:
+          type: integer
+          format: int32
+          minimum: 0
+          description: 0 where steering images are not accepted at all
+        supports_negative_prompt:
+          type: boolean
+          description: Declared rather than assumed. It is near-universal but not universal,
+            and silently dropping it bills the caller for a clip that ignored half of
+            what they asked for.
+        max_prompt_chars:
+          type: integer
+          format: int32
+          minimum: 0
+          description: >-
+            In characters, and upstream limits are not always: one vendor
+            publishes 2000 characters, another publishes 1024 *tokens*.
+            Configuring a token limit here as if it were characters refuses valid
+            prompts, so a model whose limit is not expressed in characters leaves
+            this at 0 and lets the upstream be the one to refuse.
+        cancel:
+          type: string
+          enum:
+          - never
+          - queued_only
+          - anytime
+          description: >-
+            How far a job of this model can be stopped. Declared because the
+            vendors genuinely differ, and unset reads as `never`: an operator who
+            has not said a model can be stopped has not promised that it can.
+        max_job_seconds:
+          type: integer
+          format: int32
+          minimum: 0
+          description: This model's own ceiling on how long a job may run before the
+            reconciler calls it expired. It also sizes the hold's TTL, which is why it
+            belongs to the model rather than to one global constant.
+        source:
+          type: string
+          enum:
+          - observed
+          - declared
+          readOnly: true
+          description: >-
+            Where this came from. `observed` means a vendor's own capability
+            endpoint answered it; `declared` means a person typed it.
+
+
+            Read-only on purpose. The rule is that the interface must never show
+            a person's entry as an observation, and an input able to set this
+            field is exactly how that rule gets broken. The write path always
+            stores `declared`, and `observed` is reserved for a
+            capability-discovery path. No vendor in this build publishes one, so
+            today every envelope is `declared` — which the interface says rather
+            than leaving the reader to assume.
       additionalProperties: false
   securitySchemes:
     staffSession:

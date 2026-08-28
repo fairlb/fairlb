@@ -9,8 +9,8 @@
     "./module": "./src/module.tsx",
     "./host": "./src/host.tsx",
     "./requests": "./src/requests.tsx",
+    "./videos": "./src/videos.tsx",
     "./usage": "./src/usage.tsx",
-    "./playground": "./src/playground.tsx",
     "./search-keys": "./src/search-keys.ts",
     "./key-models": "./src/key-models.ts"
   },

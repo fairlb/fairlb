@@ -13,9 +13,10 @@ to print redacted effective values, their source, and optional-feature state.
 | Variable | Type | Default | Required when | Description |
 |---|---|---|---|---|
 | `AUTH_RATE_LIMIT_PER_IP_RPM` | int32 | `10` | — | Authentication requests per IP per minute. |
+| `BRAND_PROFILE_DIR` | path | `—` | — | Directory holding the brand bundle to serve; empty serves the brand built into the image. A named directory that cannot be loaded stops startup. |
 | `DATABASE_URL` | secret url | `—` | runtime and database commands | PostgreSQL connection string. |
 | `DATABASE_URL_FILE` | file | `—` | alternative to DATABASE_URL | Path containing DATABASE_URL; mutually exclusive with the direct value. |
-| `DB_POOL_MAX_CONNS` | int32 | `pgx default` | — | Maximum PostgreSQL pool size; unset delegates to pgx. |
+| `DB_POOL_MAX_CONNS` | int32 | `pgx default` | — | Maximum PostgreSQL pool size; unset delegates to the product default. |
 | `DRAIN_GRACE_SECONDS` | seconds | `0` | — | Delay between readiness failure and server shutdown. |
 | `DRIVER_BREAKER` | enum | `memory` | — | Circuit-breaker driver: memory or redis. |
 | `DRIVER_CACHE` | enum | `memory` | — | Cache driver: memory or redis. |

@@ -44,6 +44,10 @@ func probeVerdictsList(verdicts []routeprobe.Verdict) []GatewayRouteProbe {
 			at := v.CheckedAt
 			item.CheckedAt = &at
 		}
+		if !v.EnqueuedAt.IsZero() {
+			at := v.EnqueuedAt
+			item.ProbeEnqueuedAt = &at
+		}
 		out = append(out, item)
 	}
 	return out

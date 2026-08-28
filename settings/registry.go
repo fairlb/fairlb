@@ -1,12 +1,13 @@
 package settings
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/fairlb/fairlb/foundation/money"
 	"net/mail"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -202,7 +203,7 @@ func (r *Registry) All() []Spec {
 	for _, s := range r.specs {
 		out = append(out, s)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	slices.SortFunc(out, func(a, b Spec) int { return cmp.Compare(a.Key, b.Key) })
 	return out
 }
 

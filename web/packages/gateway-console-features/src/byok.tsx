@@ -36,6 +36,7 @@ const KEY_HINT_LABEL: Record<string, MessageKey> = {
   bearer: "byokKeyHintBearer",
   aws_keypair_json: "byokKeyHintAwsKeypair",
   gcp_service_account_json: "byokKeyHintGcpServiceAccount",
+  kling_keypair_json: "byokKeyHintKlingKeypair",
 };
 
 const STATUS_LABEL: Record<string, MessageKey> = {

@@ -7,6 +7,9 @@ const groups = [
     requests: 1,
     tokens_in: 1,
     tokens_out: 1,
+    billed_seconds: 0,
+    billed_calls: 0,
+    billed_images: 0,
     charged_nano: 900,
   },
   {
@@ -14,6 +17,9 @@ const groups = [
     requests: 20,
     tokens_in: 20,
     tokens_out: 20,
+    billed_seconds: 0,
+    billed_calls: 0,
+    billed_images: 0,
     charged_nano: 100,
   },
   {
@@ -21,6 +27,9 @@ const groups = [
     requests: 20,
     tokens_in: 20,
     tokens_out: 20,
+    billed_seconds: 0,
+    billed_calls: 0,
+    billed_images: 0,
     charged_nano: 50,
   },
 ];

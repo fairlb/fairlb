@@ -54,9 +54,13 @@ const requireFile = (relative) => {
 };
 const index = readFileSync(requireFile("index.html"), "utf8");
 const expectedTitle = profile.identity.surfaceNames[surface].en;
-if (!index.includes(`<title>${expectedTitle}</title>`) && !index.includes(expectedTitle)) {
-  errors.push(`index title does not contain ${expectedTitle}`);
-}
+
+// Marketing resolves its brand while it is being rendered; everything else is
+// served by the Go binary and resolves it at startup (ADR-0214). The artifact
+// is asserted differently for the two, because what is *correct* differs: a
+// served build must carry holes where marketing carries values.
+const servedAtRuntime = surface !== "marketing";
+
 for (const asset of [
   "brand/profile.css",
   "brand/mark.svg",
@@ -67,11 +71,47 @@ for (const asset of [
   requireFile(asset);
 }
 if (!index.includes("/brand/favicon.svg")) errors.push("index does not use the profile favicon");
-if (!index.includes("/site.webmanifest")) errors.push("index does not link the profile manifest");
-const webManifest = JSON.parse(readFileSync(requireFile("site.webmanifest"), "utf8"));
-if (webManifest.name !== expectedTitle) errors.push("web manifest name drift");
-if (webManifest.icons?.[0]?.src !== "/brand/favicon.svg") {
-  errors.push("web manifest does not use the profile favicon");
+if (!index.includes("/brand/profile.css"))
+  errors.push("index does not link the profile stylesheet");
+
+if (servedAtRuntime) {
+  // The holes, and the fact that nothing was baked into them. A build that
+  // resolved its brand here would still look perfectly correct -- it would just
+  // be a build that only serves one brand, which is the whole thing this is
+  // guarding against.
+  for (const placeholder of [
+    "__FLB_BRAND_TITLE__",
+    "__FLB_BRAND_CANVAS_LIGHT__",
+    "__FLB_BRAND_CANVAS_DARK__",
+    "__FLB_BRAND_PROFILE_JSON__",
+  ]) {
+    if (!index.includes(placeholder))
+      errors.push(`index.html has no ${placeholder} for the server to fill`);
+  }
+  if (!index.includes('id="brand-profile"')) errors.push("index.html has no profile island");
+  if (!index.includes("/site.webmanifest")) errors.push("index does not link the manifest");
+  // Generated per surface from the profile, because its name is the surface
+  // name and one bundle serves every surface. Shipping one here would mean the
+  // artifact answers with a name the mounted brand never chose.
+  if (existsSync(path.join(dist, "site.webmanifest"))) {
+    errors.push("site.webmanifest is in the artifact; the server generates it per surface");
+  }
+  // The profile the binary reads when nothing is mounted. Without it a default
+  // deployment has no brand at all and every page is a hole.
+  const shipped = JSON.parse(readFileSync(requireFile("brand/profile.json"), "utf8"));
+  if (shipped.identity?.surfaceNames?.[surface]?.en !== expectedTitle) {
+    errors.push("brand/profile.json does not describe the brand this artifact was built with");
+  }
+} else {
+  if (!index.includes(`<title>${expectedTitle}</title>`) && !index.includes(expectedTitle)) {
+    errors.push(`index title does not contain ${expectedTitle}`);
+  }
+  if (!index.includes("/site.webmanifest")) errors.push("index does not link the profile manifest");
+  const webManifest = JSON.parse(readFileSync(requireFile("site.webmanifest"), "utf8"));
+  if (webManifest.name !== expectedTitle) errors.push("web manifest name drift");
+  if (webManifest.icons?.[0]?.src !== "/brand/favicon.svg") {
+    errors.push("web manifest does not use the profile favicon");
+  }
 }
 
 const css = readFileSync(requireFile("brand/profile.css"), "utf8");
@@ -94,7 +134,12 @@ const walk = (directory) => {
 };
 walk(dist);
 
-if (profile.identity.name !== "FairLB") {
+// The leakage sweep only means something where the brand is *in* the artifact.
+// A served build carries the default brand on purpose, as its fallback, so
+// "does FairLB appear here" has no answer worth acting on -- what replaces it is
+// the runtime check in foundation/brand's tests, which mounts a bundle and
+// asserts the served bytes.
+if (!servedAtRuntime && profile.identity.name !== "FairLB") {
   const forbiddenText = ["FairLB"];
   const forbiddenColors = [
     "#F5F7FA",

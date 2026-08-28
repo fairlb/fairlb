@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/fairlb/fairlb/settings"
+	"io/fs"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +20,6 @@ import (
 	communityorgauthz "github.com/fairlb/fairlb/internal/community/orgauthz"
 	communitystaffapi "github.com/fairlb/fairlb/internal/community/staffapi"
 	communitystaffauth "github.com/fairlb/fairlb/internal/community/staffauth"
-	"github.com/fairlb/fairlb/web"
 )
 
 const rlWindow = time.Minute
@@ -68,6 +68,7 @@ func buildRouter(
 	cfg communityconfig.Config, pool *pgxpool.Pool, gatewayModule *gateway.Module,
 	staffSvc *communitystaffauth.Service, drv *drivers.Drivers,
 	orgID pgtype.UUID, keys *apikeys.Service, health *httpx.Health, set *settings.Store,
+	adminUI fs.FS,
 ) http.Handler {
 	r := chi.NewRouter()
 	r.Use(httpx.RealIP(cfg.TrustProxy, cfg.TrustProxyHops))
@@ -170,8 +171,11 @@ func buildRouter(
 	// The content security policy takes its baseline with no additions: one
 	// host, a same-origin data plane, no cross-origin calls and no third-party
 	// challenge widget.
+	// The build arrives already wearing the deployment's brand: main resolves it
+	// before anything is served, because a brand that cannot be loaded has to
+	// stop startup rather than be discovered a page at a time (ADR-0214).
 	r.Handle("/*", httpx.SPASecurityHeaders(
-		httpx.SPA(web.StaffDist(),
+		httpx.SPA(adminUI,
 			"fairlb: the admin UI is not embedded in this build. Use the Vite dev server in development; production images are built with -tags webembed.\n"),
 		httpx.CSPExtra{}))
 
@@ -191,14 +195,19 @@ func buildRouter(
 		dr.NotFound(httpx.NotFoundHandler())
 		return dr
 	}
-	dataR, dataBetaR := newDataPlane(), newDataPlane()
+	// The third one carries the vendor compatibility surfaces. It is at the API
+	// root rather than under a version prefix because each vendor's own paths
+	// carry their own, and no two of them agree.
+	dataR, dataBetaR, dataNativeR := newDataPlane(), newDataPlane(), newDataPlane()
 	r.Mount("/v1", dataR)
 	r.Mount("/v1beta", dataBetaR)
+	r.Mount("/video", dataNativeR)
 
 	if err := gatewayModule.Mount(gateway.Planes{
-		DataPlane: dataR, DataPlaneV1Beta: dataBetaR, Console: consoleR, Admin: staffR,
+		DataPlane: dataR, DataPlaneV1Beta: dataBetaR, DataPlaneVideoNative: dataNativeR,
+		Console: consoleR, Admin: staffR,
 	}); err != nil {
-		panic(err) // all four planes are constructed immediately above
+		panic(err) // every plane is constructed immediately above
 	}
 
 	return r

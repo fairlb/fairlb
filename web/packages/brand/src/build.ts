@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, extname, resolve } from "node:path";
 import type { BrandColors, BrandProfileV1, BrandSurface, LocalFont } from "./profile";
 // @ts-expect-error Vite's Node ESM config runner requires the real TypeScript extension here.
-import { DEFAULT_BRAND_PROFILE_SOURCE } from "./profile.ts";
+import { DEFAULT_BRAND_PROFILE_SOURCE, RUNTIME_PROFILE_ELEMENT_ID } from "./profile.ts";
 
 type Asset = { fileName: string; source: Uint8Array };
 
@@ -368,11 +368,56 @@ function validate(raw: unknown, base: string): LoadedBrandProfile {
   return { profile, css: profileCss(profile), assets };
 }
 
+/**
+ * The four holes a production build leaves in index.html for the server to fill,
+ * and the id of the island the profile lands in.
+ *
+ * They are exported because three readers have to agree on them character for
+ * character: this plugin writes them, `foundation/brand` fills them, and the
+ * artifact gate asserts a built index.html still has all four. A literal typed
+ * out in any one of those places is a fourth copy waiting to drift, so there is
+ * one definition and the Go side pins it with a test against this file.
+ */
+export { RUNTIME_PROFILE_ELEMENT_ID };
+
+export const BRAND_TITLE_PLACEHOLDER = "__FLB_BRAND_TITLE__";
+export const BRAND_CANVAS_LIGHT_PLACEHOLDER = "__FLB_BRAND_CANVAS_LIGHT__";
+export const BRAND_CANVAS_DARK_PLACEHOLDER = "__FLB_BRAND_CANVAS_DARK__";
+export const BRAND_PROFILE_JSON_PLACEHOLDER = "__FLB_BRAND_PROFILE_JSON__";
+
 export function loadBrandProfile(profilePath = process.env.BRAND_PROFILE_PATH): LoadedBrandProfile {
   if (!profilePath) return validate(DEFAULT_BRAND_PROFILE_SOURCE, profileRoot);
   const absolute = resolve(profilePath);
   return validate(JSON.parse(readFileSync(absolute, "utf8")) as unknown, dirname(absolute));
 }
+
+/**
+ * The pre-paint theme bootstrap, and the file name every served surface asks for.
+ *
+ * It lives here rather than in each app's `public/` directory because the only
+ * thing in the codebase that reads `data-mode` is this package's own
+ * `tokens.css` — the writer of a contract belongs with the contract. It was
+ * three byte-identical copies before, one per served app, invisible to `knip`
+ * (both configs ignore every app's `public` directory), which is a shape that
+ * drifts in silence: a theme that flashes on one surface and not the others.
+ *
+ * It has to be a separate blocking file rather than an inline snippet because
+ * every served surface runs under `script-src 'self'` with no hash allowance.
+ *
+ * The marketing site does not get it: that one is static, has no theme
+ * controller, and follows `prefers-color-scheme` through a media query alone.
+ */
+const THEME_INIT_FILE = "theme-init.js";
+const THEME_INIT = `(() => {
+  let theme = "system";
+  try {
+    theme = localStorage.getItem("flb-theme") || "system";
+  } catch {}
+  const dark =
+    theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.mode = dark ? "dark" : "light";
+})();
+`;
 
 export function brandBuild(surface: BrandSurface, profilePath?: string) {
   const loaded = loadBrandProfile(profilePath);
@@ -384,6 +429,11 @@ export function brandBuild(surface: BrandSurface, profilePath?: string) {
     throw new Error("brand profile: production marketing builds require a real operator.legalName");
   }
   const title = loaded.profile.identity.surfaceNames[surface].en;
+  // Marketing resolves its brand while the pages are being rendered, because a
+  // static site has no later moment to do it in. Every other surface is served
+  // by the Go binary, which fills the placeholders below from whatever profile
+  // bundle is mounted -- one image, any brand (ADR-0214).
+  const runtime = surface !== "marketing";
   const manifest = JSON.stringify({
     name: title,
     short_name: loaded.profile.identity.shortName,
@@ -402,7 +452,10 @@ export function brandBuild(surface: BrandSurface, profilePath?: string) {
   });
   return {
     profile: loaded.profile,
-    define: { __FAIRLB_BRAND_PROFILE__: JSON.stringify(loaded.profile) },
+    // Inlining the profile is what made a brand a build input, so the surfaces
+    // that can read it at runtime no longer get the define at all -- leaving it
+    // in would silently win over the island and bake the brand back in.
+    define: runtime ? {} : { __FAIRLB_BRAND_PROFILE__: JSON.stringify(loaded.profile) },
     plugin: {
       name: "fairlb-brand-profile",
       configureServer(server: {
@@ -422,6 +475,12 @@ export function brandBuild(surface: BrandSurface, profilePath?: string) {
       }) {
         const byPath = new Map(loaded.assets.map((asset) => [`/${asset.fileName}`, asset]));
         server.middlewares.use((req, res, next) => {
+          if (runtime && req.url === "/brand/profile.json") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify(loaded.profile));
+            return;
+          }
           if (surface !== "marketing" && req.url === "/site.webmanifest") {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
@@ -432,6 +491,12 @@ export function brandBuild(surface: BrandSurface, profilePath?: string) {
             res.statusCode = 200;
             res.setHeader("Content-Type", "text/css; charset=utf-8");
             res.end(loaded.css);
+            return;
+          }
+          if (surface !== "marketing" && req.url === `/${THEME_INIT_FILE}`) {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+            res.end(THEME_INIT);
             return;
           }
           const asset = byPath.get(req.url ?? "");
@@ -448,24 +513,46 @@ export function brandBuild(surface: BrandSurface, profilePath?: string) {
         emitFile(value: { type: "asset"; fileName: string; source: Uint8Array | string }): void;
       }) {
         this.emitFile({ type: "asset", fileName: "brand/profile.css", source: loaded.css });
-        if (surface !== "marketing") {
+        if (runtime) {
+          // The served profile, at the same path the mounted bundle uses. The
+          // artifact therefore carries a complete default brand and the overlay
+          // is a plain file shadow -- no "is anything mounted" branch anywhere.
+          this.emitFile({
+            type: "asset",
+            fileName: "brand/profile.json",
+            source: JSON.stringify(loaded.profile),
+          });
+        } else {
           this.emitFile({ type: "asset", fileName: "site.webmanifest", source: manifest });
+        }
+        if (surface !== "marketing") {
+          this.emitFile({ type: "asset", fileName: THEME_INIT_FILE, source: THEME_INIT });
         }
         for (const asset of loaded.assets) this.emitFile({ type: "asset", ...asset });
       },
-      transformIndexHtml(html: string) {
+      transformIndexHtml(html: string, ctx?: { server?: unknown }) {
         const colors = loaded.profile.theme;
+        // Dev has no Go server in front of it, so the values go in here. A
+        // production build writes the placeholders instead and the binary fills
+        // them at startup. Both paths write the same four holes, which is what
+        // keeps `pnpm dev` and the image showing the same page.
+        const baked = !runtime || ctx?.server !== undefined;
+        const head =
+          `${runtime ? '  <link rel="manifest" href="/site.webmanifest" />\n' : ""}` +
+          '  <link rel="stylesheet" href="/brand/profile.css" />\n' +
+          `${runtime ? `  <script type="application/json" id="${RUNTIME_PROFILE_ELEMENT_ID}">${baked ? JSON.stringify(loaded.profile) : BRAND_PROFILE_JSON_PLACEHOLDER}</script>\n` : ""}` +
+          "  </head>";
         return html
-          .replace(/<title>.*?<\/title>/s, `<title>${title}</title>`)
+          .replace(
+            /<title>.*?<\/title>/s,
+            `<title>${baked ? title : BRAND_TITLE_PLACEHOLDER}</title>`,
+          )
           .replaceAll('href="/favicon.svg"', 'href="/brand/favicon.svg"')
           .replace(/<link rel="icon" href="\/favicon\.ico"[^>]*>\s*/g, "")
           .replace(/<link rel="apple-touch-icon"[^>]*>\s*/g, "")
-          .replace("#F5F7FA", colors.light.canvas)
-          .replace("#0B1018", colors.dark.canvas)
-          .replace(
-            "</head>",
-            `${surface === "marketing" ? "" : '  <link rel="manifest" href="/site.webmanifest" />\n'}  <link rel="stylesheet" href="/brand/profile.css" />\n  </head>`,
-          );
+          .replace("#F5F7FA", baked ? colors.light.canvas : BRAND_CANVAS_LIGHT_PLACEHOLDER)
+          .replace("#0B1018", baked ? colors.dark.canvas : BRAND_CANVAS_DARK_PLACEHOLDER)
+          .replace("</head>", head);
       },
     },
   };

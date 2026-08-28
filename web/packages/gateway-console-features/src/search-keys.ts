@@ -21,9 +21,6 @@ export const USAGE_SEARCH_KEYS = ["range", "group", "key"] as const;
 /** Requests page. `request` is the open detail id, carried through the same URL channel. */
 export const REQUEST_SEARCH_KEYS = ["range", "status", "key", "model", "user", "request"] as const;
 
-/** Playground: `model` lets the model catalog deep-link into it. */
-export const PLAYGROUND_SEARCH_KEYS = ["model"] as const;
-
 /**
  * Model catalog: free-text filter.
  *
@@ -33,3 +30,6 @@ export const PLAYGROUND_SEARCH_KEYS = ["model"] as const;
  * would have noticed if it stopped.
  */
 export const MODEL_SEARCH_KEYS = ["q"] as const;
+
+/** Video jobs: status and model. */
+export const VIDEO_SEARCH_KEYS = ["status", "model"] as const;

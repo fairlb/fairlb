@@ -6,8 +6,8 @@ import (
 	"github.com/fairlb/fairlb/foundation/brand"
 )
 
-// The default matches the default profile. A white-label build overrides it at
-// link time; nothing at runtime may assign it.
+// The default matches the default profile, which is what a deployment with no
+// bundle mounted serves.
 func TestDefaultNameIsTheDefaultProfile(t *testing.T) {
 	if brand.Name != "FairLB" {
 		t.Fatalf("brand.Name = %q", brand.Name)

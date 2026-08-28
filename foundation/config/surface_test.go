@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -49,6 +48,7 @@ func fullEnv() map[string]string {
 		"SHUTDOWN_TIMEOUT_SECONDS":   "320",
 		"SECRET_KEY":                 devSecretKeyHex,
 		"DB_POOL_MAX_CONNS":          "10",
+		"BRAND_PROFILE_DIR":          "",
 	}
 }
 
@@ -62,7 +62,7 @@ func TestEnvSurfaceGolden(t *testing.T) {
 	for k := range seen {
 		names = append(names, k)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	metadata, err := ExpandedDescriptors(SharedDescriptors)
 	if err != nil {
 		t.Fatal(err)

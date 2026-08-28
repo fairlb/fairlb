@@ -92,15 +92,22 @@ let mergedZh: Record<string, string> | undefined;
  * module evaluation finishes before the entry body runs. Registering later is
  * not an error, but any text already on screen was resolved without it.
  *
- * Two packs that define the same key would silently leave the later one
- * winning, and neither the type checker nor the linter can see that.
+ * **Call it from the application, not from a library package.** A package that
+ * registers its own dictionary as a module-eval side effect is registering
+ * nothing in a production build: workspace packages here declare
+ * `"sideEffects": false`, so a bare `registerMessages(...)` — a statement that
+ * contributes to no export — is dropped along with the module that only a bare
+ * `import "pkg/messages"` ever reached. Measured, not theorised: a shared pack
+ * of 61 entries rendered as its own key names in every production bundle of the
+ * two applications that consumed it, while dev and vitest (neither of which
+ * tree-shakes) stayed green. A package exports a `MessagePack`; the app's `i18n`
+ * registers it, where the pack is a used binding a bundler cannot discard.
+ * `deploy/scripts/check-i18n-dictionaries.py` enforces this as its criterion ④.
  *
- * That used to be checked outside the runtime by `check-i18n`, which was
- * deleted in 045c13ae along with the rest of `web/scripts/` and has not been
- * restored — so **nothing checks it today**. Stated here rather than left
- * reading as though the guard were still in place: a declaration that quietly
- * stops being true is worse than no declaration (ADR-0122). Restoring it is
- * registered in PROGRESS's todo list.
+ * Two packs that define the same key would silently leave the later one
+ * winning, and neither the type checker nor the linter can see that. That one
+ * is criterion ① of the same script — it was lost when `check-i18n` was deleted
+ * in 045c13ae along with the rest of `web/scripts/`, and has since been rebuilt.
  */
 export function registerMessages(pack: MessagePack): void {
   if (packs.includes(pack)) return;

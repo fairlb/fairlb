@@ -298,12 +298,10 @@ func TestConcurrentFirstWritersSerialize(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 8)
 	for i := range errs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[i] = f.apply(
 				change("t.chan.api_key", `"abcdefgh"`), change("t.chan.product_id", `"p"`), change("t.chan.amount", `1`))
-		}(i)
+		})
 	}
 	wg.Wait()
 	for i, err := range errs {
@@ -390,9 +388,7 @@ func TestResolverServesLatestAcrossConcurrentReads(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -401,7 +397,7 @@ func TestResolverServesLatestAcrossConcurrentReads(t *testing.T) {
 					_, _ = r.Get(ctx)
 				}
 			}
-		}()
+		})
 	}
 	for i := range 20 {
 		if err := f.apply(change("t.chan.product_id", fmt.Sprintf(`"p%d"`, i+2))); err != nil {

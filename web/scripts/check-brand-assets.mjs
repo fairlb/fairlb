@@ -185,10 +185,29 @@ function checkManifest(directory, colors, errors) {
 
 function checkApp(app, mark, colors) {
   const errors = [];
-  if (!existsSync(app.directory)) return [`${app.name}: public directory is missing`];
+  // Derived, never written twice. When both halves were hand-written a typo in
+  // the `public/` half left `app` resolving, so the whole per-app scan returned
+  // clean instead of loud -- the failure mode this function's first line exists
+  // to prevent.
+  app = { ...app, directory: app.directory ?? path.join(app.app, "public") };
+  // The app itself must exist: a path that stopped resolving because a directory
+  // was renamed has to be loud, or this whole check quietly passes on nothing.
+  if (!existsSync(app.app)) return [`${app.name}: app directory is missing (${app.app})`];
+  // Its `public/` need not. Vite's static directory is optional, and these apps
+  // have no static assets left to put in one -- the pre-paint theme script, the
+  // last occupant, is emitted by the brand plugin now so that three byte-identical
+  // copies cannot drift. Everything below asks "is there anything stale in here",
+  // and an absent directory answers that.
+  if (!existsSync(app.directory)) return errors;
 
   if (app.buildOwned) {
     const obsolete = [
+      // Emitted by the brand plugin so the three served surfaces cannot drift
+      // apart. A copy that comes back wins the build (publicDir is copied after
+      // the bundle) and loses in dev (the plugin middleware answers first), so
+      // the release image and the developer would disagree about the pre-paint
+      // theme with nothing saying so.
+      "theme-init.js",
       "favicon.svg",
       "favicon.ico",
       "apple-touch-icon.png",
@@ -229,7 +248,7 @@ function appsForScope(scope) {
   const publicApps = [
     {
       name: "community/staff",
-      directory: path.join(PUBLIC_ROOT, "web/apps/staff/public"),
+      app: path.join(PUBLIC_ROOT, "web/apps/staff"),
       pwa: false,
       buildOwned: true,
     },
@@ -237,19 +256,19 @@ function appsForScope(scope) {
   const cloudApps = [
     {
       name: "cloud/marketing",
-      directory: path.join(REPOSITORY_ROOT, "cloud/web/apps/marketing/public"),
+      app: path.join(REPOSITORY_ROOT, "cloud/web/apps/marketing"),
       pwa: false,
       buildOwned: true,
     },
     {
       name: "cloud/console",
-      directory: path.join(REPOSITORY_ROOT, "cloud/web/apps/console/public"),
+      app: path.join(REPOSITORY_ROOT, "cloud/web/apps/console"),
       pwa: false,
       buildOwned: true,
     },
     {
       name: "cloud/staff",
-      directory: path.join(REPOSITORY_ROOT, "cloud/web/apps/staff/public"),
+      app: path.join(REPOSITORY_ROOT, "cloud/web/apps/staff"),
       pwa: false,
       buildOwned: true,
     },
@@ -326,10 +345,25 @@ function selfTest() {
   const fixture = path.join(temporary, "public");
   try {
     const { mark, colors } = writeSelfTestFixture(fixture);
-    const app = { name: "fixture", directory: fixture, pwa: true };
+    const app = { name: "fixture", app: temporary, directory: fixture, pwa: true };
     const baseline = checkApp(app, mark, colors);
     if (baseline.length > 0)
       throw new Error(`self-test fixture is invalid: ${baseline.join("; ")}`);
+
+    // The two halves of the directory guard. They are opposites and both have to
+    // hold: an absent `public/` is a legitimate state now, an absent app is the
+    // path in the descriptor having gone stale, and conflating them is how a
+    // renamed directory turns this whole check into a silent pass.
+    if (
+      checkApp({ ...app, directory: path.join(temporary, "no-such-dir") }, mark, colors).length > 0
+    )
+      throw new Error("an app with no static assets should pass, not fail");
+    if (
+      !checkApp({ ...app, app: path.join(temporary, "no-such-app") }, mark, colors).some((e) =>
+        /app directory is missing/.test(e),
+      )
+    )
+      throw new Error("a stale app path did not fail");
 
     const expectFailure = (name, mutate, pattern) => {
       writeSelfTestFixture(fixture);

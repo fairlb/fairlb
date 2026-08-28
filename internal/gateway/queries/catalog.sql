@@ -41,7 +41,7 @@
 -- name: ListRoutesForModel :many
 SELECT r.id, r.model_id, r.provider_id, r.provider_model_id,
        r.priority, r.weight, r.headers,
-       r.context_window, r.max_output_tokens, r.quirks,
+       r.context_window, r.max_output_tokens, r.quirks, r.video_envelope, r.max_images,
        p.slug AS provider_slug, p.vendor AS provider_vendor,
        @protocol::text AS protocol, p.base_url,
        p.headers AS provider_headers, p.transport AS provider_transport,
@@ -71,6 +71,32 @@ ORDER BY r.priority, r.id;
 
 -- name: GetModelBySlug :one
 SELECT * FROM models WHERE slug = $1 AND enabled;
+
+-- name: ResolveModelsByUpstreamID :many
+-- The reverse of the usual direction, and it exists for exactly one caller: a
+-- vendor compatibility surface, where the caller sends that vendor's own model
+-- name because that is what their existing code sends. Admission resolves by
+-- catalog slug, so the two have to be joined somewhere, and the join is here
+-- rather than in a map somebody maintains.
+--
+-- Deployment-wide rather than scoped to the caller's organization, deliberately.
+-- What is being answered is "does this deployment wire that upstream name at
+-- all", which is a fact about the catalogue; whether this caller may use the
+-- model is admission's question and is asked next, so a model they cannot reach
+-- still refuses. Answering it here as well would make the two disagree.
+--
+-- Several rows is not an error to resolve here: two catalog models wired to the
+-- same upstream name on the same vendor have different rate cards, and picking
+-- one would charge against a card nobody chose. The caller reports it.
+SELECT DISTINCT m.slug
+FROM model_routes r
+JOIN providers p ON p.id = r.provider_id
+JOIN models m ON m.id = r.model_id
+WHERE p.vendor = @vendor
+  AND r.provider_model_id = @provider_model_id
+  AND r.enabled AND p.enabled AND m.enabled
+  AND @protocol::text = ANY (p.protocols)
+ORDER BY m.slug;
 
 -- The public catalog behind GET /v1/models: only public, enabled models that
 -- have at least one usable route -- a model listed with nobody to serve it just
@@ -136,6 +162,24 @@ SELECT m.*,
        mp.upstream_cache_write_nano_per_mtok AS current_upstream_cache_write_nano_per_mtok,
        mp.multiplier_bps AS current_model_multiplier_bps,
        mp.updated_at AS current_model_price_effective_at,
+       -- Which family charges this model. Without it a per-second model is
+       -- indistinguishable here from an unpriced one: its four token columns
+       -- are explicit zeros, which every reader of this row would otherwise
+       -- have to guess the meaning of.
+       COALESCE(mp.pricing_family, 'tokens')::text AS current_pricing_family,
+       -- The per-unit rate card, carried with the row rather than fetched per
+       -- model: this query already answers "what does it cost" for every other
+       -- family, and a second round trip per row is how a catalogue page turns
+       -- into N+1 queries.
+       COALESCE((
+           SELECT jsonb_agg(jsonb_build_object(
+                      'unit', u.unit, 'resolution', u.resolution,
+                      'audio', u.audio, 'variant', u.variant,
+                      'service_tier', u.service_tier,
+                      'nano_per_unit', u.nano_per_unit)
+                  ORDER BY u.unit, u.resolution, u.audio, u.variant, u.service_tier)
+             FROM model_price_unit_rates u WHERE u.model_id = mp.model_id
+       ), '[]'::jsonb)::jsonb AS current_unit_rates,
        -- Where the upstream rate came from and whether a person confirmed it.
        -- verified_at NULL means "a reference dataset suggested this, nobody
        -- checked it" -- see docs/design/reference-prices.md. A catalog that
@@ -313,6 +357,11 @@ SELECT m.id, m.slug, m.display_name, m.enabled, m.visibility,
        -- once write-only, which meant "settable at creation, unchangeable
        -- afterwards" -- changing a display name took a hand-written API call.
        m.context_window, m.max_output_tokens,
+       -- What the model produces (ADR-0226). Declared, so the catalog filter
+       -- and the edit dialog both read it from here rather than guessing from
+       -- the endpoint set -- an endpoint says how a model is called, not what
+       -- comes back.
+       m.output_modalities,
        -- metadata comes along with the list for the same reason: the mapping
        -- editor prefills from it, and without it every open would need a second
        -- single-model query.
@@ -350,6 +399,7 @@ LIMIT 500;
 -- name: GetModelForAdmin :one
 SELECT m.id, m.slug, m.display_name, m.enabled, m.visibility,
        m.context_window, m.max_output_tokens,
+       m.output_modalities,
        m.metadata,
        COALESCE((SELECT array_agg(DISTINCT v.endpoint ORDER BY v.endpoint)
                  FROM model_published_endpoints v WHERE v.model_id = m.id), '{}')::text[] AS endpoints,
@@ -513,6 +563,42 @@ UPDATE provider_keys SET last_verified_at = now(), last_error = $2 WHERE id = $1
 SELECT id, slug, vendor, protocols, name, base_url, enabled, auto_disabled, headers, transport
 FROM providers WHERE id = $1;
 
+-- ===== The last catalogue a provider reported =====
+--
+-- One row per provider, replaced wholesale on each successful fetch. Asking an
+-- upstream what it serves costs real money, and the answer used to live only in
+-- a screen's local state -- so reloading the page meant paying again to learn
+-- the same thing, and the model side of the wiring editor had no way to know
+-- the name a given provider uses.
+--
+-- Nothing on the data plane reads any of this. It is what the upstream said
+-- last time, with the time it said it, which is a different claim from what the
+-- upstream serves now.
+
+-- name: UpsertProviderDiscovery :exec
+INSERT INTO provider_discoveries (provider_id, checked_at, ok, complete, status_code, message, models)
+VALUES (@provider_id, @checked_at, @ok, @complete, sqlc.narg('status_code')::integer, @message, @models)
+ON CONFLICT (provider_id) DO UPDATE SET
+    checked_at  = excluded.checked_at,
+    ok          = excluded.ok,
+    complete    = excluded.complete,
+    status_code = excluded.status_code,
+    message     = excluded.message,
+    models      = excluded.models;
+
+-- name: GetProviderDiscovery :one
+SELECT provider_id, checked_at, ok, complete, status_code, message, models
+FROM provider_discoveries WHERE provider_id = $1;
+
+-- Forget the snapshot when the provider stops being the same upstream.
+--
+-- A base URL or vendor change points the record at a different service, and the
+-- stored catalogue then describes something nobody is talking to any more --
+-- which is worse than having no snapshot, because it still reads as an answer.
+-- The same judgement the probe rows make when an upstream model name changes.
+-- name: DeleteProviderDiscovery :exec
+DELETE FROM provider_discoveries WHERE provider_id = $1;
+
 -- Existence check before creating a route, and the protocol set the route's
 -- probe rows are seeded from. A cross join with two equality conditions: if
 -- either side does not exist the result is zero rows, which is how the caller
@@ -529,9 +615,23 @@ WHERE m.id = @model_id AND p.id = @provider_id;
 -- `PUT /gateway/models/{id}/pricing` as a second call.
 INSERT INTO models (
     slug, display_name, enabled, visibility,
-    context_window, max_output_tokens
-) VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, slug, display_name, enabled, visibility;
+    context_window, max_output_tokens, output_modalities
+) VALUES ($1, $2, $3, $4, $5, $6,
+          -- Unset means text, the column's own default. Passing the argument
+          -- through raw would send NULL for every caller that says nothing and
+          -- fail the NOT NULL -- which is most of them, since only an image or
+          -- video model has anything to say here.
+          --
+          -- nullif before the coalesce, because a caller can send `[]` and the
+          -- driver encodes a non-nil empty slice as `{}` rather than as NULL:
+          -- without it that array reaches the column and fails the cardinality
+          -- CHECK, so "I said nothing about modalities" answers with a
+          -- constraint violation instead of with the default.
+          COALESCE(
+              nullif(sqlc.narg('output_modalities')::text[], '{}'::text[]),
+              ARRAY['text']::text[]
+          ))
+RETURNING id, slug, display_name, enabled, visibility, output_modalities;
 
 -- name: UpdateModel :one
 -- Partial update: NULL means the field is unchanged (an unset pgtype value is
@@ -542,15 +642,19 @@ UPDATE models SET
     visibility   = coalesce(sqlc.narg('visibility'), visibility),
     context_window    = coalesce(sqlc.narg('context_window'), context_window),
     max_output_tokens = coalesce(sqlc.narg('max_output_tokens'), max_output_tokens),
+    -- nullif for the same reason as at creation: `[]` is "leave it alone", not
+    -- an empty modality set the column would refuse.
+    output_modalities = coalesce(
+        nullif(sqlc.narg('output_modalities')::text[], '{}'::text[]), output_modalities),
     updated_at = now()
 WHERE id = sqlc.arg('id')
-RETURNING id, slug, display_name, enabled, visibility;
+RETURNING id, slug, display_name, enabled, visibility, output_modalities;
 
 -- name: ListRoutesForAdmin :many
 SELECT r.id, r.model_id, m.slug AS model_slug,
        r.provider_id, p.slug AS provider_slug, p.protocols AS provider_protocols,
        r.provider_model_id, r.priority, r.weight, r.enabled, r.headers,
-       r.context_window, r.max_output_tokens, r.quirks
+       r.context_window, r.max_output_tokens, r.quirks, r.video_envelope, r.max_images
 FROM model_routes r
 JOIN providers p ON p.id = r.provider_id
 JOIN models m ON m.id = r.model_id
@@ -572,7 +676,7 @@ LIMIT 501;
 SELECT r.id, r.model_id, m.slug AS model_slug,
        r.provider_id, p.slug AS provider_slug, p.protocols AS provider_protocols,
        r.provider_model_id, r.priority, r.weight, r.enabled, r.headers,
-       r.context_window, r.max_output_tokens, r.quirks
+       r.context_window, r.max_output_tokens, r.quirks, r.video_envelope, r.max_images
 FROM model_routes r
 JOIN providers p ON p.id = r.provider_id
 JOIN models m ON m.id = r.model_id
@@ -584,7 +688,7 @@ LIMIT 501;
 -- Probe results read from the provider side; same as ListRouteProbes with the
 -- axis swapped.
 -- name: ListRouteProbesForProvider :many
-SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error
+SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error, pr.probe_enqueued_at
 FROM model_route_probes pr
 JOIN model_routes r ON r.id = pr.route_id
 JOIN providers p ON p.id = r.provider_id
@@ -594,10 +698,10 @@ ORDER BY pr.route_id, pr.endpoint;
 -- name: CreateRoute :one
 INSERT INTO model_routes (
     model_id, provider_id, provider_model_id, priority, weight, enabled, headers,
-    context_window, max_output_tokens, quirks
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    context_window, max_output_tokens, quirks, video_envelope, max_images
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, model_id, provider_id, provider_model_id, priority, weight, enabled, headers,
-          context_window, max_output_tokens, quirks;
+          context_window, max_output_tokens, quirks, video_envelope, max_images;
 
 -- name: UpdateRoute :one
 UPDATE model_routes SET
@@ -609,10 +713,12 @@ UPDATE model_routes SET
     context_window    = coalesce(sqlc.narg('context_window'), context_window),
     max_output_tokens = coalesce(sqlc.narg('max_output_tokens'), max_output_tokens),
     quirks            = coalesce(sqlc.narg('quirks'), quirks),
+    video_envelope    = coalesce(sqlc.narg('video_envelope'), video_envelope),
+    max_images        = coalesce(sqlc.narg('max_images'), max_images),
     updated_at = now()
 WHERE id = sqlc.arg('id') AND model_id = sqlc.arg('model_id')
 RETURNING id, model_id, provider_id, provider_model_id, priority, weight, enabled, headers,
-          context_window, max_output_tokens, quirks;
+          context_window, max_output_tokens, quirks, video_envelope, max_images;
 
 -- name: DeleteRoute :execrows
 DELETE FROM model_routes WHERE id = $1 AND model_id = $2;
@@ -689,8 +795,26 @@ LEFT JOIN LATERAL (
     SELECT mm.id, mm.slug FROM models mm
     -- No protocol predicate: a model owns none, and any provider can carry any
     -- model on the protocols it speaks.
+    --
+    -- The equality arm only ever fires for an upstream that reports two-part
+    -- names of its own -- an aggregator saying "openai/gpt-5.4" -- because a
+    -- slug is two segments and a plain upstream name is one. The suffix arm is
+    -- what matches the ordinary case.
     WHERE mm.slug = i.upstream_id OR mm.slug LIKE '%/' || i.upstream_id
-    ORDER BY (mm.slug = i.upstream_id) DESC, mm.slug
+    -- Exact first, then the model whose creator segment is the one this
+    -- provider's vendor publishes as a first party.
+    --
+    -- Without that middle term two catalog entries ending in the same name are
+    -- separated by alphabetical order, which is not a reason -- it is the
+    -- absence of one. The argument is the vendor's *creator*, not its own slug:
+    -- the two differ often enough (xAI publishes "x-ai", Alibaba publishes
+    -- "qwen") that using the slug would rank by a name no slug contains. It is
+    -- empty for a vendor that creates nothing -- a platform or an aggregator --
+    -- and an empty creator matches no slug, so the term drops out rather than
+    -- ranking anything by accident.
+    ORDER BY (mm.slug = i.upstream_id) DESC,
+             (split_part(mm.slug, '/', 1) = sqlc.arg('creator')::text) DESC,
+             mm.slug
     LIMIT 1
 ) m ON true
 ORDER BY i.upstream_id;
@@ -708,6 +832,43 @@ ORDER BY i.upstream_id;
 -- name: SeedRouteProbe :exec
 INSERT INTO model_route_probes (route_id, endpoint, protocol, probe_mode) VALUES ($1, $2, $3, $4)
 ON CONFLICT (route_id, endpoint) DO NOTHING;
+
+-- Mark the rows a probe job is about to answer as in flight.
+--
+-- The endpoint selection is the worker's own rule, written once here rather
+-- than recomputed by each caller: the endpoints named, or every automatically
+-- probed one when none is. `probe_mode` is a stored column precisely so SQL can
+-- express that without spelling any endpoint's name.
+--
+-- Marking at enqueue rather than when the worker picks the job up, because the
+-- question the marker answers -- "is one already running, or may I ask for
+-- one?" -- is asked by an interface a moment after somebody clicked, and on the
+-- endpoints that are never probed automatically the answer decides whether they
+-- pay for a second generation.
+-- name: MarkRouteProbesEnqueued :exec
+UPDATE model_route_probes
+   SET probe_enqueued_at = now(), updated_at = now()
+ WHERE route_id = @route_id
+   AND CASE WHEN cardinality(@endpoints::text[]) = 0
+            THEN probe_mode = 'auto'
+            ELSE endpoint = ANY (@endpoints::text[])
+       END;
+
+-- The worker's own cleanup, run however its pass ends. Verdicts clear their own
+-- row as they land, which is what makes each badge stop one at a time; this
+-- catches what is left -- an operator's row the upsert refused to touch, an
+-- endpoint skipped because the provider has no credential yet, a route deleted
+-- under the job.
+-- name: ClearRouteProbesEnqueued :exec
+UPDATE model_route_probes SET probe_enqueued_at = NULL, updated_at = now()
+ WHERE route_id = $1 AND probe_enqueued_at IS NOT NULL;
+
+-- The backstop. A worker that died between marking and answering would leave a
+-- row in flight forever, and forever is the one duration an operator cannot
+-- wait out: the interface would never let them ask again.
+-- name: SweepStaleProbeEnqueued :execrows
+UPDATE model_route_probes SET probe_enqueued_at = NULL, updated_at = now()
+ WHERE probe_enqueued_at IS NOT NULL AND probe_enqueued_at < @older_than::timestamptz;
 
 -- The probe worker's verdict. Three guards live in the upsert rather than in
 -- the caller, because every writer must obey them:
@@ -737,7 +898,11 @@ ON CONFLICT (route_id, endpoint) DO UPDATE SET
     END,
     checked_at = excluded.checked_at,
     latency_ms = excluded.latency_ms, status_code = excluded.status_code,
-    error = excluded.error, updated_at = now()
+    -- The verdict has landed, so the row is no longer in flight. Cleared here
+    -- rather than by the caller because every writer of a verdict has to do it:
+    -- a marker left set is an endpoint the interface will never let anybody
+    -- probe again.
+    error = excluded.error, probe_enqueued_at = NULL, updated_at = now()
 WHERE model_route_probes.source <> 'operator'
 RETURNING status;
 
@@ -750,21 +915,24 @@ INSERT INTO model_route_probes (route_id, endpoint, protocol, probe_mode, status
 VALUES ($1, $2, $3, $4, $5, 'operator', now(), '')
 ON CONFLICT (route_id, endpoint) DO UPDATE SET
     status = excluded.status, source = 'operator', checked_at = now(),
-    latency_ms = NULL, status_code = NULL, error = '', updated_at = now();
+    latency_ms = NULL, status_code = NULL, error = '',
+    -- An operator answering by hand ends whatever was in flight: the row has a
+    -- verdict now, and it is theirs.
+    probe_enqueued_at = NULL, updated_at = now();
 
 -- Clearing the override hands the row back to the worker, unverified, so the
 -- next probe decides.
 -- name: ClearRouteProbeOverride :exec
 UPDATE model_route_probes
 SET status = 'unverified', source = 'probe', checked_at = NULL, latency_ms = NULL,
-    status_code = NULL, error = '', updated_at = now()
+    status_code = NULL, error = '', probe_enqueued_at = NULL, updated_at = now()
 WHERE route_id = $1 AND endpoint = $2;
 
 -- Only endpoints of a protocol the provider still speaks: rows are deleted when
 -- a provider's protocol set narrows, but the read side filters as well so that
 -- the two never disagree.
 -- name: ListRouteProbes :many
-SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error
+SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error, pr.probe_enqueued_at
 FROM model_route_probes pr
 JOIN model_routes r ON r.id = pr.route_id
 JOIN providers p ON p.id = r.provider_id
@@ -779,7 +947,7 @@ FROM model_routes r JOIN providers p ON p.id = r.provider_id
 WHERE r.id = @route_id AND r.model_id = @model_id;
 
 -- name: GetRouteProbe :one
-SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error
+SELECT pr.route_id, pr.endpoint, pr.probe_mode, pr.status, pr.source, pr.checked_at, pr.latency_ms, pr.status_code, pr.error, pr.probe_enqueued_at
 FROM model_route_probes pr
 WHERE pr.route_id = $1 AND pr.endpoint = $2;
 
@@ -839,8 +1007,11 @@ LIMIT @max_rows;
 -- while the operator's button probed with the provider's real one -- two greens
 -- for the same route that could contradict each other, which is exactly what
 -- sharing one probe implementation is supposed to prevent.
+-- p.vendor is selected for the same reason p.transport is: on the video plane
+-- the request shape comes from the vendor's mapper, so a probe that did not
+-- know the vendor could not build the request the data plane would send.
 SELECT r.id, r.provider_model_id,
-       p.id AS provider_id, p.protocols, p.base_url, p.headers AS provider_headers,
+       p.id AS provider_id, p.protocols, p.vendor, p.base_url, p.headers AS provider_headers,
        p.transport AS provider_transport,
        r.headers AS route_headers
 FROM model_routes r JOIN providers p ON p.id = r.provider_id

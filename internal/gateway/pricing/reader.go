@@ -89,11 +89,15 @@ func published(official TokenRates, multiplierBps int32, modelID uuid.UUID) (Tok
 	return out, nil
 }
 
-var bucketFromDB = map[string]Bucket{
-	"in": BucketIn, "out": BucketOut,
-	"cache_read": BucketCacheRead, "cache_write": BucketCacheWrite,
-	"audio_in": BucketAudioIn, "audio_out": BucketAudioOut,
-}
+// bucketFromDB is bucketToDB read the other way, and is built from the same
+// single list for the same reason.
+var bucketFromDB = func() map[string]Bucket {
+	out := make(map[string]Bucket, len(KnownBuckets()))
+	for _, b := range KnownBuckets() {
+		out[string(b)] = b
+	}
+	return out
+}()
 
 // ModelPricing reads one model's price.
 //
@@ -121,6 +125,7 @@ func (r *Reader) ModelPricing(ctx context.Context, modelID uuid.UUID) (ModelPric
 		ModelID:       modelID,
 		Priced:        true,
 		BillingMode:   BillingMode(row.BillingMode),
+		Family:        PricingFamily(row.PricingFamily),
 		MultiplierBps: row.MultiplierBps,
 		SourceName:    row.SourceName,
 		SourceURL:     row.SourceUrl,
@@ -171,6 +176,19 @@ func (r *Reader) ModelPricing(ctx context.Context, modelID uuid.UUID) (ModelPric
 	}
 	for _, t := range tools {
 		out.ToolRates = append(out.ToolRates, ToolRate{Tool: t.Tool, NanoPerCall: t.NanoPerCall})
+	}
+	// Read for every family, not only for `units`. A model switched back to
+	// tokens keeps rows nobody deleted, and an editor that could not see them
+	// would offer to save a card it had silently dropped half of.
+	units, err := r.q.ListModelPriceUnitRates(ctx, pgID(modelID))
+	if err != nil {
+		return ModelPricing{}, err
+	}
+	for _, u := range units {
+		out.UnitRates = append(out.UnitRates, UnitRate{
+			Unit: u.Unit, Resolution: u.Resolution, Audio: u.Audio,
+			Variant: u.Variant, ServiceTier: u.ServiceTier, NanoPerUnit: u.NanoPerUnit,
+		})
 	}
 	return out, nil
 }
@@ -299,6 +317,13 @@ type ImportCandidate struct {
 	// on ModelPricing, because this query includes unpriced models -- and for
 	// those the columns really are NULL.
 	Official TokenRatesInput
+	// ImageIn and ImageOut are the stored image dimension rates, unset when the
+	// model carries none. They are part of what "already matches the reference"
+	// means, so that a dataset that starts pricing image tokens for a model
+	// reaches it on the next run instead of being reported as unchanged
+	// forever.
+	ImageIn  RateInput
+	ImageOut RateInput
 }
 
 // UsableRoute is an enabled route on an enabled provider: where the import
@@ -328,6 +353,14 @@ func (r *Reader) ImportCandidates(ctx context.Context) ([]ImportCandidate, error
 				Output:     RateInput{Nano: row.UpstreamOutNanoPerMtok.Int64, Set: row.UpstreamOutNanoPerMtok.Valid},
 				CacheRead:  RateInput{Nano: row.UpstreamCacheReadNanoPerMtok.Int64, Set: row.UpstreamCacheReadNanoPerMtok.Valid},
 				CacheWrite: RateInput{Nano: row.UpstreamCacheWriteNanoPerMtok.Int64, Set: row.UpstreamCacheWriteNanoPerMtok.Valid},
+			},
+			ImageIn: RateInput{
+				Nano: row.UpstreamImageInNanoPerMtok.Int64,
+				Set:  row.UpstreamImageInNanoPerMtok.Valid,
+			},
+			ImageOut: RateInput{
+				Nano: row.UpstreamImageOutNanoPerMtok.Int64,
+				Set:  row.UpstreamImageOutNanoPerMtok.Valid,
 			},
 		})
 	}

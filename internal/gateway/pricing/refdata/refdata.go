@@ -40,12 +40,17 @@ var bundledSnapshot []byte
 //
 // It is written into every row the import produces. A price with no answer to
 // "where did this come from" is a number nobody can ever check.
+//
+// The struct is narrower than snapshot.json on purpose. That file is the
+// verbatim provenance record kept beside the dataset and its LICENSE, so it
+// also carries `file_url` and `upstream_date`; neither is read here, because
+// `upstream_commit` already pins the revision exactly and `source_url` plus
+// that commit reconstruct the file URL. Parsing a field nobody writes into a
+// row would only look like provenance.
 type Snapshot struct {
 	Dataset        string `json:"dataset"`
 	SourceURL      string `json:"source_url"`
-	FileURL        string `json:"file_url"`
 	UpstreamCommit string `json:"upstream_commit"`
-	UpstreamDate   string `json:"upstream_date"`
 	SnapshotDate   string `json:"snapshot_date"`
 	License        string `json:"license"`
 	SHA256         string `json:"sha256"`
@@ -233,12 +238,22 @@ type Reference struct {
 }
 
 // Rates are the four token rates as exact decimal strings, in USD per million
-// tokens.
+// tokens, plus the two image rates that have somewhere to be stored.
 type Rates struct {
 	Input      string
 	Output     string
 	CacheRead  string
 	CacheWrite string
+	// InputImage and OutputImage are the two image rates, empty when the
+	// dataset states none.
+	//
+	// Empty and "0" mean different things here, which is why the four base
+	// rates default to "0" and these do not: a stored price has to be complete
+	// in the four, while a missing image rate means the model has no separate
+	// one and its image tokens bill at the text rate on that side -- the
+	// behaviour of every model that has no image dimension configured.
+	InputImage  string
+	OutputImage string
 }
 
 // Scope resolves one of the gateway's providers to a dataset provider id, so

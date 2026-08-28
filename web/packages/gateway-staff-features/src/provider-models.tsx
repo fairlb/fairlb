@@ -33,10 +33,17 @@ import { useVendors, vendorBySlug } from "./vendors";
  * belong to the configure-models dialog, and this table's columns are fixed.
  *
  * A fetch leaves two things on this face: a one-line **summary**, carrying the time
- * it was taken — the result lives in component state and is lost on leaving the page,
- * so for as long as it is on screen it must say how old it is — and a "no longer
- * offered upstream" badge on individual routes. That badge is decidable **only after
- * a complete enumeration**; otherwise absence merely means it was not read.
+ * it was taken, and a "no longer offered upstream" badge on individual routes. That
+ * badge is decidable **only after a complete enumeration**; otherwise absence merely
+ * means it was not read.
+ *
+ * The answer is now **stored server-side and read back on load**, so the summary
+ * survives a reload and the button reads "fetch again". It used to live only in this
+ * component's state, which meant that leaving the page threw away something an
+ * upstream call had been paid for — and the model side of the wiring editor, which
+ * cannot fetch at all, had nothing but a guess for the name a provider uses. The time
+ * it was taken matters more rather than less now: a stored answer is older than a
+ * fresh one, and the only thing that makes it safe to read is saying when.
  */
 export function ProviderModelsPanel({ provider }: { provider: GatewayStaffTypes.GatewayProvider }) {
   // The shared formatter follows **the application's language**, while
@@ -51,8 +58,11 @@ export function ProviderModelsPanel({ provider }: { provider: GatewayStaffTypes.
   const discover = gatewayStaffApi.useDiscoverProviderModels();
   const updateRoute = gatewayStaffApi.useUpdateGatewayRoute();
   const removeRoute = gatewayStaffApi.useDeleteGatewayRoute();
+  // The last stored answer. Free to read — no upstream call — and it is what makes
+  // this face useful on arrival instead of only after somebody spends a fetch.
+  const stored = gatewayStaffApi.useGetProviderDiscoveredModels(provider.id);
 
-  const [result, setResult] = useState<GatewayStaffTypes.DiscoverModelsResult | null>(null);
+  const [fetched, setFetched] = useState<GatewayStaffTypes.DiscoverModelsResult | null>(null);
   const [wiring, setWiring] = useState(false);
   // Acting on a route from the provider side. Disabling and deleting are both
   // confirmed, because they redirect real traffic — the same restraint the model-side
@@ -61,6 +71,17 @@ export function ProviderModelsPanel({ provider }: { provider: GatewayStaffTypes.
   const [removingRoute, setRemovingRoute] = useState<GatewayStaffTypes.GatewayRoute | null>(null);
 
   const routeRows = routes.data?.items ?? [];
+
+  // This round's fetch when there has been one, otherwise what was stored. Both are
+  // the same shape and mean the same thing; they differ only in who paid for it and
+  // when — which is what checked_at says.
+  //
+  // A provider nobody has ever asked comes back with ok=false and a zero checked_at,
+  // and that has to keep reading as "not checked", never as "checked, and the
+  // upstream has nothing". `?? null` on either half would collapse exactly that
+  // distinction, which is why neither is written that way.
+  const result: GatewayStaffTypes.DiscoverModelsResult | null =
+    fetched ?? (stored.data?.checked_at ? stored.data : null);
 
   // The set of model names the upstream reported. **It exists only when the fetch
   // succeeded and the enumeration was complete.** null means this dimension has not
@@ -83,7 +104,18 @@ export function ProviderModelsPanel({ provider }: { provider: GatewayStaffTypes.
   const summary =
     discovered !== null ? discoverSummary(discovered, routeRows, result?.complete === true) : null;
 
-  const run = () => discover.mutate({ providerId: provider.id }, { onSuccess: setResult });
+  const run = () =>
+    discover.mutate(
+      { providerId: provider.id },
+      {
+        onSuccess: (res) => {
+          setFetched(res);
+          // The server stored this same answer; keep the cached read in step so
+          // that leaving and returning shows what is on screen now.
+          void stored.refetch();
+        },
+      },
+    );
   const vendors = useVendors().data?.items;
   // Undefined while the registry query is undecided: the button stays enabled
   // then, because "we do not know yet" must not read as "there is nothing here".
@@ -128,7 +160,11 @@ export function ProviderModelsPanel({ provider }: { provider: GatewayStaffTypes.
               disabled={hasNoListing}
               onClick={run}
             >
-              {discover.isPending ? t("gwDiscoverRunning") : t("gwDiscoverRun")}
+              {discover.isPending
+                ? t("gwDiscoverRunning")
+                : result
+                  ? t("gwDiscoverRunAgain")
+                  : t("gwDiscoverRun")}
             </Button>
           </div>
           {hasNoListing && <p className="text-base text-kumo-subtle">{t("gwVendorNoListing")}</p>}

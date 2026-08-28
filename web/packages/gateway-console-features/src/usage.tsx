@@ -183,7 +183,7 @@ function UsageDetail({
             <FormRow.Item>
               {/* Key names belong to the credential-management context, so without
                   that right the list request is never sent at all. */}
-              <Field label={t("playApiKey")}>
+              <Field label={t("apiKey")}>
                 <Select
                   value={apiKeyId}
                   disabled={keys.isPending}
@@ -260,6 +260,35 @@ function UsageDetail({
                   : undefined
               }
             />
+            {/* Each unit gets its own tile, and only when there is any.
+                Seconds of video and prepaid generations are not added together
+                any more than either is added into the token tile beside them:
+                they are different dimensions, and one number covering both
+                denotes nothing while still looking like an answer. A tile of
+                nothing but zero conveys nothing either, and squeezes the ones
+                beside it — the same rule the model catalog applies to a column
+                of dashes. */}
+            {data && data.totals.billed_seconds > 0 && (
+              <StatTile
+                label={t("usageBilledSeconds")}
+                value={fmtCount(data.totals.billed_seconds)}
+                hint={t("usageBilledSecondsHint")}
+              />
+            )}
+            {data && data.totals.billed_calls > 0 && (
+              <StatTile
+                label={t("usageBilledCalls")}
+                value={fmtCount(data.totals.billed_calls)}
+                hint={t("usageBilledCallsHint")}
+              />
+            )}
+            {data && data.totals.billed_images > 0 && (
+              <StatTile
+                label={t("usageBilledImages")}
+                value={fmtCount(data.totals.billed_images)}
+                hint={t("usageBilledImagesHint")}
+              />
+            )}
             <StatTile
               label={t("usageErrors")}
               value={data ? fmtCount(data.totals.errors ?? 0) : "—"}

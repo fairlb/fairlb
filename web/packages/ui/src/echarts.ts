@@ -1,4 +1,4 @@
-import * as echarts from "echarts/core";
+import * as echartsCore from "echarts/core";
 import { BarChart, LineChart } from "echarts/charts";
 import {
   AriaComponent,
@@ -21,17 +21,28 @@ import { CanvasRenderer } from "echarts/renderers";
  *
  * A new chart type has to be registered here first. Without that, the runtime
  * only warns in the console and the chart renders empty.
+ *
+ * The registration is the export's initialiser rather than a free-standing
+ * `echarts.use(...)` statement, and the difference is load-bearing: this package
+ * declares `"sideEffects": false`, so a production build is entitled to drop any
+ * statement that does not contribute to an export. A bare `use()` call is
+ * exactly such a statement — Rollup removed it, the painter registry stayed
+ * empty, and the first chart threw `el[a] is not a constructor` in every
+ * production bundle while dev and vitest (no tree-shaking) stayed green.
  */
-echarts.use([
-  LineChart,
-  BarChart,
-  GridComponent,
-  TooltipComponent,
-  MarkLineComponent,
-  AriaComponent,
-  BrushComponent,
-  ToolboxComponent,
-  CanvasRenderer,
-]);
+function registered(): typeof echartsCore {
+  echartsCore.use([
+    LineChart,
+    BarChart,
+    GridComponent,
+    TooltipComponent,
+    MarkLineComponent,
+    AriaComponent,
+    BrushComponent,
+    ToolboxComponent,
+    CanvasRenderer,
+  ]);
+  return echartsCore;
+}
 
-export { echarts };
+export const echarts = registered();

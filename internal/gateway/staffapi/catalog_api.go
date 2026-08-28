@@ -233,6 +233,7 @@ func modelDTO(m catalogadmin.Model) GatewayModel {
 		// routes -- the verified endpoints, the protocols and the route count
 		// come from the list endpoint.
 		Endpoints: []string{}, Protocols: []string{},
+		OutputModalities: m.OutputModalities,
 	}
 }
 
@@ -243,8 +244,9 @@ func (s *Server) CreateGatewayModel(ctx context.Context, req CreateGatewayModelR
 	}
 	create := catalogadmin.ModelCreate{
 		Slug: *in.Slug, DisplayName: derefOr(in.DisplayName, ""),
-		Visibility:    visibilityOr(in.Visibility, "public"),
-		ContextWindow: int32(derefInt(in.ContextWindow, 0)),
+		Visibility:       visibilityOr(in.Visibility, "public"),
+		OutputModalities: derefModalities(in.OutputModalities),
+		ContextWindow:    int32(derefInt(in.ContextWindow, 0)),
 	}
 	if in.MaxOutputTokens != nil {
 		n := int32(*in.MaxOutputTokens)
@@ -264,9 +266,10 @@ func (s *Server) UpdateGatewayModel(ctx context.Context, req UpdateGatewayModelR
 	}
 	model, err := s.catalogAdmin.UpdateModel(ctx, req.ModelId, catalogadmin.ModelPatch{
 		DisplayName: in.DisplayName, Enabled: in.Enabled,
-		Visibility:      visibilityPtr(in.Visibility),
-		ContextWindow:   int32PtrFromInt(in.ContextWindow),
-		MaxOutputTokens: int32PtrFromInt(in.MaxOutputTokens),
+		Visibility:       visibilityPtr(in.Visibility),
+		OutputModalities: derefModalities(in.OutputModalities),
+		ContextWindow:    int32PtrFromInt(in.ContextWindow),
+		MaxOutputTokens:  int32PtrFromInt(in.MaxOutputTokens),
 	})
 	if err != nil {
 		return nil, routeHTTPError(err)
@@ -301,6 +304,11 @@ func routeDTO(r catalogadmin.Route) GatewayRoute {
 		n := int(*r.MaxOutputTokens)
 		out.MaxOutputTokens = &n
 	}
+	if r.MaxImages != nil {
+		n := int(*r.MaxImages)
+		out.MaxImages = &n
+	}
+	out.VideoEnvelope = videoEnvelopeDTO(r.VideoEnvelope)
 	return out
 }
 
@@ -355,6 +363,10 @@ func (s *Server) CreateGatewayRoute(ctx context.Context, req CreateGatewayRouteR
 		return nil, httpx.ErrCodeDetail(errcode.CommonValidation,
 			"provider_id and provider_model_id are required")
 	}
+	envelope, err := routeEnvelopeFromInput(in.VideoEnvelope)
+	if err != nil {
+		return nil, err
+	}
 	route, err := s.catalogAdmin.CreateRoute(ctx, catalogadmin.RouteCreate{
 		ModelID: req.ModelId, ProviderID: *in.ProviderId,
 		ProviderModelID: *in.ProviderModelId,
@@ -362,6 +374,8 @@ func (s *Server) CreateGatewayRoute(ctx context.Context, req CreateGatewayRouteR
 		Enabled: in.Enabled, Headers: in.Headers, Quirks: in.Quirks,
 		ContextWindow:   int32PtrFromInt(in.ContextWindow),
 		MaxOutputTokens: int32PtrFromInt(in.MaxOutputTokens),
+		MaxImages:       int32PtrFromInt(in.MaxImages),
+		VideoEnvelope:   envelope,
 	})
 	if err != nil {
 		return nil, routeHTTPError(err)
@@ -374,12 +388,18 @@ func (s *Server) UpdateGatewayRoute(ctx context.Context, req UpdateGatewayRouteR
 	if in == nil {
 		return nil, httpx.ErrCodeDetail(errcode.CommonValidation, "A request body is required")
 	}
+	envelope, err := routeEnvelopeFromInput(in.VideoEnvelope)
+	if err != nil {
+		return nil, err
+	}
 	patch := catalogadmin.RoutePatch{
 		ProviderModelID: in.ProviderModelId,
 		Priority:        int32PtrFromInt(in.Priority), Weight: int32PtrFromInt(in.Weight),
 		Enabled: in.Enabled, Headers: in.Headers, Quirks: in.Quirks,
 		ContextWindow:   int32PtrFromInt(in.ContextWindow),
 		MaxOutputTokens: int32PtrFromInt(in.MaxOutputTokens),
+		MaxImages:       int32PtrFromInt(in.MaxImages),
+		VideoEnvelope:   envelope,
 	}
 	route, err := s.catalogAdmin.UpdateRoute(ctx, req.ModelId, req.RouteId, patch)
 	if err != nil {
@@ -393,4 +413,14 @@ func (s *Server) DeleteGatewayRoute(ctx context.Context, req DeleteGatewayRouteR
 		return nil, routeHTTPError(err)
 	}
 	return DeleteGatewayRoute204Response{}, nil
+}
+
+// derefModalities unwraps the optional list. Absent and empty are the same
+// thing to both write paths -- "say nothing about this" -- so they collapse
+// here rather than being told apart downstream.
+func derefModalities(v *OutputModalities) []string {
+	if v == nil {
+		return nil
+	}
+	return *v
 }

@@ -41,7 +41,16 @@ func TestVendorSlugsAreWellFormedAndUnique(t *testing.T) {
 	}
 }
 
-func TestCustomIsLastAndSpeaksEveryKnownProtocol(t *testing.T) {
+// Custom is the answer when no listed vendor is, so it has to speak every
+// dialect -- but only the dialects.
+//
+// It used to be asserted against KnownProtocols(), which was the same list
+// until `video` became a protocol value. It is not a dialect: point a custom
+// channel at any OpenAI- or Anthropic-compatible endpoint and this gateway
+// forwards bytes, whereas reaching a video upstream needs a parameter mapper
+// written for that vendor. Offering it here would let an operator save a
+// channel that can never serve and shows as configured (ADR-0178).
+func TestCustomIsLastAndSpeaksEveryWireProtocol(t *testing.T) {
 	all := Vendors()
 	if last := all[len(all)-1].Slug; last != VendorCustom {
 		t.Errorf("custom should be last in the list, found %q there", last)
@@ -50,9 +59,13 @@ func TestCustomIsLastAndSpeaksEveryKnownProtocol(t *testing.T) {
 	if !ok {
 		t.Fatal("custom is not in the registry")
 	}
-	if !slices.Equal(custom.Protocols, KnownProtocols()) {
-		t.Errorf("custom speaks %v, the gateway speaks %v; a protocol missing here is one "+
-			"no unlisted upstream can be configured for", custom.Protocols, KnownProtocols())
+	if !slices.Equal(custom.Protocols, WireProtocols()) {
+		t.Errorf("custom speaks %v, the gateway's dialects are %v; a dialect missing here is one "+
+			"no unlisted upstream can be configured for", custom.Protocols, WireProtocols())
+	}
+	if slices.Contains(custom.Protocols, ProtocolVideo) {
+		t.Error("custom offers the video job plane, which no unlisted upstream can be reached on: " +
+			"that channel would save, never serve, and show as configured")
 	}
 }
 
@@ -251,7 +264,7 @@ func TestNonCustomVendorsCarryOperatorGuidance(t *testing.T) {
 			t.Errorf("%s has no documentation link", v.Slug)
 		}
 		switch v.KeyHint {
-		case KeyHintBearer, KeyHintAWSKeypairJSON, KeyHintGCPServiceAccount:
+		case KeyHintBearer, KeyHintAWSKeypairJSON, KeyHintGCPServiceAccount, KeyHintKlingKeypairJSON:
 		default:
 			t.Errorf("%s has key hint %q, which the interface cannot render", v.Slug, v.KeyHint)
 		}
@@ -281,10 +294,14 @@ func TestCheckProtocols(t *testing.T) {
 		t.Error("a provider with no protocol should be refused")
 	}
 	custom, _ := LookupVendor(VendorCustom)
-	for _, p := range KnownProtocols() {
+	for _, p := range WireProtocols() {
 		if err := custom.CheckProtocols([]string{p}); err != nil {
 			t.Errorf("custom should accept %q: %v", p, err)
 		}
+	}
+	if err := custom.CheckProtocols([]string{ProtocolVideo}); err == nil {
+		t.Error("custom accepted the video job plane; reaching a video upstream needs a mapper " +
+			"written for that vendor, so this has to be refused while somebody is looking at the form")
 	}
 	if err := custom.CheckProtocols([]string{"gopher"}); err == nil {
 		t.Error("even custom cannot speak a protocol the gateway does not serve")

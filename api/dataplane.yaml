@@ -59,6 +59,11 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ChatCompletionRequest'
+            example:
+              model: openai/gpt-5.4
+              messages:
+                - role: user
+                  content: Hello
       responses:
         '200':
           description: |
@@ -140,6 +145,10 @@ paths:
                     for a request that asked for 16 — so the amount reserved up
                     front does not treat this as a cost ceiling.
               additionalProperties: true
+            example:
+              model: openai/gpt-5.4
+              input: Hello
+              max_output_tokens: 256
       responses:
         '200':
           description: The response object, or an event stream when `stream` is true
@@ -170,6 +179,9 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ResponsesStatefulRequest' }
+            example:
+              model: openai/gpt-5.4
+              previous_response_id: resp_2f5b7c1e9a0d4c3b
       responses:
         '200': { $ref: '#/components/responses/OpenAIPassthrough' }
         '400': { $ref: '#/components/responses/OpenAIBadRequest' }
@@ -187,6 +199,9 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ResponsesStatefulRequest' }
+            example:
+              model: openai/gpt-5.4
+              input: Hello
       responses:
         '200': { $ref: '#/components/responses/OpenAIPassthrough' }
         '404': { $ref: '#/components/responses/OpenAINotFound' }
@@ -250,6 +265,9 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/EmbeddingsRequest' }
+            example:
+              model: openai/gpt-5.4
+              input: The quick brown fox
       responses:
         '200':
           description: The embedding vectors
@@ -276,6 +294,10 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ImageGenerationRequest' }
+            example:
+              model: openai/gpt-image-2
+              prompt: A red bicycle on a wet street
+              size: 1024x1024
       responses:
         '200':
           description: The generated images, as `b64_json` or `url` depending on the upstream and the request
@@ -314,6 +336,10 @@ paths:
                 prompt: { type: string }
                 mask: { type: string, format: binary }
               additionalProperties: true
+            example:
+              model: openai/gpt-image-2
+              image: '@bicycle.png'
+              prompt: Make the sky clear
       responses:
         '200':
           description: The edited images
@@ -355,6 +381,12 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/AnthropicMessageRequest' }
+            example:
+              model: anthropic/claude-sonnet-5
+              max_tokens: 256
+              messages:
+                - role: user
+                  content: Hello
       responses:
         '200':
           description: |
@@ -386,6 +418,11 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/PassthroughRequest' }
+            example:
+              model: anthropic/claude-sonnet-5
+              messages:
+                - role: user
+                  content: Hello
       responses:
         '200':
           description: Native token count response
@@ -453,6 +490,7 @@ paths:
           required: true
           description: A model in this gateway's catalogue, e.g. `google/gemini-2.5-flash`.
           schema: { type: string }
+          example: google/gemini-2.5-flash
       requestBody:
         required: true
         content:
@@ -464,6 +502,10 @@ paths:
                 surface -- the model is in the address and there is no usage
                 option to inject.
               additionalProperties: true
+            example:
+              contents:
+                - parts:
+                    - text: Hello
       responses:
         '200':
           description: The upstream's response. Native `usageMetadata` is preserved unchanged.
@@ -498,16 +540,22 @@ paths:
           in: path
           required: true
           schema: { type: string }
+          example: google/gemini-2.5-flash
         - name: alt
           in: query
           required: true
           description: Must be `sse`.
           schema: { type: string, enum: [sse] }
+          example: sse
       requestBody:
         required: true
         content:
           application/json:
             schema: { type: object, additionalProperties: true }
+            example:
+              contents:
+                - parts:
+                    - text: Hello
       responses:
         '200':
           description: |
@@ -538,6 +586,10 @@ paths:
         content:
           application/json:
             schema: { type: object, additionalProperties: true }
+            example:
+              contents:
+                - parts:
+                    - text: Hello
       responses:
         '200':
           description: Native token count; audited and rate-limited without a consumption charge
@@ -559,6 +611,10 @@ paths:
         content:
           application/json:
             schema: { type: object, additionalProperties: true }
+            example:
+              content:
+                parts:
+                  - text: The quick brown fox
       responses:
         '200':
           description: Native embedding response, billed from upstream usageMetadata
@@ -580,6 +636,12 @@ paths:
         content:
           application/json:
             schema: { type: object, additionalProperties: true }
+            example:
+              requests:
+                - model: models/google/gemini-2.5-flash
+                  content:
+                    parts:
+                      - text: Hello
       responses:
         '200':
           description: Native synchronous batch embeddings response with aggregated usageMetadata
@@ -599,6 +661,9 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/GeminiInteractionRequest' }
+            example:
+              model: google/gemini-2.5-flash
+              input: Hello
       responses:
         '200':
           description: Native Interaction response or SSE when stream is true
@@ -755,17 +820,20 @@ components:
       in: path
       required: true
       schema: { type: string }
+      example: resp_2f5b7c1e9a0d4c3b
     InteractionId:
       name: interaction_id
       in: path
       required: true
       schema: { type: string }
+      example: 9a0d4c3b2f5b7c1e
     GeminiModel:
       name: model
       in: path
       required: true
       description: A Gemini model slug from the local FairLB catalog.
       schema: { type: string }
+      example: google/gemini-2.5-flash
 
   schemas:
     PassthroughRequest:
@@ -1083,22 +1151,56 @@ components:
         owned_by: { type: string, description: "The model's creator: the first segment of a creator/name slug, e.g. openai or anthropic. Omitted for a slug without a slash — a model owns no protocol to fall back on." }
         pricing:
           type: object
+          required: [currency, billing_unit]
           description: |
-            The four effective prices, in USD per million tokens, transmitted as
-            decimal strings. `GET /v1/public/models` returns the list price —
-            the default pricing plan's, so it is what a caller who registers
-            now would be charged, not a rate nobody is on. Authenticated
-            `GET /v1/models` returns the price after that caller's own plan is
-            applied. Currency conversion happens only at settlement, and this
-            object never contains what the deployment pays upstream.
+            The effective price, transmitted as decimal strings.
+            `GET /v1/public/models` returns the list price — the default pricing
+            plan's, so it is what a caller who registers now would be charged,
+            not a rate nobody is on. Authenticated `GET /v1/models` returns the
+            price after that caller's own plan is applied. Currency conversion
+            happens only at settlement, and this object never contains what the
+            deployment pays upstream.
+
+            Read `billing_unit` first. A token-billed model carries the four
+            `*_per_mtok` rates and no `unit_rates`; a model billed by second,
+            call or image carries `unit_rates` and none of the four. The token
+            fields are absent rather than zero on such a model, because it has
+            no token price and a zero would say it is free.
           properties:
             currency: { type: string }
-            input_per_mtok: { type: string, example: '3.00' }
-            output_per_mtok: { type: string, example: '15.00' }
-            cache_read_per_mtok: { type: string }
+            billing_unit:
+              type: string
+              enum: [token, second, call, image]
+              description: >-
+                What this model is billed by, and therefore which of the two shapes below is
+                populated. It has to be stated: the rates cannot say it, and a reader who assumes
+                tokens renders every per-image model as an unpriced one.
+            input_per_mtok: { type: string, example: '3.00', description: Token-billed models only }
+            output_per_mtok: { type: string, example: '15.00', description: Token-billed models only }
+            cache_read_per_mtok: { type: string, description: Token-billed models only }
             cache_write_per_mtok:
               type: string
               description: Price of a cache write. The four billing buckets are disjoint, and without this one a cache write has no price at all
+            unit_rates:
+              type: array
+              description: >-
+                The rate card for a model not billed by token, and absent for one that is. An axis
+                is present only where it narrows the rate, so a model with one flat price per image
+                is a single entry naming just the unit.
+              items:
+                type: object
+                required: [unit, price_per_unit]
+                properties:
+                  unit: { type: string, enum: [second, call, image] }
+                  resolution: { type: string, description: 'The output size this rate applies to, e.g. 1080p or 2K' }
+                  audio: { type: string, enum: [on, off], description: Video rates only, where a scored clip and a silent one differ in price }
+                  variant: { type: string, description: 'The quality tier this rate applies to, where the upstream sells more than one' }
+                  price_per_unit: { type: string, example: '0.04' }
+                  official_price_per_unit:
+                    type: string
+                    description: >-
+                      The upstream's own rate for this line, the same comparison anchor
+                      official_price is for token-billed models. Omitted for a free model.
             official_price:
               type: object
               description: |
@@ -1125,7 +1227,7 @@ components:
         fairlb:
           type: object
           description: Gateway extensions, nested in their own object so they cannot collide with an upstream's fields
-          required: [billing_mode, endpoints, protocols, supported_operations]
+          required: [billing_mode, output_modalities, endpoints, protocols, supported_operations]
           properties:
             billing_mode:
               type: string
@@ -1141,11 +1243,21 @@ components:
               description: When this price was last changed
             context_window: { type: integer }
             max_output_tokens: { type: integer }
+            output_modalities:
+              type: array
+              items:
+                type: string
+                enum: [text, image, video]
+              description: >-
+                What this model produces. Declared on the model, not derived from `endpoints`: the
+                two do not line up, because Gemini serves its image models on the same
+                `generate_content` endpoint as its text models. A client grouping the catalog by
+                modality has to be told rather than left to infer.
             endpoints:
               type: array
               items:
                 type: string
-                enum: [chat, messages, messages_count_tokens, responses, responses_compact, responses_resources, responses_input_tokens, embeddings, images, generate_content, gemini_count_tokens, gemini_embed_content, gemini_batch_embed_contents, gemini_interactions]
+                enum: [chat, messages, messages_count_tokens, responses, responses_compact, responses_resources, responses_input_tokens, embeddings, images, images_edits, generate_content, gemini_count_tokens, gemini_embed_content, gemini_batch_embed_contents, gemini_interactions, video]
               description: >-
                 The endpoints a probe has verified on this model's enabled routes. Nothing is declared:
                 an endpoint nobody has verified is callable but not listed, because a listing the caller
@@ -1154,7 +1266,7 @@ components:
               type: array
               items:
                 type: string
-                enum: [openai, anthropic, gemini]
+                enum: [openai, anthropic, gemini, video]
               description: >-
                 The protocols of the verified endpoints. A model owns no protocol of its own: it is
                 reachable on whichever protocols its routes' providers speak, and the same slug may be
@@ -1163,7 +1275,7 @@ components:
               type: array
               items:
                 type: string
-                enum: [chat, messages, messages_count_tokens, responses, responses_compact, responses_resources, responses_input_tokens, embeddings, images, generate_content, gemini_count_tokens, gemini_embed_content, gemini_batch_embed_contents, gemini_interactions]
+                enum: [chat, messages, messages_count_tokens, responses, responses_compact, responses_resources, responses_input_tokens, embeddings, images, images_edits, generate_content, gemini_count_tokens, gemini_embed_content, gemini_batch_embed_contents, gemini_interactions, video]
               description: The same set as endpoints — verified by a probe, or by an operator's override
             capabilities: { type: object, additionalProperties: true }
           additionalProperties: true

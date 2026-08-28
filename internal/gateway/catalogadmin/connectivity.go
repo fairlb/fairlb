@@ -84,7 +84,7 @@ func (s *Service) TestConnectivity(
 	}
 
 	return routeprobe.Run(ctx, hc, routeprobe.Target{
-		BaseURL: prov.BaseUrl, Protocols: prov.Protocols,
+		BaseURL: prov.BaseUrl, Protocols: prov.Protocols, Vendor: prov.Vendor,
 		Headers: prov.Headers, Transport: prov.Transport,
 	}, string(plain), model, endpoint, uuid.UUID(keyID.Bytes), in.WantTrace), nil
 }

@@ -124,10 +124,19 @@ func pricingCmd(args []string, stdin io.Reader, out io.Writer) error {
 		}
 	}
 
+	// The per-unit list is always the bundled one, even when --file supplied a
+	// token dataset: it is this repository's own list rather than a vendored
+	// snapshot, so there is no second copy for an operator to substitute.
+	unitData, err := refdata.BundledUnitRates()
+	if err != nil {
+		return fmt.Errorf("read the bundled per-unit rates: %w", err)
+	}
+
 	report, err := gwstaffapi.ImportReferencePrices(ctx, gwstaffapi.ReferencePriceImportConfig{
 		Pool: pool, Catalog: cat,
 		Options: gwstaffapi.ImportOptions{
-			Data: data, Force: *force, DryRun: *dryRun, Now: time.Now().UTC(),
+			Data: data, UnitData: unitData,
+			Force: *force, DryRun: *dryRun, Now: time.Now().UTC(),
 		},
 	})
 	if report != nil {

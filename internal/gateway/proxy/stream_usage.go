@@ -20,6 +20,10 @@ import (
 //   - responses: only in the terminal `response.completed` event, and needing
 //     no opt-in. Of that surface's event types it is the only one carrying
 //     usage, under `.response.usage`.
+//   - images: only in the terminal `image_generation.completed` event, in the
+//     input_tokens/output_tokens spelling no other openai-protocol surface
+//     uses. An image stream carries no text at all, so there is nothing for the
+//     estimation fallback to work from and the hold has to be the bill instead.
 //
 // All parsing is best effort: any chunk that will not parse is skipped and the
 // byte pass-through is never affected. If the upstream never sends usage,
@@ -36,6 +40,8 @@ type usageAccumulator struct {
 	reasoning    int64
 	audioIn      int64
 	audioOut     int64
+	imageIn      int64
+	imageOut     int64
 	cacheWrite5m int64
 	cacheWrite1h int64
 	serviceTier  string
@@ -46,6 +52,16 @@ type usageAccumulator struct {
 
 // consume parses one SSE frame and appends the text delta to textBuf, which is
 // the input to the estimation fallback.
+//
+// *Every surface must appear in this switch by name*, for the reason ParseUsage
+// records about its own switch: a surface that falls through to the default arm
+// is not left unparsed, it is parsed by the *wrong* arm. The images surface
+// proved it here as well as there. An image stream's terminal
+// `image_generation.completed` frame does carry a usage object -- spelled
+// input_tokens/output_tokens -- so consumeOpenAI found one, read every field it
+// knows as zero, and reported Present. The request then settled a real
+// generation at nothing, with estimated false and a usage row that looked
+// perfectly healthy. AllSurfaces() holds this switch to the rule.
 func (a *usageAccumulator) consume(
 	surface catalog.Surface, frame []byte, textBuf *bytes.Buffer,
 ) {
@@ -56,12 +72,17 @@ func (a *usageAccumulator) consume(
 		switch surface {
 		case catalog.SurfaceMessages:
 			a.consumeAnthropic(data, textBuf)
-		case catalog.SurfaceResponses:
+		case catalog.SurfaceResponses, catalog.SurfaceResponsesCompact:
+			// Compact shares the arm rather than the default one, exactly as it
+			// shares ParseUsage's. Nothing stops a caller putting stream:true
+			// on it, and its events are that surface's, not chat's.
 			a.consumeResponses(data, textBuf)
 		case catalog.SurfaceGeminiInteractions:
 			a.consumeInteraction(data, textBuf)
 		case catalog.SurfaceGenerateContent:
 			a.consumeGemini(data, textBuf)
+		case catalog.SurfaceImages, catalog.SurfaceImagesEdit:
+			a.consumeImage(data)
 		default:
 			a.consumeOpenAI(data, textBuf)
 		}
@@ -81,10 +102,11 @@ func (a *usageAccumulator) consumeResponses(data []byte, textBuf *bytes.Buffer) 
 		Type     string `json:"type"`
 		Delta    string `json:"delta"`
 		Response *struct {
-			ID          string          `json:"id"`
-			ServiceTier string          `json:"service_tier"`
-			ToolUsage   map[string]any  `json:"tool_usage"`
-			Usage       *responsesUsage `json:"usage"`
+			ID          string               `json:"id"`
+			ServiceTier string               `json:"service_tier"`
+			ToolUsage   map[string]any       `json:"tool_usage"`
+			Usage       *responsesUsage      `json:"usage"`
+			Output      []responseOutputItem `json:"output"`
 		} `json:"response"`
 		ServiceTier string         `json:"service_tier"`
 		ToolUsage   map[string]any `json:"tool_usage"`
@@ -109,6 +131,11 @@ func (a *usageAccumulator) consumeResponses(data []byte, textBuf *bytes.Buffer) 
 			serviceTier = ev.ServiceTier
 		}
 		u := ev.Response.Usage.usage(serviceTier, ev.Response.ToolUsage)
+		// The same count the buffered arm takes, from the same place. An image
+		// produced by the generation tool is reported nowhere in this surface's
+		// usage object, so the completed answer's output items are the only
+		// record that it happened at all.
+		addGeneratedImages(&u, countGeneratedImages(ev.Response.Output))
 		a.setUsage(u)
 		a.mergeToolCalls(toolCallCounts(ev.ToolUsage))
 	}
@@ -242,6 +269,7 @@ func (a *usageAccumulator) setUsage(u Usage) {
 	a.in, a.out = u.In, u.Out
 	a.cachedRead, a.cacheWrite = u.CachedRead, u.CacheWrite
 	a.reasoning, a.audioIn, a.audioOut = u.Reasoning, u.AudioIn, u.AudioOut
+	a.imageIn, a.imageOut = u.ImageIn, u.ImageOut
 	a.cacheWrite5m, a.cacheWrite1h = u.CacheWrite5m, u.CacheWrite1h
 	a.serviceTier, a.toolCalls, a.seen = u.ServiceTier, u.ToolCalls, u.Present
 }
@@ -269,6 +297,7 @@ func (a *usageAccumulator) result() Usage {
 	return Usage{
 		In: a.in, Out: a.out, CachedRead: a.cachedRead, CacheWrite: a.cacheWrite,
 		Reasoning: a.reasoning, AudioIn: a.audioIn, AudioOut: a.audioOut,
+		ImageIn: a.imageIn, ImageOut: a.imageOut,
 		CacheWrite5m: a.cacheWrite5m, CacheWrite1h: a.cacheWrite1h,
 		ServiceTier: a.serviceTier, ToolCalls: a.toolCalls, Present: a.seen,
 	}
@@ -382,5 +411,28 @@ func (a *usageAccumulator) consumeGemini(data []byte, textBuf *bytes.Buffer) {
 	a.in, a.cachedRead = u.In, u.CachedRead
 	a.out, a.reasoning = u.Out, u.Reasoning
 	a.audioIn, a.audioOut = u.AudioIn, u.AudioOut
+	// Carried rather than dropped, and this is not a spare line: Gemini's image
+	// models stream from this arm, and their generated image is reported as
+	// image output tokens priced well above text output. Losing the breakdown
+	// here billed every streamed image at the text rate.
+	a.imageIn, a.imageOut = u.ImageIn, u.ImageOut
 	a.seen = true
+}
+
+// consumeImage parses an image stream's usage.
+//
+// Only the terminal `image_generation.completed` frame carries it, and it
+// carries it in the same shape the buffered response uses, so this calls the
+// buffered parser rather than spelling the arithmetic a second time -- the same
+// reason consumeGemini calls its own. One arithmetic means a streamed
+// generation and an unstreamed one cannot be priced differently.
+//
+// There is no textBuf parameter because there is no text: an image stream's
+// frames are partial images and then a result. That is precisely why this arm
+// has to exist -- with nothing to estimate from, a missed usage object does not
+// degrade to an estimate, it degrades to zero.
+func (a *usageAccumulator) consumeImage(data []byte) {
+	if u := ParseImageUsage(data); u.Present {
+		a.setUsage(u)
+	}
 }

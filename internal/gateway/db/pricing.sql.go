@@ -124,7 +124,7 @@ func (q *Queries) GetEffectivePricingPlanForOrg(ctx context.Context, orgID pgtyp
 
 const getModelPricing = `-- name: GetModelPricing :one
 
-SELECT model_id, billing_mode, upstream_in_nano_per_mtok, upstream_out_nano_per_mtok, upstream_cache_read_nano_per_mtok, upstream_cache_write_nano_per_mtok, currency, multiplier_bps, source_name, source_url, verified_at, provenance, reason, updated_by, created_at, updated_at FROM model_pricing WHERE model_id = $1
+SELECT model_id, billing_mode, pricing_family, upstream_in_nano_per_mtok, upstream_out_nano_per_mtok, upstream_cache_read_nano_per_mtok, upstream_cache_write_nano_per_mtok, currency, multiplier_bps, source_name, source_url, verified_at, provenance, reason, updated_by, created_at, updated_at FROM model_pricing WHERE model_id = $1
 `
 
 // ===== Model price (one row per model) =====
@@ -134,6 +134,7 @@ func (q *Queries) GetModelPricing(ctx context.Context, modelID pgtype.UUID) (Mod
 	err := row.Scan(
 		&i.ModelID,
 		&i.BillingMode,
+		&i.PricingFamily,
 		&i.UpstreamInNanoPerMtok,
 		&i.UpstreamOutNanoPerMtok,
 		&i.UpstreamCacheReadNanoPerMtok,
@@ -253,6 +254,41 @@ func (q *Queries) ListModelPriceToolRates(ctx context.Context, modelID pgtype.UU
 	return items, nil
 }
 
+const listModelPriceUnitRates = `-- name: ListModelPriceUnitRates :many
+SELECT model_id, unit, resolution, audio, variant, service_tier, nano_per_unit FROM model_price_unit_rates
+WHERE model_id = $1 ORDER BY unit, resolution, audio, service_tier, variant
+`
+
+// The per-unit family (ADR-0220). Ordered so a rate card arrives the same way
+// every time, which is what makes a stored price snapshot comparable.
+func (q *Queries) ListModelPriceUnitRates(ctx context.Context, modelID pgtype.UUID) ([]ModelPriceUnitRate, error) {
+	rows, err := q.db.Query(ctx, listModelPriceUnitRates, modelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelPriceUnitRate
+	for rows.Next() {
+		var i ModelPriceUnitRate
+		if err := rows.Scan(
+			&i.ModelID,
+			&i.Unit,
+			&i.Resolution,
+			&i.Audio,
+			&i.Variant,
+			&i.ServiceTier,
+			&i.NanoPerUnit,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listModelsForPriceImport = `-- name: ListModelsForPriceImport :many
 
 SELECT m.id AS model_id, m.slug AS model_slug,
@@ -261,9 +297,40 @@ SELECT m.id AS model_id, m.slug AS model_slug,
        coalesce(mp.billing_mode, '')::text        AS billing_mode,
        coalesce(mp.multiplier_bps, 10000)::integer AS multiplier_bps,
        mp.upstream_in_nano_per_mtok, mp.upstream_out_nano_per_mtok,
-       mp.upstream_cache_read_nano_per_mtok, mp.upstream_cache_write_nano_per_mtok
+       mp.upstream_cache_read_nano_per_mtok, mp.upstream_cache_write_nano_per_mtok,
+       -- The image-input dimension rate, when one is configured. It is read
+       -- for the same reason as the four base rates: "the reference already
+       -- says what is stored" is what makes the import idempotent, and a
+       -- comparison that ignores this rate would call a model unchanged while
+       -- the dataset has an image price the model does not carry -- so a
+       -- re-run would never put it there.
+       --
+       -- Joined rather than read as a scalar subquery so that its nullability
+       -- is visible: a model with no image rate has no row here, and generating
+       -- these columns as NOT NULL would panic on scan for every model that has
+       -- none -- which is nearly all of them. Both sides are read, because the
+       -- dataset states both and a model whose output rate is already stored
+       -- must not be reported as unchanged forever.
+       --
+       -- The join is pinned to the plain rate. The band, tier and variant axes
+       -- belong to the operator, and the import neither writes nor compares
+       -- them; the primary key makes that at most one row.
+       dr.nano_per_mtok AS upstream_image_in_nano_per_mtok,
+       dro.nano_per_mtok AS upstream_image_out_nano_per_mtok
 FROM models m
 LEFT JOIN model_pricing mp ON mp.model_id = m.id
+LEFT JOIN model_price_dimension_rates dr
+       ON dr.model_id = mp.model_id
+      AND dr.bucket = 'image_in'
+      AND dr.service_tier = 'standard'
+      AND dr.variant = ''
+      AND dr.min_input_tokens = 0
+LEFT JOIN model_price_dimension_rates dro
+       ON dro.model_id = mp.model_id
+      AND dro.bucket = 'image_out'
+      AND dro.service_tier = 'standard'
+      AND dro.variant = ''
+      AND dro.min_input_tokens = 0
 ORDER BY m.slug
 `
 
@@ -278,6 +345,8 @@ type ListModelsForPriceImportRow struct {
 	UpstreamOutNanoPerMtok        pgtype.Int8
 	UpstreamCacheReadNanoPerMtok  pgtype.Int8
 	UpstreamCacheWriteNanoPerMtok pgtype.Int8
+	UpstreamImageInNanoPerMtok    pgtype.Int8
+	UpstreamImageOutNanoPerMtok   pgtype.Int8
 }
 
 // ===== Reference-price import =====
@@ -318,6 +387,8 @@ func (q *Queries) ListModelsForPriceImport(ctx context.Context) ([]ListModelsFor
 			&i.UpstreamOutNanoPerMtok,
 			&i.UpstreamCacheReadNanoPerMtok,
 			&i.UpstreamCacheWriteNanoPerMtok,
+			&i.UpstreamImageInNanoPerMtok,
+			&i.UpstreamImageOutNanoPerMtok,
 		); err != nil {
 			return nil, err
 		}
@@ -730,22 +801,67 @@ func (q *Queries) UpsertModelPriceToolRate(ctx context.Context, arg UpsertModelP
 	return i, err
 }
 
+const upsertModelPriceUnitRate = `-- name: UpsertModelPriceUnitRate :one
+INSERT INTO model_price_unit_rates (
+    model_id, unit, resolution, audio, variant, service_tier, nano_per_unit
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (model_id, unit, resolution, audio, variant, service_tier)
+DO UPDATE SET nano_per_unit = EXCLUDED.nano_per_unit
+RETURNING model_id, unit, resolution, audio, variant, service_tier, nano_per_unit
+`
+
+type UpsertModelPriceUnitRateParams struct {
+	ModelID     pgtype.UUID
+	Unit        string
+	Resolution  string
+	Audio       string
+	Variant     string
+	ServiceTier string
+	NanoPerUnit int64
+}
+
+// The conflict target is the whole key: leaving an axis out would collapse two
+// distinct rates onto one row.
+func (q *Queries) UpsertModelPriceUnitRate(ctx context.Context, arg UpsertModelPriceUnitRateParams) (ModelPriceUnitRate, error) {
+	row := q.db.QueryRow(ctx, upsertModelPriceUnitRate,
+		arg.ModelID,
+		arg.Unit,
+		arg.Resolution,
+		arg.Audio,
+		arg.Variant,
+		arg.ServiceTier,
+		arg.NanoPerUnit,
+	)
+	var i ModelPriceUnitRate
+	err := row.Scan(
+		&i.ModelID,
+		&i.Unit,
+		&i.Resolution,
+		&i.Audio,
+		&i.Variant,
+		&i.ServiceTier,
+		&i.NanoPerUnit,
+	)
+	return i, err
+}
+
 const upsertModelPricing = `-- name: UpsertModelPricing :one
 INSERT INTO model_pricing (
-    model_id, billing_mode,
+    model_id, billing_mode, pricing_family,
     upstream_in_nano_per_mtok, upstream_out_nano_per_mtok,
     upstream_cache_read_nano_per_mtok, upstream_cache_write_nano_per_mtok,
     multiplier_bps, source_name, source_url, verified_at, provenance, reason, updated_by
 ) VALUES (
-    $1, $2,
-    $3, $4,
-    $5, $6,
-    $7, $8, $9,
-    $10, $11, $12,
-    $13
+    $1, $2, $3,
+    $4, $5,
+    $6, $7,
+    $8, $9, $10,
+    $11, $12, $13,
+    $14
 )
 ON CONFLICT (model_id) DO UPDATE SET
     billing_mode = EXCLUDED.billing_mode,
+    pricing_family = EXCLUDED.pricing_family,
     upstream_in_nano_per_mtok = EXCLUDED.upstream_in_nano_per_mtok,
     upstream_out_nano_per_mtok = EXCLUDED.upstream_out_nano_per_mtok,
     upstream_cache_read_nano_per_mtok = EXCLUDED.upstream_cache_read_nano_per_mtok,
@@ -757,12 +873,13 @@ ON CONFLICT (model_id) DO UPDATE SET
     provenance = EXCLUDED.provenance,
     reason = EXCLUDED.reason,
     updated_by = EXCLUDED.updated_by
-RETURNING model_id, billing_mode, upstream_in_nano_per_mtok, upstream_out_nano_per_mtok, upstream_cache_read_nano_per_mtok, upstream_cache_write_nano_per_mtok, currency, multiplier_bps, source_name, source_url, verified_at, provenance, reason, updated_by, created_at, updated_at
+RETURNING model_id, billing_mode, pricing_family, upstream_in_nano_per_mtok, upstream_out_nano_per_mtok, upstream_cache_read_nano_per_mtok, upstream_cache_write_nano_per_mtok, currency, multiplier_bps, source_name, source_url, verified_at, provenance, reason, updated_by, created_at, updated_at
 `
 
 type UpsertModelPricingParams struct {
 	ModelID            pgtype.UUID
 	BillingMode        string
+	PricingFamily      string
 	UpstreamIn         pgtype.Int8
 	UpstreamOut        pgtype.Int8
 	UpstreamCacheRead  pgtype.Int8
@@ -783,6 +900,7 @@ func (q *Queries) UpsertModelPricing(ctx context.Context, arg UpsertModelPricing
 	row := q.db.QueryRow(ctx, upsertModelPricing,
 		arg.ModelID,
 		arg.BillingMode,
+		arg.PricingFamily,
 		arg.UpstreamIn,
 		arg.UpstreamOut,
 		arg.UpstreamCacheRead,
@@ -799,6 +917,7 @@ func (q *Queries) UpsertModelPricing(ctx context.Context, arg UpsertModelPricing
 	err := row.Scan(
 		&i.ModelID,
 		&i.BillingMode,
+		&i.PricingFamily,
 		&i.UpstreamInNanoPerMtok,
 		&i.UpstreamOutNanoPerMtok,
 		&i.UpstreamCacheReadNanoPerMtok,

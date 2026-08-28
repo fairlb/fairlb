@@ -3,9 +3,9 @@ import { isMessageKey, useI18n, type MessageKey } from "@fairlb/i18n";
 import {
   Alert,
   Card,
+  ContentsLayout,
   FormColumn,
   LoadingState,
-  PageContentsNav,
   SectionHeading,
   StatusBadge,
 } from "@fairlb/ui";
@@ -62,8 +62,13 @@ export function SettingsRegistryPage() {
   const refetch = () => void list.refetch();
 
   return (
-    <div className="flex min-w-0 flex-col gap-6 2xl:flex-row 2xl:items-start 2xl:gap-10">
-      <FormColumn className="min-w-0 flex-1">
+    <ContentsLayout
+      contents={groups.map((group) => ({
+        href: `#system-settings-${group}` as const,
+        label: t(GROUP_LABEL[group].title),
+      }))}
+    >
+      <FormColumn>
         <div className="space-y-8">
           <p className="text-base text-kumo-subtle">{t("settingsHotReloadHint")}</p>
           {groups.map((group) => (
@@ -96,13 +101,7 @@ export function SettingsRegistryPage() {
           ))}
         </div>
       </FormColumn>
-      <PageContentsNav
-        items={groups.map((group) => ({
-          href: `#system-settings-${group}`,
-          label: t(GROUP_LABEL[group].title),
-        }))}
-      />
-    </div>
+    </ContentsLayout>
   );
 }
 

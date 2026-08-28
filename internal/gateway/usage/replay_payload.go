@@ -57,6 +57,9 @@ type usageReplayRecord struct {
 	ServiceTier         string          `json:"service_tier"`
 	TokensAudioIn       int32           `json:"tokens_audio_in"`
 	TokensAudioOut      int32           `json:"tokens_audio_out"`
+	TokensImageIn       int32           `json:"tokens_image_in"`
+	BilledUnits         int32           `json:"billed_units"`
+	BilledUnit          string          `json:"billed_unit"`
 	TokensCacheWrite5m  int32           `json:"tokens_cache_write_5m"`
 	TokensCacheWrite1h  int32           `json:"tokens_cache_write_1h"`
 	PricingSnapshot     json.RawMessage `json:"pricing_snapshot"`
@@ -71,8 +74,9 @@ var usageReplayFields = []string{
 	"tokens_cached_read", "tokens_cache_write", "tokens_reasoning", "usage_estimated",
 	"upstream_cost_usd_nano", "charged_nano", "charged_currency", "fx_rate", "hold_id",
 	"end_user_id", "ttft_ms", "duration_ms", "tool_calls", "service_tier",
-	"tokens_audio_in", "tokens_audio_out", "tokens_cache_write_5m",
-	"tokens_cache_write_1h", "pricing_snapshot", "route_id", "attempts",
+	"tokens_audio_in", "tokens_audio_out", "tokens_image_in",
+	"tokens_cache_write_5m", "tokens_cache_write_1h", "pricing_snapshot",
+	"route_id", "attempts",
 }
 
 // EncodeUsageReplayPayload converts the current SQL insert shape into the one
@@ -98,12 +102,16 @@ func EncodeUsageReplayPayload(params gwdb.InsertUsageLogParams) ([]byte, error) 
 		TTFTMs: params.TtftMs, DurationMs: params.DurationMs,
 		ToolCalls: cloneJSON(params.ToolCalls), ServiceTier: params.ServiceTier.String,
 		TokensAudioIn: params.TokensAudioIn.Int32, TokensAudioOut: params.TokensAudioOut.Int32,
+		TokensImageIn:      params.TokensImageIn.Int32,
+		BilledUnits:        params.BilledUnits.Int32,
+		BilledUnit:         params.BilledUnit,
 		TokensCacheWrite5m: params.TokensCacheWrite5m.Int32,
 		TokensCacheWrite1h: params.TokensCacheWrite1h.Int32,
 		PricingSnapshot:    cloneJSON(params.PricingSnapshot),
 		RouteID:            optionalUUIDText(params.RouteID), Attempts: cloneJSON(params.Attempts),
 	}
 	if !params.TokensAudioIn.Valid || !params.TokensAudioOut.Valid ||
+		!params.TokensImageIn.Valid ||
 		!params.TokensCacheWrite5m.Valid || !params.TokensCacheWrite1h.Valid {
 		return nil, fmt.Errorf("usage replay: token dimensions must be present")
 	}
@@ -223,6 +231,9 @@ func (r usageReplayRecord) params() (gwdb.InsertUsageLogParams, error) {
 		ToolCalls: cloneJSON(r.ToolCalls), ServiceTier: pgtype.Text{String: r.ServiceTier, Valid: true},
 		TokensAudioIn:      pgtype.Int4{Int32: r.TokensAudioIn, Valid: true},
 		TokensAudioOut:     pgtype.Int4{Int32: r.TokensAudioOut, Valid: true},
+		TokensImageIn:      pgtype.Int4{Int32: r.TokensImageIn, Valid: true},
+		BilledUnits:        pgtype.Int4{Int32: r.BilledUnits, Valid: r.BilledUnit != ""},
+		BilledUnit:         r.BilledUnit,
 		TokensCacheWrite5m: pgtype.Int4{Int32: r.TokensCacheWrite5m, Valid: true},
 		TokensCacheWrite1h: pgtype.Int4{Int32: r.TokensCacheWrite1h, Valid: true},
 		PricingSnapshot:    cloneJSON(r.PricingSnapshot), RouteID: routeID,

@@ -8,14 +8,21 @@
 //
 // Three deliberate constraints:
 //
-//   - Read-only. Nothing here writes to the database.
+//   - It writes nothing about the catalog. The one row it does write is the
+//     answer itself, in provider_discoveries -- a record of what an upstream
+//     said and when, which no part of the data plane reads. Asking costs real
+//     money on a real upstream, and the answer used to survive only as long as
+//     the screen showing it.
 //   - It never creates a model row on its own. Routing refuses an unpriced
 //     model, so auto-creating rows would manufacture a batch of models destined
 //     to answer 503 -- models that are invisible in the catalog and only fail
 //     once a request reaches them.
 //   - A match is a suggestion, nothing more. Upstream reports its own model
 //     names, this system identifies models by slug, and there is no reliable
-//     mechanical correspondence between the two.
+//     mechanical correspondence between the two. What a suggestion does carry
+//     is where it came from, so that a name assembled from a vendor's creator
+//     segment is not presented with the same confidence as one the seeded
+//     catalog states outright.
 
 package discovery
 
@@ -25,6 +32,7 @@ import (
 	"fmt"
 	"github.com/fairlb/fairlb/foundation/strutil"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -35,6 +43,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fairlb/fairlb/foundation/crypto"
+	fdb "github.com/fairlb/fairlb/foundation/db"
 	"github.com/fairlb/fairlb/foundation/httpx"
 	"github.com/fairlb/fairlb/internal/gateway/catalog"
 	gwdb "github.com/fairlb/fairlb/internal/gateway/db"
@@ -64,7 +73,51 @@ type Model struct {
 	State         State
 	ModelID       uuid.UUID
 	ModelSlug     string
+	// Suggestion is the catalog entry this row would create, present only when
+	// there is no local model and only when one can actually be derived. Nil
+	// means "nobody here can name this" -- see suggestFor.
+	Suggestion *Suggestion
 }
+
+// Suggestion is a proposed catalog entry for an upstream model with no local
+// one, together with where the proposal came from.
+//
+// Every field is editable by whoever reviews it. The source is carried so the
+// interface can say how much is actually known: a seeded entry has been
+// checked against the vendor's own documentation, while a slug assembled from
+// the vendor's creator segment is only correctly *shaped*.
+type Suggestion struct {
+	Slug            string
+	DisplayName     string
+	ContextWindow   int32
+	MaxOutputTokens int32
+	// ManualProbe marks a model reachable only on an endpoint the gateway will
+	// not probe by itself, so that creating it does not look finished when it
+	// still needs an operator verdict before anything routes to it.
+	ManualProbe bool
+	// OutputModalities is what the seed says this model produces. Empty for
+	// every other source: nothing in an upstream name says whether the bytes
+	// coming back are words or pixels, and a guess here files an image model
+	// under text with nobody the wiser (ADR-0226).
+	OutputModalities []string
+	Source           SuggestionSource
+}
+
+// SuggestionSource is how much is known about a suggestion.
+type SuggestionSource string
+
+const (
+	// SourceSeed: the seeded catalog names this model, so the display name and
+	// both windows come from the vendor's documentation.
+	SourceSeed SuggestionSource = "seed"
+	// SourceUpstream: the upstream reports a name that is already a two-part
+	// slug, as aggregators do, so it is used as it stands.
+	SourceUpstream SuggestionSource = "upstream"
+	// SourceVendor: the slug was assembled from the vendor's creator segment
+	// and the upstream name. Correctly shaped, nothing more -- no display name
+	// and no windows, because nothing here knows them.
+	SourceVendor SuggestionSource = "vendor"
+)
 
 // Result is one discovery run.
 //
@@ -157,20 +210,76 @@ func (s *Service) Discover(ctx context.Context, providerID uuid.UUID) (Result, e
 	}
 
 	rows, err := s.q.ClassifyUpstreamModels(ctx, gwdb.ClassifyUpstreamModelsParams{
-		UpstreamIds: cat.IDs, ProviderID: id,
+		UpstreamIds: cat.IDs, ProviderID: id, Creator: creatorOf(prov.Vendor),
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("discovery: classify upstream models: %w", err)
 	}
 	for _, r := range rows {
-		out.Models = append(out.Models, Model{
+		m := Model{
 			UpstreamModel: r.UpstreamID,
 			State:         stateOf(r),
 			ModelID:       uuid.UUID(r.ModelID.Bytes),
 			ModelSlug:     r.ModelSlug,
-		})
+		}
+		if m.State == StateUnknown {
+			m.Suggestion = suggestFor(prov.Vendor, r.UpstreamID)
+		}
+		out.Models = append(out.Models, m)
 	}
+	// Record what was said, after the answer is complete and before it is
+	// returned. A failure to store is not a failure to discover: the operator
+	// is looking at a result that cost a real upstream call, and refusing to
+	// show it because a cache write failed would make them pay for it twice.
+	s.remember(ctx, id, out, cat.IDs)
 	return out, nil
+}
+
+// suggestFor proposes the catalog entry an unknown upstream model would create,
+// or nil when nothing here can name it.
+//
+// Nil is a real answer and the reason this returns a pointer. On Azure, Bedrock
+// and Vertex the upstream name is a deployment name or an ARN, and the creator
+// cannot be read out of it -- so any prefix put in front would be invention
+// dressed as knowledge. The interface asks a person instead, which is the
+// honest move and also the only correct one: a slug cannot be changed after it
+// is created.
+func suggestFor(vendor, upstreamID string) *Suggestion {
+	// The seeded catalog first: it is the only source here that knows a display
+	// name and the two windows, having been checked against the vendor's own
+	// documentation.
+	if seed, ok := catalog.LookupSeed(vendor, upstreamID); ok {
+		return &Suggestion{
+			Slug: seed.Slug, DisplayName: seed.DisplayName,
+			ContextWindow: seed.ContextWindow, MaxOutputTokens: seed.MaxOutputTokens,
+			ManualProbe: seed.ManualProbe, OutputModalities: modalityStrings(seed.OutputModalities),
+			Source: SourceSeed,
+		}
+	}
+	// An aggregator already reports two-part names -- "openai/gpt-5.4" on
+	// OpenRouter -- and those are the same shape a slug has, by the same
+	// convention. Taking it as it stands beats assembling one, because the
+	// upstream is naming the creator itself rather than being guessed at.
+	if lower := strings.ToLower(strings.TrimSpace(upstreamID)); strings.Contains(lower, "/") {
+		if catalog.ValidModelSlug(lower) {
+			return &Suggestion{Slug: lower, Source: SourceUpstream}
+		}
+		// Two parts but not a usable shape. There is nothing to fall back to:
+		// prefixing a name that already contains a slash would produce three
+		// segments, which is not a slug either.
+		return nil
+	}
+	// Otherwise the vendor's own creator segment, when it has one. Platforms
+	// and aggregators do not, deliberately -- they carry other people's models.
+	v, ok := catalog.LookupVendor(vendor)
+	if !ok || v.Creator == "" {
+		return nil
+	}
+	slug := v.Creator + "/" + strings.ToLower(strings.TrimSpace(upstreamID))
+	if !catalog.ValidModelSlug(slug) {
+		return nil
+	}
+	return &Suggestion{Slug: slug, Source: SourceVendor}
 }
 
 // stateOf decides among the four states. The order is the priority: something
@@ -517,4 +626,126 @@ func (s *Service) fetchModelPage(
 		pg.nextCursor = pg.ids[len(pg.ids)-1]
 	}
 	return pg
+}
+
+// remember stores what the upstream said, so that the next reader does not have
+// to pay for the same answer.
+//
+// Errors are logged and swallowed. The caller is holding a result that cost a
+// real upstream call; failing the request because the cache write failed would
+// charge for it a second time to report a problem the operator cannot act on.
+func (s *Service) remember(ctx context.Context, id pgtype.UUID, out Result, ids []string) {
+	if !out.Ok {
+		// A failed fetch says nothing about the upstream's catalogue, so it
+		// must not replace an earlier answer that did. Leaving the old row is
+		// not stale data being passed off as fresh: every reader gets
+		// checked_at with it.
+		return
+	}
+	models, err := json.Marshal(ids)
+	if err != nil {
+		slog.ErrorContext(ctx, "discovery: encode the upstream catalogue", "error", err)
+		return
+	}
+	var code pgtype.Int4
+	if out.StatusCode != nil {
+		code = pgtype.Int4{Int32: int32(*out.StatusCode), Valid: true}
+	}
+	err = s.q.UpsertProviderDiscovery(ctx, gwdb.UpsertProviderDiscoveryParams{
+		ProviderID: id,
+		CheckedAt:  pgtype.Timestamptz{Time: out.CheckedAt, Valid: true},
+		Ok:         out.Ok, Complete: out.Complete,
+		StatusCode: code, Message: out.Message, Models: models,
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "discovery: store the upstream catalogue", "error", err)
+	}
+}
+
+// Snapshot returns the last stored answer for a provider, reclassified against
+// the catalog as it stands now.
+//
+// The classification is recomputed rather than stored: which models exist
+// locally, and whether they are priced and routed, changes without the upstream
+// saying anything -- so a stored verdict would go wrong on its own. What is
+// stored is only what the upstream said, and when.
+//
+// A provider that has never been asked returns ok=false with no models, which
+// is the same shape a caller already handles, and CheckedAt stays zero so that
+// "never asked" cannot be read as "asked, and it had nothing".
+func (s *Service) Snapshot(ctx context.Context, providerID uuid.UUID) (Result, error) {
+	id := pgtype.UUID{Bytes: providerID, Valid: true}
+	row, err := s.q.GetProviderDiscovery(ctx, id)
+	if err != nil {
+		if fdb.IsNoRows(err) {
+			return Result{Models: []Model{}}, nil
+		}
+		return Result{}, fmt.Errorf("discovery: read the stored catalogue: %w", err)
+	}
+	out := Result{
+		CheckedAt: row.CheckedAt.Time, Ok: row.Ok, Complete: row.Complete,
+		Message: row.Message, Models: []Model{},
+	}
+	if row.StatusCode.Valid {
+		code := int(row.StatusCode.Int32)
+		out.StatusCode = &code
+	}
+	var ids []string
+	if err := json.Unmarshal(row.Models, &ids); err != nil {
+		return Result{}, fmt.Errorf("discovery: decode the stored catalogue: %w", err)
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	prov, err := s.q.GetProviderForAdmin(ctx, id)
+	if err != nil {
+		return Result{}, ErrProviderNotFound
+	}
+	rows, err := s.q.ClassifyUpstreamModels(ctx, gwdb.ClassifyUpstreamModelsParams{
+		UpstreamIds: ids, ProviderID: id, Creator: creatorOf(prov.Vendor),
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("discovery: classify upstream models: %w", err)
+	}
+	for _, r := range rows {
+		m := Model{
+			UpstreamModel: r.UpstreamID, State: stateOf(r),
+			ModelID: uuid.UUID(r.ModelID.Bytes), ModelSlug: r.ModelSlug,
+		}
+		if m.State == StateUnknown {
+			m.Suggestion = suggestFor(prov.Vendor, r.UpstreamID)
+		}
+		out.Models = append(out.Models, m)
+	}
+	return out, nil
+}
+
+// Forget drops a provider's stored catalogue, for when the record stops
+// describing the same upstream.
+func (s *Service) Forget(ctx context.Context, providerID uuid.UUID) error {
+	return s.q.DeleteProviderDiscovery(ctx, pgtype.UUID{Bytes: providerID, Valid: true})
+}
+
+// creatorOf is the creator segment a vendor publishes under, empty when it
+// publishes none. Empty is passed through rather than skipped: it matches no
+// slug, which is exactly the ranking a platform or aggregator should get.
+func creatorOf(vendor string) string {
+	v, ok := catalog.LookupVendor(vendor)
+	if !ok {
+		return ""
+	}
+	return v.Creator
+}
+
+// modalityStrings renders a seed's modalities for the wire. Nil stays nil: an
+// empty list means "say nothing", and the column's own default is text.
+func modalityStrings(v []catalog.Modality) []string {
+	if len(v) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(v))
+	for _, m := range v {
+		out = append(out, string(m))
+	}
+	return out
 }

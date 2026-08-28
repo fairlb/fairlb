@@ -30,7 +30,9 @@ const aggregateUsageRollups = `-- name: AggregateUsageRollups :execrows
 INSERT INTO gateway_usage_rollups (
     org_id, bucket_start, granularity, api_key_id, model_slug, provider_id,
     requests, tokens_in, tokens_out, tokens_cached_read, tokens_cache_write,
-    tokens_reasoning, tokens_audio_in, tokens_audio_out,
+    tokens_reasoning, tokens_audio_in, tokens_audio_out, tokens_image_in,
+    tokens_image_out,
+    billed_seconds, billed_calls, billed_images,
     tokens_cache_write_5m, tokens_cache_write_1h,
     charged_nano, upstream_cost_usd_nano, errors,
     lat_le_100, lat_le_250, lat_le_500, lat_le_1000, lat_le_2500, lat_le_5000,
@@ -52,6 +54,14 @@ SELECT
     COALESCE(sum(tokens_reasoning), 0)::bigint,
     COALESCE(sum(tokens_audio_in), 0)::bigint,
     COALESCE(sum(tokens_audio_out), 0)::bigint,
+    COALESCE(sum(tokens_image_in), 0)::bigint,
+    COALESCE(sum(tokens_image_out), 0)::bigint,
+    -- Per unit, never one total. A second of video, a prepaid generation and a
+    -- produced image are different dimensions; summing them yields a number
+    -- nothing denotes.
+    COALESCE(sum(billed_units) FILTER (WHERE billed_unit = 'second'), 0)::bigint,
+    COALESCE(sum(billed_units) FILTER (WHERE billed_unit = 'call'), 0)::bigint,
+    COALESCE(sum(billed_units) FILTER (WHERE billed_unit = 'image'), 0)::bigint,
     COALESCE(sum(tokens_cache_write_5m), 0)::bigint,
     COALESCE(sum(tokens_cache_write_1h), 0)::bigint,
     COALESCE(sum(charged_nano), 0)::bigint,
@@ -85,6 +95,11 @@ ON CONFLICT (org_id, bucket_start, granularity, api_key_id, model_slug, provider
         tokens_reasoning = excluded.tokens_reasoning,
         tokens_audio_in = excluded.tokens_audio_in,
         tokens_audio_out = excluded.tokens_audio_out,
+        tokens_image_in = excluded.tokens_image_in,
+        tokens_image_out = excluded.tokens_image_out,
+        billed_seconds = excluded.billed_seconds,
+        billed_calls = excluded.billed_calls,
+        billed_images = excluded.billed_images,
         tokens_cache_write_5m = excluded.tokens_cache_write_5m,
         tokens_cache_write_1h = excluded.tokens_cache_write_1h,
         charged_nano = excluded.charged_nano,
@@ -286,7 +301,9 @@ INSERT INTO usage_logs (
     -- into the charge, so without them the amount cannot be re-derived from
     -- this row alone.
     tool_calls, service_tier,
-    tokens_audio_in, tokens_audio_out, tokens_cache_write_5m, tokens_cache_write_1h,
+    tokens_audio_in, tokens_audio_out, tokens_image_in, tokens_image_out,
+    billed_units, billed_unit,
+    tokens_cache_write_5m, tokens_cache_write_1h,
     pricing_snapshot,
     -- Which route served it, and the hops that failed first.
     route_id, attempts
@@ -305,9 +322,13 @@ INSERT INTO usage_logs (
     $32::integer,
     $33::integer,
     $34::integer,
-    $35::jsonb,
-    $36::uuid,
-    $37::jsonb
+    $35::integer,
+    $36::text,
+    $37::integer,
+    $38::integer,
+    $39::jsonb,
+    $40::uuid,
+    $41::jsonb
 )
 `
 
@@ -344,6 +365,10 @@ type InsertUsageLogParams struct {
 	ServiceTier         pgtype.Text
 	TokensAudioIn       pgtype.Int4
 	TokensAudioOut      pgtype.Int4
+	TokensImageIn       pgtype.Int4
+	TokensImageOut      pgtype.Int4
+	BilledUnits         pgtype.Int4
+	BilledUnit          string
 	TokensCacheWrite5m  pgtype.Int4
 	TokensCacheWrite1h  pgtype.Int4
 	PricingSnapshot     []byte
@@ -389,6 +414,10 @@ func (q *Queries) InsertUsageLog(ctx context.Context, arg InsertUsageLogParams) 
 		arg.ServiceTier,
 		arg.TokensAudioIn,
 		arg.TokensAudioOut,
+		arg.TokensImageIn,
+		arg.TokensImageOut,
+		arg.BilledUnits,
+		arg.BilledUnit,
 		arg.TokensCacheWrite5m,
 		arg.TokensCacheWrite1h,
 		arg.PricingSnapshot,
@@ -719,39 +748,15 @@ func (q *Queries) RecordUnsettledPricing(ctx context.Context, arg RecordUnsettle
 	return err
 }
 
-const sumUpstreamCostByRange = `-- name: SumUpstreamCostByRange :one
-SELECT COALESCE(SUM(upstream_cost_usd_nano), 0)::bigint AS upstream_cost_usd_nano,
-       COALESCE(SUM(charged_nano), 0)::bigint AS charged_nano
-FROM gateway_usage_rollups
-WHERE org_id = $1 AND bucket_start >= $2::timestamptz AND bucket_start < $3::timestamptz
-`
-
-type SumUpstreamCostByRangeParams struct {
-	OrgID  pgtype.UUID
-	FromTs pgtype.Timestamptz
-	ToTs   pgtype.Timestamptz
-}
-
-type SumUpstreamCostByRangeRow struct {
-	UpstreamCostUsdNano int64
-	ChargedNano         int64
-}
-
-// Margin data source for periodic reports. Consumed through an injected
-// interface rather than by querying these tables directly from another layer.
-func (q *Queries) SumUpstreamCostByRange(ctx context.Context, arg SumUpstreamCostByRangeParams) (SumUpstreamCostByRangeRow, error) {
-	row := q.db.QueryRow(ctx, sumUpstreamCostByRange, arg.OrgID, arg.FromTs, arg.ToTs)
-	var i SumUpstreamCostByRangeRow
-	err := row.Scan(&i.UpstreamCostUsdNano, &i.ChargedNano)
-	return i, err
-}
-
 const usageGroupByKey = `-- name: UsageGroupByKey :many
 SELECT r.api_key_id AS key,
        COALESCE(MAX(k.name), '')::text AS label,
        COALESCE(SUM(r.requests), 0)::bigint AS requests,
        COALESCE(SUM(r.tokens_in), 0)::bigint AS tokens_in,
        COALESCE(SUM(r.tokens_out), 0)::bigint AS tokens_out,
+       COALESCE(SUM(r.billed_seconds), 0)::bigint AS billed_seconds,
+       COALESCE(SUM(r.billed_calls), 0)::bigint AS billed_calls,
+       COALESCE(SUM(r.billed_images), 0)::bigint AS billed_images,
        COALESCE(SUM(r.charged_nano), 0)::bigint AS charged_nano
 FROM gateway_usage_rollups r
 LEFT JOIN api_keys k ON k.id = r.api_key_id
@@ -768,12 +773,15 @@ type UsageGroupByKeyParams struct {
 }
 
 type UsageGroupByKeyRow struct {
-	Key         pgtype.UUID
-	Label       string
-	Requests    int64
-	TokensIn    int64
-	TokensOut   int64
-	ChargedNano int64
+	Key           pgtype.UUID
+	Label         string
+	Requests      int64
+	TokensIn      int64
+	TokensOut     int64
+	BilledSeconds int64
+	BilledCalls   int64
+	BilledImages  int64
+	ChargedNano   int64
 }
 
 // Returns the key's name too: with only the uuid the console would have to make
@@ -798,6 +806,9 @@ func (q *Queries) UsageGroupByKey(ctx context.Context, arg UsageGroupByKeyParams
 			&i.Requests,
 			&i.TokensIn,
 			&i.TokensOut,
+			&i.BilledSeconds,
+			&i.BilledCalls,
+			&i.BilledImages,
 			&i.ChargedNano,
 		); err != nil {
 			return nil, err
@@ -817,6 +828,9 @@ SELECT r.model_slug AS key,
        COALESCE(SUM(r.requests), 0)::bigint AS requests,
        COALESCE(SUM(r.tokens_in), 0)::bigint AS tokens_in,
        COALESCE(SUM(r.tokens_out), 0)::bigint AS tokens_out,
+       COALESCE(SUM(r.billed_seconds), 0)::bigint AS billed_seconds,
+       COALESCE(SUM(r.billed_calls), 0)::bigint AS billed_calls,
+       COALESCE(SUM(r.billed_images), 0)::bigint AS billed_images,
        COALESCE(SUM(r.charged_nano), 0)::bigint AS charged_nano
 FROM gateway_usage_rollups r
 LEFT JOIN models m ON m.slug = r.model_slug
@@ -833,12 +847,15 @@ type UsageGroupByModelParams struct {
 }
 
 type UsageGroupByModelRow struct {
-	Key         string
-	Label       string
-	Requests    int64
-	TokensIn    int64
-	TokensOut   int64
-	ChargedNano int64
+	Key           string
+	Label         string
+	Requests      int64
+	TokensIn      int64
+	TokensOut     int64
+	BilledSeconds int64
+	BilledCalls   int64
+	BilledImages  int64
+	ChargedNano   int64
 }
 
 // The two group-by queries must apply the same `api_key_id` filter as the
@@ -877,6 +894,9 @@ func (q *Queries) UsageGroupByModel(ctx context.Context, arg UsageGroupByModelPa
 			&i.Requests,
 			&i.TokensIn,
 			&i.TokensOut,
+			&i.BilledSeconds,
+			&i.BilledCalls,
+			&i.BilledImages,
 			&i.ChargedNano,
 		); err != nil {
 			return nil, err
@@ -979,6 +999,9 @@ agg AS (
            SUM(requests) AS requests,
            SUM(tokens_in) AS tokens_in,
            SUM(tokens_out) AS tokens_out,
+           SUM(billed_seconds) AS billed_seconds,
+           SUM(billed_calls) AS billed_calls,
+           SUM(billed_images) AS billed_images,
            SUM(charged_nano) AS charged_nano,
            SUM(errors) AS errors
     FROM gateway_usage_rollups
@@ -990,6 +1013,9 @@ SELECT timezone($2::text, g.bucket)::timestamptz AS bucket,
        COALESCE(a.requests, 0)::bigint AS requests,
        COALESCE(a.tokens_in, 0)::bigint AS tokens_in,
        COALESCE(a.tokens_out, 0)::bigint AS tokens_out,
+       COALESCE(a.billed_seconds, 0)::bigint AS billed_seconds,
+       COALESCE(a.billed_calls, 0)::bigint AS billed_calls,
+       COALESCE(a.billed_images, 0)::bigint AS billed_images,
        COALESCE(a.charged_nano, 0)::bigint AS charged_nano,
        COALESCE(a.errors, 0)::bigint AS errors
 FROM bounds b,
@@ -1008,12 +1034,15 @@ type UsageSeriesByDayParams struct {
 }
 
 type UsageSeriesByDayRow struct {
-	Bucket      pgtype.Timestamptz
-	Requests    int64
-	TokensIn    int64
-	TokensOut   int64
-	ChargedNano int64
-	Errors      int64
+	Bucket        pgtype.Timestamptz
+	Requests      int64
+	TokensIn      int64
+	TokensOut     int64
+	BilledSeconds int64
+	BilledCalls   int64
+	BilledImages  int64
+	ChargedNano   int64
+	Errors        int64
 }
 
 // Time series are zero-filled. Returning only the buckets that have rollup rows
@@ -1065,6 +1094,9 @@ func (q *Queries) UsageSeriesByDay(ctx context.Context, arg UsageSeriesByDayPara
 			&i.Requests,
 			&i.TokensIn,
 			&i.TokensOut,
+			&i.BilledSeconds,
+			&i.BilledCalls,
+			&i.BilledImages,
 			&i.ChargedNano,
 			&i.Errors,
 		); err != nil {
@@ -1094,6 +1126,9 @@ agg AS (
            SUM(requests) AS requests,
            SUM(tokens_in) AS tokens_in,
            SUM(tokens_out) AS tokens_out,
+           SUM(billed_seconds) AS billed_seconds,
+           SUM(billed_calls) AS billed_calls,
+           SUM(billed_images) AS billed_images,
            SUM(charged_nano) AS charged_nano,
            SUM(errors) AS errors
     FROM gateway_usage_rollups
@@ -1105,6 +1140,9 @@ SELECT g.bucket::timestamptz AS bucket,
        COALESCE(a.requests, 0)::bigint AS requests,
        COALESCE(a.tokens_in, 0)::bigint AS tokens_in,
        COALESCE(a.tokens_out, 0)::bigint AS tokens_out,
+       COALESCE(a.billed_seconds, 0)::bigint AS billed_seconds,
+       COALESCE(a.billed_calls, 0)::bigint AS billed_calls,
+       COALESCE(a.billed_images, 0)::bigint AS billed_images,
        COALESCE(a.charged_nano, 0)::bigint AS charged_nano,
        COALESCE(a.errors, 0)::bigint AS errors
 FROM bounds b,
@@ -1121,12 +1159,15 @@ type UsageSeriesByHourParams struct {
 }
 
 type UsageSeriesByHourRow struct {
-	Bucket      pgtype.Timestamptz
-	Requests    int64
-	TokensIn    int64
-	TokensOut   int64
-	ChargedNano int64
-	Errors      int64
+	Bucket        pgtype.Timestamptz
+	Requests      int64
+	TokensIn      int64
+	TokensOut     int64
+	BilledSeconds int64
+	BilledCalls   int64
+	BilledImages  int64
+	ChargedNano   int64
+	Errors        int64
 }
 
 func (q *Queries) UsageSeriesByHour(ctx context.Context, arg UsageSeriesByHourParams) ([]UsageSeriesByHourRow, error) {
@@ -1148,6 +1189,9 @@ func (q *Queries) UsageSeriesByHour(ctx context.Context, arg UsageSeriesByHourPa
 			&i.Requests,
 			&i.TokensIn,
 			&i.TokensOut,
+			&i.BilledSeconds,
+			&i.BilledCalls,
+			&i.BilledImages,
 			&i.ChargedNano,
 			&i.Errors,
 		); err != nil {
@@ -1165,6 +1209,9 @@ const usageTotals = `-- name: UsageTotals :one
 SELECT COALESCE(SUM(requests), 0)::bigint AS requests,
        COALESCE(SUM(tokens_in), 0)::bigint AS tokens_in,
        COALESCE(SUM(tokens_out), 0)::bigint AS tokens_out,
+       COALESCE(SUM(billed_seconds), 0)::bigint AS billed_seconds,
+       COALESCE(SUM(billed_calls), 0)::bigint AS billed_calls,
+       COALESCE(SUM(billed_images), 0)::bigint AS billed_images,
        COALESCE(SUM(charged_nano), 0)::bigint AS charged_nano,
        COALESCE(SUM(errors), 0)::bigint AS errors
 FROM gateway_usage_rollups
@@ -1180,11 +1227,14 @@ type UsageTotalsParams struct {
 }
 
 type UsageTotalsRow struct {
-	Requests    int64
-	TokensIn    int64
-	TokensOut   int64
-	ChargedNano int64
-	Errors      int64
+	Requests      int64
+	TokensIn      int64
+	TokensOut     int64
+	BilledSeconds int64
+	BilledCalls   int64
+	BilledImages  int64
+	ChargedNano   int64
+	Errors        int64
 }
 
 func (q *Queries) UsageTotals(ctx context.Context, arg UsageTotalsParams) (UsageTotalsRow, error) {
@@ -1199,6 +1249,9 @@ func (q *Queries) UsageTotals(ctx context.Context, arg UsageTotalsParams) (Usage
 		&i.Requests,
 		&i.TokensIn,
 		&i.TokensOut,
+		&i.BilledSeconds,
+		&i.BilledCalls,
+		&i.BilledImages,
 		&i.ChargedNano,
 		&i.Errors,
 	)

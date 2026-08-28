@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/fairlb/fairlb/foundation/brand"
+	"github.com/fairlb/fairlb/web"
 	"io"
 	"log/slog"
 	"net/http"
@@ -418,7 +420,19 @@ func serve() error {
 	healthChecks := gatewayModule.HealthChecks()
 	healthChecks["db"] = pool.Ping
 	health := httpx.NewHealth(healthChecks)
-	r := buildRouter(cfg, pool, gatewayModule, staffSvc, drv, orgID, keys, health, set)
+
+	// The brand is resolved once, here, before anything is served. A named
+	// bundle that will not load stops startup: the page falls back to the
+	// default profile when it carries none, so a half-loaded brand would be
+	// served as FairLB with nothing said (ADR-0214).
+	adminUI, err := brand.Serve(web.StaffDist(), cfg.BrandProfileDir, brand.SurfaceCommunityAdmin)
+	if err != nil {
+		return err
+	}
+	if adminUI.Name != "" {
+		brand.Name = adminUI.Name
+	}
+	r := buildRouter(cfg, pool, gatewayModule, staffSvc, drv, orgID, keys, health, set, adminUI.FS)
 
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,

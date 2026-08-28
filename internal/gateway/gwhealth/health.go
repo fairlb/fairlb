@@ -34,6 +34,7 @@ type Snapshot struct {
 	Providers    []Provider
 	RetryBudget  RetryBudget
 	SwitchCounts *SwitchCounts
+	StuckMoney   *StuckMoney
 }
 
 // Provider is one upstream's last hour.
@@ -71,6 +72,25 @@ type SwitchCounts struct {
 	ProvidersDisabled int64
 	ModelsTotal       int64
 	ModelsDisabled    int64
+}
+
+// StuckMoney is the operator's repair queue: asynchronous jobs that reached a
+// terminal state while their reservation never moved, settled neither onto the
+// customer nor back off them.
+//
+// It sits on the health dashboard rather than in a report because every row is a
+// customer either overcharged or not charged, and a number nobody is shown is a
+// number nobody acts on -- which is how this state stayed invisible while the
+// index built for it had no reader at all.
+//
+// No amount, deliberately: a hold is denominated in its organisation's wallet
+// currency, so one total across organisations would be a cross-currency sum, and
+// the wallet table belongs to Cloud while this package ships in Community too.
+type StuckMoney struct {
+	Jobs int64
+	// Oldest is nil when nothing is stuck. It is what separates a live incident
+	// from a single row stranded a month ago.
+	Oldest *time.Time
 }
 
 // Budget reports the global retry budget. Optional: a deployment that has not
@@ -139,6 +159,26 @@ func (r *Reader) Read(ctx context.Context) (Snapshot, error) {
 		out.SwitchCounts = &SwitchCounts{
 			ProvidersTotal: counts.ProvidersTotal, ProvidersDisabled: counts.ProvidersDisabled,
 			ModelsTotal: counts.ModelsTotal, ModelsDisabled: counts.ModelsDisabled,
+		}
+	}
+	// Same rule as the counts above: failing to read the repair queue must not
+	// take the dashboard down, and a failed read stays nil rather than
+	// collapsing to zero. "Nothing is stuck" and "we could not tell" are
+	// different sentences, and on this particular question rendering the second
+	// as the first is how the queue goes unwatched.
+	if stuck, sErr := r.q.CountStuckMoneyJobs(ctx); sErr != nil {
+		slog.WarnContext(ctx, "gwhealth: failed to count jobs whose money never moved, the rest of the dashboard is returned as usual", "err", sErr)
+	} else {
+		out.StuckMoney = &StuckMoney{Jobs: stuck.Jobs}
+		if stuck.OldestTerminalAt.Valid {
+			// .UTC() because the wire format is UTC everywhere (CLAUDE.md), and
+			// because the console renders this same column through videoTimePtr,
+			// which normalizes -- without it one row leaves by two APIs with two
+			// offsets. pgconv.TimePtr is not used here for the reason its own
+			// doc gives: it passes the driver's location through on purpose and
+			// leaves normalizing to the API that is presenting the value.
+			oldest := stuck.OldestTerminalAt.Time.UTC()
+			out.StuckMoney.Oldest = &oldest
 		}
 	}
 	return out, nil

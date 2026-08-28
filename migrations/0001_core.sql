@@ -9,9 +9,14 @@
 -- applied — that is the criterion for a table being in this file rather than
 -- in a later segment.
 --
--- Migration files are applied in numeric order, and the gap between this file's
--- number and the product segment's is deliberate: a deployment can add its own
--- segment in between without touching either of the two files it sits between.
+-- Migration files are applied in numeric order. This one is first because of the
+-- criterion above and for no other reason -- there is no reserved gap after it.
+-- That sentence used to say the gap was deliberate, "so a deployment can add its
+-- own segment in between"; it was written when these files were 1000_core.sql and
+-- 2000_product.sql, and the renumbering in 045c13ae closed the gap without
+-- touching the paragraph. The deployment it described does not exist either:
+-- the only products are Cloud and Community, and Cloud's own segment (1001) sits
+-- after the gateway one, not between.
 --
 -- # Only the columns every deployment needs
 --

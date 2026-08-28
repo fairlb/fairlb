@@ -1,0 +1,39 @@
+{
+  "dataset": "fairlb-unit-rates",
+  "checked_on": "2026-08-26",
+  "note": "Per-unit reference rates maintained in this repository. See unitrates.go for why this is a second file rather than rows in genai-prices.json.",
+  "models": [
+    {
+      "vendor": "google",
+      "label": "Veo 3.1",
+      "prefixes": ["veo-3.1", "veo-3-1"],
+      "source_name": "Vertex AI generative media pricing",
+      "source_url": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+      "rates": [
+        { "unit": "second", "resolution": "720p", "audio": "on", "usd_per_unit": "0.40" },
+        { "unit": "second", "resolution": "1080p", "audio": "on", "usd_per_unit": "0.75" }
+      ]
+    },
+    {
+      "vendor": "volcengine",
+      "label": "Seedance 1.5",
+      "prefixes": ["seedance-1-5", "doubao-seedance-1-5"],
+      "source_name": "Volcengine Ark pricing",
+      "source_url": "https://www.volcengine.com/docs/82379",
+      "rates": [
+        { "unit": "second", "resolution": "720p", "audio": "off", "usd_per_unit": "0.15" }
+      ]
+    },
+    {
+      "vendor": "kuaishou",
+      "label": "Kling v2",
+      "prefixes": ["kling-v2"],
+      "source_name": "Kling resource pack, converted to an equivalent per-second rate",
+      "source_url": "https://app.klingai.com/global/dev/document-api",
+      "rates": [
+        { "unit": "second", "resolution": "720p", "audio": "off", "usd_per_unit": "0.28" },
+        { "unit": "second", "resolution": "1080p", "audio": "off", "usd_per_unit": "0.56" }
+      ]
+    }
+  ]
+}
